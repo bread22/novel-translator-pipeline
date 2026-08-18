@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.book_pipeline import IterativePipeline, approved_fixes, newly_translated, validate_review_payload
+from scripts.book_pipeline import IterativePipeline, approved_fixes, missing_review_ids, newly_translated, validate_review_payload
 from scripts.book_workspace import BookWorkspace
 
 
@@ -42,6 +42,9 @@ class PipelineFunctionTests(unittest.TestCase):
             validate_review_payload(
                 {"items": [{"id": "unknown"}], "term_updates": []}, {"p1"}
             )
+
+    def test_missing_review_ids_are_detected_for_retry(self) -> None:
+        self.assertEqual(missing_review_ids({"items": [{"id": "p1"}]}, {"p1", "p2"}), {"p2"})
 
     def test_one_cycle_translates_reviews_updates_terms_and_applies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

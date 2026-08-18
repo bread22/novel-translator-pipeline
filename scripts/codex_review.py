@@ -20,6 +20,7 @@ def run_codex_review(input_path: Path, output_path: Path, autonomous: bool = Fal
 规则：
 - glossary 是已有术语表；译文和新增术语不得与其冲突。
 - 只修改译文，不总结或改写剧情；source 是事实基准。
+- `items` 必须覆盖输入中的每一个段落 ID，即使该段没有问题，也要返回空 issues 和空 approved_translation。
 - 明确的错别字、漏译、重复、术语不一致、明显误译和确定的中文病句，在置信度 >= 0.9 时直接提供 approved_translation。
 - {"全自动模式下，不等待人工确认；所有置信度 >= 0.9 且有明确修复的 approved_translation 都设置 auto_apply=true。" if autonomous else "涉及语义取舍、风格偏好或不确定改写时，auto_apply=false 且 approved_translation 为空字符串。"}
 - term_updates 只收录后续分片可复用且有明确原文对应的词，不收录整句或临时描述。

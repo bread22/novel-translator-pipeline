@@ -101,6 +101,12 @@ def validate_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> 
     return payload
 
 
+def missing_review_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[str]:
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    received = {str(item.get("id", "")) for item in items if isinstance(item, dict)}
+    return expected_ids - received
+
+
 class IterativePipeline:
     def __init__(
         self,
@@ -159,7 +165,18 @@ class IterativePipeline:
             review = read_json(output_path)
             if not isinstance(review, dict):
                 raise ValueError(f"审阅结果不是 JSON 对象：{output_path}")
-            review = validate_review_payload(review, {item["id"] for item in review_items})
+            expected_ids = {item["id"] for item in review_items}
+            for retry in range(1, 3):
+                missing = missing_review_ids(review, expected_ids)
+                if not missing:
+                    break
+                retry_path = self.workspace.reviews_dir / f"{chunk_id}-part-{part:03d}-retry-{retry:02d}.json"
+                self.reviewer(input_path, retry_path)
+                retried = read_json(retry_path)
+                if not isinstance(retried, dict):
+                    raise ValueError(f"重审结果不是 JSON 对象：{retry_path}")
+                review = retried
+            review = validate_review_payload(review, expected_ids)
             all_reviews.extend(review.get("items", []))
             all_terms.extend(review.get("term_updates", []))
 

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 from typing import Any
 
@@ -12,10 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.novel_translator_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
+from scripts.codex_review import run_codex_review
 
 
 ARTIFACTS = ROOT / "artifacts"
-SCHEMA = ROOT / "schemas" / "review-output.schema.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,47 +23,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="apply only high-confidence mechanical fixes")
     parser.add_argument("--chunk-size", type=int, default=30)
     return parser.parse_args()
-
-
-def run_codex(input_path: Path, output_path: Path) -> None:
-    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
-    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
-    prompt = f"""
-审校 Novel Translator 的译文分片。
-工作目录：{ROOT}
-输入 JSON：{input_path}
-请读取该文件，逐条对照 source 和 translated，检查：漏译、误译、重复、错别字、术语、人名、称谓、人称、标点、日文残留和明显中文病句。
-
-规则：
-- 只修改译文，不总结或改写剧情。
-- source 是事实基准；不要凭空添加信息。
-- 只有机械性、明显且置信度 >= 0.9 的修复才设置 auto_apply=true。
-- 涉及语义取舍、风格偏好、成人描写措辞、人物动机或不确定的改写，设置 auto_apply=false。
-- approved_translation 在 auto_apply=false 时保持空字符串。
-- 严格输出符合 {SCHEMA} 的 JSON，不要 Markdown。
-""".strip()
-    command = [
-        "codex",
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "--model",
-        model,
-        "-c",
-        f'model_reasoning_effort="{effort}"',
-        "--output-schema",
-        str(SCHEMA),
-        "-o",
-        str(output_path),
-        "-C",
-        str(ROOT),
-        prompt,
-    ]
-    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"Codex review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")
 
 
 def load_book_manifest(book: str) -> tuple[Path, dict[str, Any]]:
@@ -109,7 +66,7 @@ def main() -> int:
         input_path = ARTIFACTS / f"review-input-{start:05d}.json"
         output_path = ARTIFACTS / f"review-output-{start:05d}.json"
         input_path.write_text(json.dumps({"book": args.book, "items": chunk}, ensure_ascii=False, indent=2), encoding="utf-8")
-        run_codex(input_path, output_path)
+        run_codex_review(input_path, output_path)
         payload = json.loads(output_path.read_text(encoding="utf-8"))
         reviews.extend(payload.get("items", []))
 

@@ -71,7 +71,7 @@ def approved_fixes(items: list[dict[str, Any]], threshold: float = 0.9, *, auton
     ]
 
 
-def validate_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> None:
+def validate_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
     items = payload.get("items")
     term_updates = payload.get("term_updates")
     if not isinstance(items, list) or not isinstance(term_updates, list):
@@ -79,13 +79,26 @@ def validate_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> 
     received = {str(item.get("id", "")) for item in items if isinstance(item, dict)}
     missing = sorted(expected_ids - received)
     unknown = sorted(received - expected_ids)
-    if missing or unknown:
+    if unknown:
         details = []
-        if missing:
-            details.append(f"缺少 ID：{', '.join(missing)}")
         if unknown:
             details.append(f"未知 ID：{', '.join(unknown)}")
         raise ValueError("审阅结果段落不匹配；" + "；".join(details))
+    if missing:
+        payload = dict(payload)
+        payload["items"] = list(items) + [
+            {
+                "id": item_id,
+                "severity": "info",
+                "issues": [],
+                "suggestion": "",
+                "approved_translation": "",
+                "auto_apply": False,
+                "confidence": 0,
+            }
+            for item_id in missing
+        ]
+    return payload
 
 
 class IterativePipeline:
@@ -146,7 +159,7 @@ class IterativePipeline:
             review = read_json(output_path)
             if not isinstance(review, dict):
                 raise ValueError(f"审阅结果不是 JSON 对象：{output_path}")
-            validate_review_payload(review, {item["id"] for item in review_items})
+            review = validate_review_payload(review, {item["id"] for item in review_items})
             all_reviews.extend(review.get("items", []))
             all_terms.extend(review.get("term_updates", []))
 

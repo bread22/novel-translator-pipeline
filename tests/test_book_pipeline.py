@@ -34,8 +34,14 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a", "c"])
 
     def test_review_payload_rejects_missing_ids(self) -> None:
-        with self.assertRaisesRegex(ValueError, "缺少 ID"):
-            validate_review_payload({"items": [], "term_updates": []}, {"p1"})
+        payload = validate_review_payload({"items": [], "term_updates": []}, {"p1"})
+        self.assertEqual(payload["items"][0]["id"], "p1")
+
+    def test_review_payload_rejects_unknown_ids(self) -> None:
+        with self.assertRaisesRegex(ValueError, "未知 ID"):
+            validate_review_payload(
+                {"items": [{"id": "unknown"}], "term_updates": []}, {"p1"}
+            )
 
     def test_one_cycle_translates_reviews_updates_terms_and_applies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

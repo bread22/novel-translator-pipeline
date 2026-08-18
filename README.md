@@ -139,6 +139,8 @@ python scripts/book_pipeline.py \
 
 `--finalize` 仅在待翻译段落为零时导出单语中文 EPUB。
 
+后续审阅窗口合并、`checked_ids` 和章节级一致性检查计划记录在 [`docs/review-plan.md`](docs/review-plan.md)，待第一本书完成后实施。
+
 对于无需人工确认的连续处理，增加 `--autonomous`：
 
 ```bash

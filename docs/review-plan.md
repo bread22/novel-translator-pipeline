@@ -119,3 +119,89 @@ python scripts/chapter_review.py \
 - 统计窗口字符数、GPT 调用耗时和审阅输出大小；
 - 根据实际误报率调整章节审阅提示词；
 - 增加审阅覆盖率和跨章节术语一致性的汇总统计。
+
+## 已记录的下一阶段方案：分层上下文审阅
+
+这部分暂不改变当前流程，后续有时间再实现。目标是减少 GPT 重复审阅的正文数量，同时保留判断翻译所需的长期上下文。
+
+### 目标架构
+
+```text
+本地模型翻译
+        ↓
+4-batch 窗口审阅
+输入：Book Memory、Chapter State、当前窗口、滚动上下文
+        ↓
+高置信度修复 + memory_delta
+        ↓
+章节完成
+        ↓
+整章一致性审阅
+        ↓
+更新 Book Memory
+        ↓
+全书完成后的轻量全局一致性检查
+```
+
+### 新增状态文件
+
+```text
+output/正式中文书名/data/
+├── book_memory.json
+└── chapter_states/
+    ├── c0001.json
+    └── c0002.json
+```
+
+`book_memory.json` 只保存跨章节仍然有价值的信息：人物、别名、固定称呼、人物关系、固定术语、重要事实、叙事视角和文风规则。`chapter_states/` 保存当前章节的地点、在场人物、情绪关系、时间线和滚动摘要。
+
+### 审阅上下文
+
+GPT 的输入分为：
+
+```text
+Book Memory
++ Chapter State
++ 当前 4-batch 窗口
++ 前后滚动段落
++ 按需检索的相关历史片段
+```
+
+当前窗口仍然完整传给 GPT，不把 GPT 降级成只查看本地模型标记的孤立段落。
+
+### 审阅输出扩展
+
+在现有 `checked_ids`、`issues` 和 `term_updates` 外增加：
+
+```json
+{
+  "memory_delta": {
+    "add": [],
+    "update": [],
+    "conflicts": []
+  },
+  "chapter_state_delta": {}
+}
+```
+
+GPT 只提交增量，不直接重写整个 `book_memory.json`。程序负责 Schema 校验、合并、冲突记录和快照。译文修复继续使用 `auto_apply=true` 且置信度不低于 `0.9` 的门槛。
+
+### 实施顺序
+
+1. 增加 Book Memory、Chapter State 的 JSON Schema、存储和增量合并器；
+2. 增加上下文构建器，将长期记忆、章节状态和窗口上下文组合给 GPT；
+3. 让窗口审阅输出 `memory_delta` 和 `chapter_state_delta`；
+4. 在整章完成后执行章节主审阅，同时更新长期记忆；
+5. 全书完成后先审阅章节摘要、人物表、术语表和已知冲突；
+6. 发现潜在冲突时，再按需读取相关章节原文和译文；
+7. 用三种模式做对照测试：4-batch 窗口、整章、整章加 Book Memory。
+
+### 评估指标
+
+- 真实错误发现数；
+- 主客体错误发现率；
+- 人物称呼和术语一致性；
+- 误报数量；
+- GPT 调用次数、输入输出 token 和总耗时。
+
+当前 4-batch 窗口流程继续作为基线，完成 benchmark 后再决定是否将整章审阅提升为主审阅流程。

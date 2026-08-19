@@ -7,6 +7,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "schemas" / "review-output.schema.json"
+WINDOW_SCHEMA = ROOT / "schemas" / "window-review-output.schema.json"
 
 
 def run_codex_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
@@ -35,3 +36,30 @@ def run_codex_review(input_path: Path, output_path: Path, autonomous: bool = Fal
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Codex review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")
+
+
+def run_codex_window_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
+    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
+    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    prompt = f"""
+审校输入 JSON 中的全部译文段落。这是多个连续翻译 batch 合并成的审阅窗口。
+输入 JSON：{input_path}
+
+要求：
+- 逐条读取并检查 items 中的每个段落；必须把每个输入段落 ID 放入 checked_ids。
+- 检查漏译、误译、重复、术语、人名、称谓、人称、标点、日文残留、中文病句和跨段落指代。
+- issues 只输出确实存在问题的段落；没有问题的段落只进入 checked_ids，不要放入 issues。
+- glossary 是已有术语表；term_updates 只收录后续分片可复用的词。
+- 明确的错别字、漏译、重复、术语不一致、明显误译和确定的中文病句，在置信度 >= 0.9 时提供 approved_translation。
+- {"全自动模式下，置信度 >= 0.9 且有明确修复文本的项目设置 auto_apply=true。" if autonomous else "涉及语义取舍、风格偏好或不确定改写时，approved_translation 为空且 auto_apply=false。"}
+- 不要重写没有问题的段落，不要总结剧情。
+- 严格输出符合 {WINDOW_SCHEMA} 的 JSON，不要 Markdown。
+""".strip()
+    command = [
+        "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
+        "--model", model, "-c", f'model_reasoning_effort="{effort}"',
+        "--output-schema", str(WINDOW_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
+    ]
+    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"Codex window review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")

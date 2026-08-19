@@ -18,6 +18,7 @@ from scripts.book_workspace import (
     write_json,
 )
 from scripts.codex_review import run_codex_review
+from scripts.codex_review import run_codex_window_review
 from scripts.novel_translator_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
 
 
@@ -32,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=ROOT / "output")
     parser.add_argument("--max-cycles", type=int, default=1, help="本次最多翻译并审阅多少个批次")
     parser.add_argument("--review-chunk-size", type=int, default=30)
+    parser.add_argument("--review-window-size", type=int, default=4, help="每次合并多少个翻译 batch 调用一次 GPT")
+    parser.add_argument("--review-char-limit", type=int, default=40000, help="单个 GPT 审阅窗口的最大字符数")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
@@ -107,6 +110,32 @@ def missing_review_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[s
     return expected_ids - received
 
 
+def missing_checked_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[str]:
+    checked = payload.get("checked_ids", []) if isinstance(payload, dict) else []
+    return expected_ids - {str(item) for item in checked}
+
+
+def validate_window_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
+    checked = payload.get("checked_ids")
+    issues = payload.get("issues")
+    terms = payload.get("term_updates")
+    if not isinstance(checked, list) or not isinstance(issues, list) or not isinstance(terms, list):
+        raise ValueError("窗口审阅结果必须包含 checked_ids、issues 和 term_updates 数组")
+    checked_ids = {str(item) for item in checked}
+    unknown_checked = sorted(checked_ids - expected_ids)
+    unknown_issues = sorted(
+        {str(item.get("id", "")) for item in issues if isinstance(item, dict)} - expected_ids
+    )
+    if unknown_checked or unknown_issues:
+        details = []
+        if unknown_checked:
+            details.append(f"checked_ids 未知 ID：{', '.join(unknown_checked)}")
+        if unknown_issues:
+            details.append(f"issues 未知 ID：{', '.join(unknown_issues)}")
+        raise ValueError("窗口审阅结果段落不匹配；" + "；".join(details))
+    return payload
+
+
 class IterativePipeline:
     def __init__(
         self,
@@ -116,7 +145,9 @@ class IterativePipeline:
         manifest: Path,
         tool_call: ToolCall = call_novel_translator,
         reviewer: Reviewer = run_codex_review,
+        window_reviewer: Reviewer = run_codex_window_review,
         review_chunk_size: int = 30,
+        review_char_limit: int = 40000,
         apply: bool = False,
         autonomous: bool = False,
     ) -> None:
@@ -127,7 +158,11 @@ class IterativePipeline:
         self.manifest = manifest
         self.tool_call = tool_call
         self.reviewer = reviewer
+        self.window_reviewer = window_reviewer
         self.review_chunk_size = review_chunk_size
+        if review_char_limit < 1:
+            raise ValueError("review_char_limit 必须大于 0")
+        self.review_char_limit = review_char_limit
         self.apply = apply
         self.autonomous = autonomous
 
@@ -138,7 +173,7 @@ class IterativePipeline:
         source = Path(str(raw.get("source_file", ""))).expanduser()
         self.workspace.initialize(source if source.suffix.casefold() == ".epub" else None, book_id=self.book)
 
-    def run_cycle(self, cycle: int) -> dict[str, Any]:
+    def _translate_only(self, cycle: int) -> dict[str, Any]:
         before = read_json(self.manifest)
         chunk_id = f"chunk-{cycle:05d}"
         snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"before-{chunk_id}")
@@ -146,6 +181,13 @@ class IterativePipeline:
         translation = self.tool_call("translate", "--book", self.book, "--max-batches", "1")
         after = read_json(self.manifest)
         items = newly_translated(before, after)
+        return {"chunk_id": chunk_id, "translation": translation, "items": items}
+
+    def run_cycle(self, cycle: int) -> dict[str, Any]:
+        translated = self._translate_only(cycle)
+        chunk_id = translated["chunk_id"]
+        translation = translated["translation"]
+        items = translated["items"]
         if not items:
             return {"chunk_id": chunk_id, "translated": 0, "done": True, "translation": translation}
 
@@ -220,6 +262,110 @@ class IterativePipeline:
             "done": False,
         }
 
+    def run_window(self, first_cycle: int, width: int) -> dict[str, Any]:
+        if width < 1:
+            raise ValueError("review_window_size 必须大于 0")
+        window_id = f"window-{first_cycle:05d}"
+        collected: list[dict[str, str]] = []
+        cycles: list[dict[str, Any]] = []
+        last_cycle = first_cycle
+        done = False
+        for cycle in range(first_cycle, first_cycle + width):
+            translated = self._translate_only(cycle)
+            last_cycle = cycle
+            items = translated["items"]
+            cycles.append({"chunk_id": translated["chunk_id"], "translated": len(items)})
+            if not items:
+                done = True
+                break
+            collected.extend(items)
+
+        if not collected:
+            return {"window_id": window_id, "cycles": cycles, "translated": 0, "done": done}
+
+        glossary = read_json(self.workspace.glossary_path, {"book": self.book, "terms": [], "conflicts": []})
+        windows: list[list[dict[str, str]]] = []
+        current: list[dict[str, str]] = []
+        current_chars = 0
+        for item in collected:
+            size = len(item["source"]) + len(item["translated"])
+            if current and current_chars + size > self.review_char_limit:
+                windows.append(current)
+                current = []
+                current_chars = 0
+            current.append(item)
+            current_chars += size
+        if current:
+            windows.append(current)
+
+        all_issues: list[dict[str, Any]] = []
+        all_terms: list[dict[str, Any]] = []
+        for part, review_items in enumerate(windows, 1):
+            input_path = self.workspace.reviews_dir / f"{window_id}-part-{part:03d}-input.json"
+            output_path = self.workspace.reviews_dir / f"{window_id}-part-{part:03d}-output.json"
+            write_json(
+                input_path,
+                {"book": self.book, "window_id": window_id, "items": review_items, "glossary": glossary.get("terms", [])},
+            )
+            self.window_reviewer(input_path, output_path)
+            review = read_json(output_path)
+            if not isinstance(review, dict):
+                raise ValueError(f"窗口审阅结果不是 JSON 对象：{output_path}")
+            expected_ids = {item["id"] for item in review_items}
+            for retry in range(1, 3):
+                if not missing_checked_ids(review, expected_ids):
+                    break
+                retry_path = self.workspace.reviews_dir / f"{window_id}-part-{part:03d}-retry-{retry:02d}.json"
+                self.window_reviewer(input_path, retry_path)
+                review = read_json(retry_path)
+                if not isinstance(review, dict):
+                    raise ValueError(f"窗口重审结果不是 JSON 对象：{retry_path}")
+            review = validate_window_review_payload(review, expected_ids)
+            if missing_checked_ids(review, expected_ids):
+                raise ValueError(f"窗口审阅两次重试后仍漏回 ID：{', '.join(sorted(missing_checked_ids(review, expected_ids)))}")
+            all_issues.extend(review["issues"])
+            all_terms.extend(review["term_updates"])
+
+        glossary, term_summary = merge_term_updates(glossary, all_terms, chunk_id=window_id)
+        write_json(self.workspace.glossary_path, glossary)
+        tool_terms_path = self.workspace.data_dir / "novel-translator-terms.json"
+        write_json(tool_terms_path, novel_translator_terms(glossary))
+        terminology = self.tool_call("import-terminology", "--book", self.book, "--input", str(tool_terms_path))
+        fixes = approved_fixes(all_issues, autonomous=self.autonomous)
+        fixes_path = self.workspace.reviews_dir / f"{window_id}-approved-fixes.json"
+        write_json(fixes_path, {"book": self.book, "items": fixes})
+        applied: dict[str, Any] | bool = False
+        if self.apply and fixes:
+            applied = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+        quality = self.tool_call("quality-report", "--book", self.book)
+        write_json(self.workspace.reports_dir / f"{window_id}-quality.json", quality)
+        progress = read_json(self.workspace.progress_path, {})
+        progress.update(
+            {
+                "book": self.book,
+                "state": "running",
+                "completed_cycles": last_cycle,
+                "last_chunk": window_id,
+                "last_translated": len(collected),
+                "last_reviewed": len(collected),
+                "updated_at": utc_now(),
+            }
+        )
+        write_json(self.workspace.progress_path, progress)
+        return {
+            "window_id": window_id,
+            "cycles": cycles,
+            "translated": len(collected),
+            "reviewed": len(collected),
+            "issues": len(all_issues),
+            "term_updates": term_summary,
+            "candidate_fixes": len(fixes),
+            "applied": applied,
+            "terminology": terminology.get("summary", terminology),
+            "quality": quality.get("summary", quality),
+            "done": done,
+        }
+
     def finalize(self) -> dict[str, Any]:
         status = self.tool_call("translation-status", "--book", self.book)
         if int(status.get("summary", {}).get("pending", 1)) != 0:
@@ -252,7 +398,9 @@ def main() -> int:
         workspace=workspace,
         manifest=manifest_path(args.book),
         reviewer=lambda input_path, output_path: run_codex_review(input_path, output_path, autonomous=args.autonomous),
+        window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
         review_chunk_size=args.review_chunk_size,
+        review_char_limit=args.review_char_limit,
         apply=args.apply,
         autonomous=args.autonomous,
     )
@@ -260,8 +408,9 @@ def main() -> int:
     results = []
     progress = read_json(workspace.progress_path, {})
     start = int(progress.get("completed_cycles", 0) or 0) + 1
-    for cycle in range(start, start + args.max_cycles):
-        result = pipeline.run_cycle(cycle)
+    step = max(1, args.review_window_size)
+    for cycle in range(start, start + args.max_cycles, step):
+        result = pipeline.run_window(cycle, min(step, start + args.max_cycles - cycle))
         results.append(result)
         if result["done"]:
             break

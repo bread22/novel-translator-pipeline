@@ -121,11 +121,12 @@ source .venv/bin/activate
 python scripts/book_pipeline.py \
   --book '女銀行員-美樹-書院文庫' \
   --name '正式中文书名' \
-  --max-cycles 1 \
+  --max-cycles 1000 \
+  --review-window-size 4 \
   --apply
 ```
 
-每个 cycle 只让 Novel Translator 翻译一个 batch，随后立即调用 Codex 审阅、合并高置信度术语并同步回 Novel Translator。再次运行相同命令会读取 `progress.json`，从下一个 cycle 继续。
+每个窗口先让 Novel Translator 翻译 4 个 batch，再由 GPT 一次性审阅窗口内的全部段落；随后合并术语、应用修复并同步回 Novel Translator。再次运行相同命令会读取 `progress.json`，从下一个窗口继续。
 
 全书翻译完成后导出：
 
@@ -139,7 +140,7 @@ python scripts/book_pipeline.py \
 
 `--finalize` 仅在待翻译段落为零时导出单语中文 EPUB。
 
-后续审阅窗口合并、`checked_ids` 和章节级一致性检查计划记录在 [`docs/review-plan.md`](docs/review-plan.md)，待第一本书完成后实施。
+审阅窗口合并和 `checked_ids` 已实施；章节级一致性检查仍记录在 [`docs/review-plan.md`](docs/review-plan.md) 的后续项目中。
 
 对于无需人工确认的连续处理，增加 `--autonomous`：
 

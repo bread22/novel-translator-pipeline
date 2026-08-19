@@ -5,7 +5,15 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.book_pipeline import IterativePipeline, approved_fixes, missing_review_ids, newly_translated, validate_review_payload
+from scripts.book_pipeline import (
+    IterativePipeline,
+    approved_fixes,
+    missing_checked_ids,
+    missing_review_ids,
+    newly_translated,
+    validate_review_payload,
+    validate_window_review_payload,
+)
 from scripts.book_workspace import BookWorkspace
 
 
@@ -45,6 +53,68 @@ class PipelineFunctionTests(unittest.TestCase):
 
     def test_missing_review_ids_are_detected_for_retry(self) -> None:
         self.assertEqual(missing_review_ids({"items": [{"id": "p1"}]}, {"p1", "p2"}), {"p2"})
+
+    def test_window_requires_checked_ids_and_reviews_two_batches_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest()
+            raw["chapters"][0]["paragraphs"] = [
+                {"id": "p1", "source": "第一段", "translated": ""},
+                {"id": "p2", "source": "第二段", "translated": ""},
+            ]
+            manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            calls: list[str] = []
+            translate_count = 0
+
+            def tool_call(*args: str) -> dict:
+                nonlocal translate_count
+                calls.append(args[0])
+                if args[0] == "translate":
+                    translate_count += 1
+                    data = json.loads(manifest_path.read_text())
+                    data["chapters"][0]["paragraphs"][translate_count - 1]["translated"] = f"译文{translate_count}"
+                    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+                if args[0] == "quality-report":
+                    return {"status": "ok", "summary": {"translated": 2, "untranslated": 0}}
+                return {"status": "ok", "summary": {"command": args[0]}}
+
+            reviewer_calls = 0
+
+            def reviewer(input_path: Path, output_path: Path) -> None:
+                nonlocal reviewer_calls
+                reviewer_calls += 1
+                payload = json.loads(input_path.read_text())
+                ids = [item["id"] for item in payload["items"]]
+                output_path.write_text(
+                    json.dumps(
+                        {
+                            "checked_ids": ids,
+                            "issues": [{"id": "p2", "severity": "low", "issues": ["病句"], "suggestion": "", "approved_translation": "修正译文", "auto_apply": True, "confidence": 0.99}],
+                            "term_updates": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=tool_call, window_reviewer=reviewer, apply=True, autonomous=True,
+                review_char_limit=10000,
+            )
+            pipeline.initialize()
+            result = pipeline.run_window(1, 2)
+            self.assertEqual(result["translated"], 2)
+            self.assertEqual(result["reviewed"], 2)
+            self.assertEqual(reviewer_calls, 1)
+            self.assertIn("apply-review-fixes", calls)
+
+    def test_window_checked_id_validation_rejects_unknown_ids(self) -> None:
+        payload = {"checked_ids": ["unknown"], "issues": [], "term_updates": []}
+        self.assertEqual(missing_checked_ids(payload, {"p1"}), {"p1"})
+        with self.assertRaisesRegex(ValueError, "未知 ID"):
+            validate_window_review_payload(payload, {"p1"})
 
     def test_one_cycle_translates_reviews_updates_terms_and_applies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

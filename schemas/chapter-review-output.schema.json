@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["checked_ids", "issues", "term_updates"],
   "properties": {
-    "checked_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "checked_ids": {"type": "array", "items": {"type": "string"}},
     "issues": {
       "type": "array",
       "items": {

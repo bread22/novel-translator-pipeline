@@ -1,59 +1,52 @@
 # Erotic Novel Translator Automation
 
-当前项目负责编排两个工具，并按“一本书一个工作目录”管理状态：
+本项目是 `novel-translator` 的流程自动化层，用于把一本 EPUB 按书籍目录管理，使用本地模型翻译，再使用 Codex 对译文进行批量审阅，最后导出中文 EPUB。
 
-1. `novel-translator`：注册 EPUB、翻译、质量检查、快照和应用修复。
-2. `codex exec`：使用 GPT-5.6-Sol 低推理强度审校译文。
-
-本项目不保存小说 EPUB、API Key 或 Codex 登录信息。原始 EPUB 放在书籍工作目录的 `input/`，由 `.gitignore` 排除；Codex CLI 使用本机登录状态。
-
-## 两个项目的职责
+## 当前架构
 
 ### Novel Translator
 
-Novel Translator 是翻译引擎和译文状态库，负责：
+位于 `~/src/novel-translator`，负责：
 
 - 导入、解包和解析 EPUB；
-- 按章节和段落调用 LM Studio 中的本地模型；
-- 保存段落译文、manifest 和翻译进度；
-- 执行 `snapshot`、`quality-report` 和 `apply-review-fixes`；
-- 将已翻译内容写回并导出 EPUB。
+- 调用 LM Studio 本地模型翻译段落；
+- 保存译文、manifest、术语表和翻译进度；
+- 执行快照、质量报告和修复写回；
+- 导出和验证 EPUB。
 
 ### Erotic Novel Translator Automation
 
-本项目是流程控制器，负责：
+本项目负责：
 
-- 创建每本书独立的工作目录；
-- 调度“翻译分片 → 审阅分片 → 更新术语表 → 进入下一分片”；
-- 通过 `codex exec` 调用 GPT-5.6-Sol 审阅译文；
-- 保存审阅结果、术语表、快照和质量报告；
-- 按置信度筛选可自动应用的修复；
-- 在最后验证并生成中文 EPUB。
+- 为每本书建立独立的 `output/正式中文书名/` 工作目录；
+- 按窗口调度翻译、审阅、术语表更新和修复应用；
+- 调用 `codex exec` 使用 GPT-5.6-Sol 审阅译文；
+- 校验审阅结果是否覆盖全部输入段落；
+- 保存快照、审阅 JSON、术语表和质量报告；
+- 在翻译完成后导出并验证中文 EPUB。
 
-两者的边界是：Novel Translator 决定“如何翻译和保存”，Automation 决定“何时翻译、何时审阅以及如何推进整本书”。
+两者的边界是：Novel Translator 负责翻译和译文状态，Automation 负责流程编排和审阅推进。
 
-## 每本书的目录
-
-目标目录结构如下：
+## 目录结构
 
 ```text
 output/正式中文书名/
-├── input/
-│   └── original.epub
-├── unpacked/             # EPUB 解包后的工作副本
+├── input/                         # 原始 EPUB
+├── unpacked/                      # EPUB 解包后的工作副本
 ├── data/
 │   ├── manifest.json
-│   ├── glossary.json      # 分片审阅过程中持续更新
+│   ├── glossary.json               # 持续更新的术语表
+│   ├── novel-translator-terms.json
 │   └── progress.json
-├── reviews/               # 每个分片的 Codex 输入和输出
-├── snapshots/
-├── reports/
+├── reviews/                       # Codex 输入、输出和修复记录
+├── snapshots/                     # 翻译和审阅前快照
+├── reports/                       # 质量报告和一致性报告
 └── 正式中文书名-中文.epub
 ```
 
-原始 EPUB 保留不变，实际翻译使用解包后的工作副本。收尾时将译文写回 XHTML，保留 CSS、图片、OPF 和目录信息，再重新打包为中文 EPUB。
+书籍输出、EPUB 和运行时报告均被 `.gitignore` 排除；项目 Git 只保存代码、配置、测试和文档。
 
-## 初始化
+## 环境
 
 ```bash
 python3 -m venv .venv
@@ -61,108 +54,110 @@ source .venv/bin/activate
 cp .env.example .env
 ```
 
-自动化脚本只使用 Python 标准库，不需要额外 pip 依赖。
+本项目只使用 Python 标准库。另需完成以下配置：
 
-确保 `~/src/novel-translator/.venv` 已安装 Novel Translator 依赖，并且已配置本地 LM Studio。
+1. `~/src/novel-translator/.venv` 已安装 Novel Translator 依赖；
+2. LM Studio 已加载本地翻译模型并监听配置的 API 地址；
+3. Codex CLI 已登录，并能调用 `gpt-5.6-sol`。
 
-## 当前自动审校流程
+## 当前翻译流程
 
-```bash
-source .venv/bin/activate
-python scripts/auto_review.py \
-  --book '女銀行員-美樹-書院文庫' \
-  --mode all \
-  --apply
-```
-
-当前脚本执行的是“已有译文的批量审校”流程：
-
-1. 调用 Novel Translator 生成快照和质量报告。
-2. 从 Novel Translator 的 manifest 生成审校分片。
-3. 每个分片调用 `codex exec -m gpt-5.6-sol`，reasoning effort 为 `low`。
-4. 只自动应用 `auto_apply=true` 且置信度不低于 0.9 的修复。
-5. 通过 Novel Translator 的 `apply-review-fixes` 写回译文。
-6. 再次执行质量报告。
-
-语义重写、情节判断和低置信度修改只进入报告，不会自动覆盖译文。
-
-## 目标迭代流程
-
-完整的书籍处理流程采用小分片，而不是一次性翻译整本书。一个分片通常包含 10～30 个自然段，以保留足够的上下文：
+书籍不会一次性提交给模型。自动化按 Novel Translator 的 batch 工作，并以 **4 个 batch 为一个审阅窗口**：
 
 ```text
-初始化书籍目录并解包 EPUB
-        ↓
-读取当前 glossary.json
-        ↓
-翻译分片 A（本地 LM Studio 模型）
-        ↓
-Codex 审阅分片 A
-        ↓
-提取问题和术语候选，更新 glossary.json
-        ↓
-应用高置信度修复
-        ↓
-翻译分片 B（使用更新后的术语表）
-        ↓
-重复直到全书完成
-        ↓
-全书质量报告 → 合成并验证中文 EPUB
+翻译 batch 1 ─┐
+翻译 batch 2  │
+翻译 batch 3  ├─→ 合并为一个窗口
+翻译 batch 4 ─┘
+                 ↓
+        一次 Codex 审阅整个窗口
+                 ↓
+       合并术语更新和高置信度修复
+                 ↓
+        翻译下一个 4-batch 窗口
 ```
 
-审阅结果同时包含译文修复和术语更新。术语表应使用结构化数据保存，例如日文词、固定中文译法、用途、置信度和备注；下一分片翻译时作为上下文传给 Novel Translator。
+因此不是每个分片单独调用 GPT。每个窗口调用一次：
 
-`scripts/auto_review.py` 保留已有译文的批量审校入口；`scripts/book_pipeline.py` 实现分片翻译、即时审阅、术语表合并与断点续跑。
+```text
+codex exec --model gpt-5.6-sol \
+  -c model_reasoning_effort="low"
+```
 
-迭代流水线入口：
+GPT 仍会读取该窗口内的全部段落。审阅输出包含 `checked_ids`，程序要求它覆盖窗口的所有段落；漏项会重试，未知段落 ID 会使该窗口失败，不会默认为已审阅。
+
+只有同时满足以下条件的修复才会自动写回：
+
+- `auto_apply=true`；
+- 置信度不低于 `0.9`；
+- 包含明确的修订译文。
+
+审阅提出的术语候选会合并到 `glossary.json`，并在下一个翻译窗口前同步给 Novel Translator。
+
+## 翻译命令
+
+从断点继续翻译并审阅：
 
 ```bash
 source .venv/bin/activate
 python scripts/book_pipeline.py \
-  --book '女銀行員-美樹-書院文庫' \
+  --book 'BOOK_ID' \
   --name '正式中文书名' \
   --max-cycles 1000 \
   --review-window-size 4 \
-  --apply
+  --apply \
+  --autonomous
 ```
 
-每个窗口先让 Novel Translator 翻译 4 个 batch，再由 GPT 一次性审阅窗口内的全部段落；随后合并术语、应用修复并同步回 Novel Translator。再次运行相同命令会读取 `progress.json`，从下一个窗口继续。
+`progress.json` 保存窗口进度。重复执行同一命令会从上次未完成的位置继续，而不是重新翻译已经完成的段落。
 
-全书翻译完成后导出：
+翻译完成后导出中文 EPUB：
 
 ```bash
 python scripts/book_pipeline.py \
-  --book '女銀行員-美樹-書院文庫' \
+  --book 'BOOK_ID' \
   --name '正式中文书名' \
   --max-cycles 0 \
   --finalize
 ```
 
-`--finalize` 仅在待翻译段落为零时导出单语中文 EPUB。
+`--finalize` 只在待翻译段落为零时导出单语中文 EPUB，并执行导出验证。
 
-审阅窗口合并、`checked_ids` 和章节级一致性检查均已实施；详细设计记录在 [`docs/review-plan.md`](docs/review-plan.md)。
+## 单章一致性审阅
 
-对已完成的书执行章节级审阅并重新导出：
+章节级一致性审阅用于检查人物称谓、术语、时间顺序、叙事视角、指代和章节内矛盾。它是独立的审阅命令，**当前使用时必须先指定单章**：
 
 ```bash
 python scripts/chapter_review.py \
-  --book '女銀行員-美樹-書院文庫' \
+  --book 'BOOK_ID' \
   --name '正式中文书名' \
+  --chapter-id c0001 \
   --apply \
-  --autonomous \
-  --export
+  --autonomous
 ```
 
-对于无需人工确认的连续处理，增加 `--autonomous`：
+这个命令通常调用一次 GPT 审阅指定章节，并生成该章节的输入、输出、修复记录和质量报告；如果 `checked_ids` 不完整，程序会自动重试。单章验证默认不重新导出 EPUB；确认结果后，需要时再加入 `--export`。
+
+`--chapter-id` 是范围控制参数。指定它只审阅对应章节；只有省略它才会遍历 manifest 中的全部章节。全书一致性审阅不是默认动作。
+
+## 旧有译文的批量审阅
+
+`auto_review.py` 保留用于已有译文的批量质量审阅：
 
 ```bash
-python scripts/book_pipeline.py \
-  --book '女銀行員-美樹-書院文庫' \
-  --name '正式中文书名' \
-  --max-cycles 1000 \
-  --apply \
-  --autonomous \
-  --finalize
+python scripts/auto_review.py \
+  --book 'BOOK_ID' \
+  --mode all \
+  --apply
 ```
 
-该模式自动写回 Codex 置信度不低于 0.9 且有明确修复文本的项目；每个分片仍保留快照、审阅 JSON 和质量报告。
+新书的完整翻译应使用 `book_pipeline.py`；`auto_review.py` 只处理已经存在的译文，不负责从头推进翻译窗口。
+
+## 测试
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m py_compile scripts/*.py tests/*.py
+```
+
+详细的审阅实现说明见 [`docs/review-plan.md`](docs/review-plan.md)。

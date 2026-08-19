@@ -140,7 +140,18 @@ python scripts/book_pipeline.py \
 
 `--finalize` 仅在待翻译段落为零时导出单语中文 EPUB。
 
-审阅窗口合并和 `checked_ids` 已实施；章节级一致性检查仍记录在 [`docs/review-plan.md`](docs/review-plan.md) 的后续项目中。
+审阅窗口合并、`checked_ids` 和章节级一致性检查均已实施；详细设计记录在 [`docs/review-plan.md`](docs/review-plan.md)。
+
+对已完成的书执行章节级审阅并重新导出：
+
+```bash
+python scripts/chapter_review.py \
+  --book '女銀行員-美樹-書院文庫' \
+  --name '正式中文书名' \
+  --apply \
+  --autonomous \
+  --export
+```
 
 对于无需人工确认的连续处理，增加 `--autonomous`：
 

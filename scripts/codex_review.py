@@ -8,6 +8,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "schemas" / "review-output.schema.json"
 WINDOW_SCHEMA = ROOT / "schemas" / "window-review-output.schema.json"
+CHAPTER_SCHEMA = ROOT / "schemas" / "chapter-review-output.schema.json"
 
 
 def run_codex_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
@@ -63,3 +64,27 @@ def run_codex_window_review(input_path: Path, output_path: Path, autonomous: boo
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Codex window review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")
+
+
+def run_codex_chapter_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
+    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
+    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    prompt = f"""
+对输入 JSON 中的整章译文做章节级一致性审阅。
+输入 JSON：{input_path}
+
+必须检查 items 中的每个段落，并把全部 ID 写入 checked_ids。重点检查：人物姓名和称谓、代词指代、术语固定译法、叙事视角、时间顺序、跨段落动作关系、前后语气和明显重复。不要因为个人风格偏好重写正常译文。
+
+issues 只输出确实有问题的段落。明确的机械错误、称谓错误、术语错误、指代错误和确定的中文病句，在置信度 >= 0.9 时提供 approved_translation。
+{"全自动模式下，置信度 >= 0.9 且有明确修复文本的项目设置 auto_apply=true。" if autonomous else "不确定的文学风格选择保持 approved_translation 为空且 auto_apply=false。"}
+term_updates 只收录稳定、可复用的术语，不收录整句。
+严格输出符合 {CHAPTER_SCHEMA} 的 JSON，不要 Markdown。
+""".strip()
+    command = [
+        "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
+        "--model", model, "-c", f'model_reasoning_effort="{effort}"',
+        "--output-schema", str(CHAPTER_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
+    ]
+    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"Codex chapter review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")

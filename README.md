@@ -102,6 +102,10 @@ model = "murasaki-14b-v0.2"
 
 这里的 Gemini 是通过 `agy` 调用的远程/CLI 后端，不是 LM Studio 中的本地模型。桥接层默认并发为 1，以避免同时启动大量 CLI 进程；可通过 `--concurrency` 调整。
 
+### Gemini blocked fallback
+
+章节流程默认使用 Gemini 大窗口翻译；明确的 provider content-filter 会触发窗口二分，最小失败片段交给 LM Studio/Murasaki。设置 `MURASAKI_BASE_URL` 和 `MURASAKI_MODEL` 可覆盖 fallback 地址与模型。每段来源保存到 `translation-provenance.json`，provider 诊断保存到 `provider-diagnostics.json`，详见 `docs/provider-fallback.md`。
+
 ## 当前翻译流程
 
 默认流程以章节为单位。翻译后端仍可内部按 batch 工作，但编排层会持续推进到当前章节完成，再调用一次章节审阅：

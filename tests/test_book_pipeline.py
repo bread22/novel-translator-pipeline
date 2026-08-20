@@ -278,6 +278,45 @@ class PipelineFunctionTests(unittest.TestCase):
             state = json.loads((workspace.chapter_states_dir / "c1.json").read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "reviewed")
 
+    def test_provider_blocked_splits_then_uses_translator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest()
+            raw["chapters"][0]["id"] = "c1"
+            raw["chapters"][0]["paragraphs"] = [
+                {"id": "p1", "source": "第一段", "translated": ""},
+                {"id": "p2", "source": "第二段", "translated": ""},
+            ]
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            calls: list[tuple[str, tuple[str, ...]]] = []
+
+            def targeted(provider: str, book: str, ids: list[str], **_kwargs: object) -> dict:
+                calls.append((provider, tuple(ids)))
+                if provider == "gemini":
+                    return {"status": "error", "error": "provider_blocked: content_filter"}
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for chapter in data["chapters"]:
+                    for item in chapter["paragraphs"]:
+                        if item["id"] in ids:
+                            item["translated"] = f"{provider}-{item['id']}"
+                manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                return {"status": "ok", "summary": {"translated": len(ids)}}
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=lambda *_args: {"status": "ok"},
+                targeted_translator=targeted, primary_batch_max_chars=100,
+            )
+            pipeline.initialize()
+            result = pipeline._translate_chapter("c1", 1)
+            self.assertEqual(result["translated"], 2)
+            self.assertEqual(calls[0], ("gemini", ("p1", "p2")))
+            self.assertEqual(calls[1:], [("gemini", ("p1",)), ("murasaki-local", ("p1",)), ("gemini", ("p2",)), ("murasaki-local", ("p2",))])
+            provenance = json.loads((workspace.data_dir / "translation-provenance.json").read_text(encoding="utf-8"))
+            self.assertEqual(provenance["items"]["p1"]["provider"], "murasaki-local")
+
     def test_finalize_exports_and_validates_completed_book(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -26,7 +26,9 @@ from scripts.codex_review import run_codex_window_review
 from scripts.novel_translator_tool import (
     NOVEL_TRANSLATOR_ROOT,
     call_novel_translator,
+    call_novel_translator_targeted,
     call_novel_translator_with_batch_limit,
+    provider_failure_reason,
 )
 
 
@@ -61,6 +63,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--translation-policy", type=Path, default=ROOT / "docs" / "prompts" / "translation-policy.md")
     parser.add_argument("--translate-retries", type=int, default=3, help="本地翻译失败批次的最大尝试次数")
     parser.add_argument("--recovery-batch-max-chars", type=int, default=700, help="失败批次最后一次重试使用的临时 batch 字符上限")
+    parser.add_argument("--primary-batch-max-chars", type=int, default=12000, help="Gemini 主译每个大窗口的原文字符上限")
+    parser.add_argument("--max-provider-split-depth", type=int, default=8, help="provider blocked 后最多二分深度")
+    parser.add_argument("--fallback-provider", default="murasaki-local", choices=["murasaki-local"], help="Gemini blocked 后的 fallback provider")
+    parser.add_argument("--translation-max-tokens", type=int, default=8192, help="单个翻译窗口的最大输出 token")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
@@ -253,6 +259,7 @@ class IterativePipeline:
         workspace: BookWorkspace,
         manifest: Path,
         tool_call: ToolCall = call_novel_translator,
+        targeted_translator: Callable[..., dict[str, Any]] | None = None,
         recovery_tool_call: Callable[..., dict[str, Any]] = call_novel_translator_with_batch_limit,
         reviewer: Reviewer = run_codex_review,
         window_reviewer: Reviewer = run_codex_window_review,
@@ -261,6 +268,10 @@ class IterativePipeline:
         review_char_limit: int = 40000,
         translate_retries: int = 3,
         recovery_batch_max_chars: int = 700,
+        primary_batch_max_chars: int = 12000,
+        max_provider_split_depth: int = 8,
+        fallback_provider: str = "murasaki-local",
+        translation_max_tokens: int = 8192,
         max_chapter_batches: int = 1000,
         translation_policy: Path | None = None,
         apply: bool = False,
@@ -272,6 +283,7 @@ class IterativePipeline:
         self.workspace = workspace
         self.manifest = manifest
         self.tool_call = tool_call
+        self.targeted_translator = targeted_translator
         self.recovery_tool_call = recovery_tool_call
         self.reviewer = reviewer
         self.window_reviewer = window_reviewer
@@ -286,6 +298,16 @@ class IterativePipeline:
         if recovery_batch_max_chars < 1:
             raise ValueError("recovery_batch_max_chars 必须大于 0")
         self.recovery_batch_max_chars = recovery_batch_max_chars
+        if primary_batch_max_chars < 1:
+            raise ValueError("primary_batch_max_chars 必须大于 0")
+        self.primary_batch_max_chars = primary_batch_max_chars
+        if max_provider_split_depth < 0:
+            raise ValueError("max_provider_split_depth 必须大于等于 0")
+        self.max_provider_split_depth = max_provider_split_depth
+        self.fallback_provider = fallback_provider
+        if translation_max_tokens < 1:
+            raise ValueError("translation_max_tokens 必须大于 0")
+        self.translation_max_tokens = translation_max_tokens
         if max_chapter_batches < 1:
             raise ValueError("max_chapter_batches 必须大于 0")
         self.max_chapter_batches = max_chapter_batches
@@ -417,82 +439,129 @@ class IterativePipeline:
                 return read_json(self.workspace.chapter_states_dir / f"{previous_id}.json", {}) or {}
         return {}
 
+    def _record_translation_provenance(self, ids: list[str], provider: str, reason: str = "") -> None:
+        path = self.workspace.data_dir / "translation-provenance.json"
+        records = read_json(path, {"book": self.book, "items": {}})
+        records.setdefault("book", self.book)
+        items = records.setdefault("items", {})
+        for item_id in ids:
+            items[item_id] = {"provider": provider, "reason": reason, "updated_at": utc_now()}
+        write_json(path, records)
+
+    def _record_provider_attempt(self, attempt: dict[str, Any]) -> None:
+        path = self.workspace.data_dir / "provider-diagnostics.json"
+        diagnostics = read_json(path, {"book": self.book, "attempts": []})
+        diagnostics.setdefault("book", self.book)
+        diagnostics.setdefault("attempts", []).append(attempt)
+        write_json(path, diagnostics)
+
+    def _chapter_pending_paragraphs(self, chapter_id: str) -> list[dict[str, Any]]:
+        chapter = self._chapter(chapter_id)
+        return [
+            paragraph for paragraph in chapter.get("paragraphs", [])
+            if isinstance(paragraph, dict) and paragraph.get("id") and not str(paragraph.get("translated", "")).strip()
+        ]
+
+    @staticmethod
+    def _window(paragraphs: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
+        window: list[dict[str, Any]] = []
+        chars = 0
+        for paragraph in paragraphs:
+            size = len(str(paragraph.get("source", "")))
+            if window and chars + size > max_chars:
+                break
+            window.append(paragraph)
+            chars += size
+        return window or paragraphs[:1]
+
+    def _translate_target(self, provider: str, ids: list[str], source_chars: int) -> dict[str, Any]:
+        if self.targeted_translator is None:
+            if provider != "gemini":
+                raise RuntimeError("测试/兼容模式未配置 fallback translator")
+            return self.tool_call(
+                "translate",
+                "--book", self.book,
+                "--max-batches", "1",
+                "--workers", "1",
+                "--rpm", "30",
+            )
+        return self.targeted_translator(
+            provider,
+            self.book,
+            ids,
+            source_chars=source_chars,
+            max_tokens=self.translation_max_tokens,
+        )
+
+    def _translate_segment_with_recovery(
+        self,
+        chapter_id: str,
+        paragraphs: list[dict[str, Any]],
+        attempts: list[dict[str, Any]],
+        depth: int = 0,
+    ) -> None:
+        ids = [str(item["id"]) for item in paragraphs]
+        source_chars = sum(len(str(item.get("source", ""))) for item in paragraphs)
+        try:
+            result = self._translate_target("gemini", ids, source_chars)
+            reason = provider_failure_reason(result)
+        except Exception as exc:  # noqa: BLE001 - provider diagnostics are part of the run record
+            result = {"status": "error", "error": str(exc)}
+            reason = provider_failure_reason(result)
+        remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+        attempt = {"provider": "gemini", "depth": depth, "ids": ids, "source_chars": source_chars, "result": result, "reason": reason, "remaining": sorted(remaining)}
+        attempts.append(attempt)
+        self._record_provider_attempt(attempt)
+        if self.targeted_translator is None:
+            self._record_translation_provenance(ids, "gemini")
+            return
+        if not (set(ids) & remaining):
+            self._record_translation_provenance(ids, "gemini")
+            return
+        if reason == "content_filter":
+            if len(ids) > 1 and depth < self.max_provider_split_depth:
+                midpoint = max(1, len(ids) // 2)
+                left = [item for item in paragraphs[:midpoint] if str(item["id"]) in remaining]
+                right = [item for item in paragraphs[midpoint:] if str(item["id"]) in remaining]
+                if left:
+                    self._translate_segment_with_recovery(chapter_id, left, attempts, depth + 1)
+                if right:
+                    self._translate_segment_with_recovery(chapter_id, right, attempts, depth + 1)
+                return
+            fallback_result = self._translate_target("murasaki-local", sorted(set(ids) & remaining, key=ids.index), source_chars)
+            fallback_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+            fallback_attempt = {"provider": self.fallback_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": fallback_result, "reason": "gemini_content_filter", "remaining": sorted(fallback_remaining)}
+            attempts.append(fallback_attempt)
+            self._record_provider_attempt(fallback_attempt)
+            if set(ids) & fallback_remaining:
+                raise RuntimeError(f"fallback 未完成章节 {chapter_id}：{', '.join(sorted(set(ids) & fallback_remaining))}")
+            self._record_translation_provenance(ids, self.fallback_provider, "gemini_content_filter")
+            return
+        raise RuntimeError(f"Gemini provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
+
     def _translate_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
         chapter = self._chapter(chapter_id)
-        before = read_json(self.manifest)
         before_path = self.workspace.snapshots_dir / f"{chapter_id}-before.json"
         if not before_path.exists():
             snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"before-{chapter_id}")
             write_json(before_path, snapshot)
         attempts: list[dict[str, Any]] = []
         initial_pending = self._chapter_pending_ids(chapter)
-        no_progress = 0
-        for batch_index in range(1, self.max_chapter_batches + 1):
-            current = self._chapter(chapter_id)
-            pending = self._chapter_pending_ids(current)
+        batches = 0
+        while True:
+            pending = self._chapter_pending_paragraphs(chapter_id)
             if not pending:
                 break
-            try:
-                translation = self.tool_call(
-                    "translate",
-                    "--book", self.book,
-                    "--max-batches", "1",
-                    "--workers", "1",
-                    "--rpm", "30",
-                )
-            except Exception as exc:  # noqa: BLE001 - preserve the recovery record
-                translation = {"status": "error", "error": str(exc)}
-            try:
-                failed = self.tool_call("failed-batches", "--book", self.book)
-            except Exception as exc:  # noqa: BLE001 - failure status itself is diagnostic data
-                failed = {"status": "error", "error": str(exc), "summary": {"failed": 1}, "details": {"batches": []}}
-            after = read_json(self.manifest)
-            after_chapter = self._chapter(chapter_id)
-            remaining = self._chapter_pending_ids(after_chapter)
-            translated_items = [
-                item for item in newly_translated(before, after)
-                if item["id"] in {str(paragraph.get("id", "")) for paragraph in after_chapter.get("paragraphs", [])}
-            ]
-            failed_ids = {
-                str(item_id)
-                for batch in failed.get("details", {}).get("batches", [])
-                if isinstance(batch, dict)
-                for item_id in batch.get("paragraph_ids", [])
-            } if isinstance(failed, dict) else set()
-            attempts.append({
-                "batch": batch_index,
-                "translated": translation,
-                "failed_batches": failed,
-                "newly_translated": len(translated_items),
-                "pending_before": len(pending),
-                "pending_after": len(remaining),
-            })
-            before = after
-            if remaining < pending:
-                no_progress = 0
-            else:
-                no_progress += 1
-            if remaining and no_progress >= self.translate_retries and not (remaining & failed_ids):
-                error = f"章节 {chapter_id} 翻译没有产生进展"
+            if batches >= self.max_chapter_batches:
+                error = f"章节 {chapter_id} 超过 max_chapter_batches，仍有未译段落"
                 self._save_translation_failure(f"chapter-{chapter_id}", attempts, error)
                 raise RuntimeError(error)
-            # The next worker=1 translate invocation retries pending paragraphs itself.
-            # Avoid retry-failed here because that command fans out all historical
-            # failures using the global worker setting and can overload the backend.
+            window = self._window(pending, self.primary_batch_max_chars)
+            self._translate_segment_with_recovery(chapter_id, window, attempts)
+            batches += 1
         final_chapter = self._chapter(chapter_id)
-        remaining = self._chapter_pending_ids(final_chapter)
-        if remaining:
-            error = f"章节 {chapter_id} 超过 max_chapter_batches，仍有未译段落：{', '.join(sorted(remaining))}"
-            self._save_translation_failure(f"chapter-{chapter_id}", attempts, error)
-            raise RuntimeError(error)
         items = self._chapter_items(final_chapter)
-        return {
-            "chapter_id": chapter_id,
-            "items": items,
-            "translated": len(items),
-            "initial_pending": len(initial_pending),
-            "attempts": attempts,
-        }
+        return {"chapter_id": chapter_id, "items": items, "translated": len(items), "initial_pending": len(initial_pending), "attempts": attempts}
 
     def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
         translated = self._translate_chapter(chapter_id, cycle)
@@ -503,6 +572,8 @@ class IterativePipeline:
         glossary = read_json(self.workspace.glossary_path, {"book": self.book, "terms": [], "conflicts": []})
         memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
         previous_state = self._previous_chapter_state(chapter_id)
+        provenance = read_json(self.workspace.data_dir / "translation-provenance.json", {"book": self.book, "items": {}})
+        expected = {item["id"] for item in items}
         input_path = self.workspace.reviews_dir / f"{chapter_id}-input.json"
         output_path = self.workspace.reviews_dir / f"{chapter_id}-output.json"
         write_json(input_path, {
@@ -512,6 +583,11 @@ class IterativePipeline:
             "translation_policy": self._read_translation_policy(),
             "book_memory": memory,
             "previous_chapter_state": previous_state,
+            "translation_provenance": {
+                item_id: provenance.get("items", {}).get(item_id, {})
+                for item_id in expected
+                if item_id in provenance.get("items", {})
+            },
             "items": items,
             "glossary": glossary.get("terms", []),
         })
@@ -519,7 +595,6 @@ class IterativePipeline:
         review = read_json(output_path)
         if not isinstance(review, dict):
             raise ValueError(f"章节审阅结果不是 JSON 对象：{output_path}")
-        expected = {item["id"] for item in items}
         for retry in range(1, 3):
             if not missing_checked_ids(review, expected):
                 break
@@ -800,6 +875,7 @@ def main() -> int:
         book=args.book,
         workspace=workspace,
         manifest=manifest_path(args.book),
+        targeted_translator=call_novel_translator_targeted,
         reviewer=lambda input_path, output_path: run_codex_review(input_path, output_path, autonomous=args.autonomous),
         window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
         chapter_reviewer=lambda input_path, output_path: run_codex_chapter_review(input_path, output_path, autonomous=args.autonomous),
@@ -807,6 +883,10 @@ def main() -> int:
         review_char_limit=args.review_char_limit,
         translate_retries=args.translate_retries,
         recovery_batch_max_chars=args.recovery_batch_max_chars,
+        primary_batch_max_chars=args.primary_batch_max_chars,
+        max_provider_split_depth=args.max_provider_split_depth,
+        fallback_provider=args.fallback_provider,
+        translation_max_tokens=args.translation_max_tokens,
         max_chapter_batches=args.max_chapter_batches,
         translation_policy=args.translation_policy,
         apply=args.apply,

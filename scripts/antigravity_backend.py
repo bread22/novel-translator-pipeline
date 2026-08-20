@@ -13,6 +13,13 @@ import time
 from typing import Any
 
 
+def provider_block_reason(text: str) -> str:
+    lowered = text.casefold()
+    if "sensitive words" in lowered or "prohibited use policy" in lowered or "content policy" in lowered:
+        return "content_filter"
+    return ""
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract the translation JSON from plain, fenced, or agy-wrapped output."""
     candidates = [text.strip()]
@@ -122,6 +129,10 @@ class AntigravityBridge:
             self.slots.release()
         if result.returncode != 0:
             raise RuntimeError(f"agy failed ({result.returncode}): {result.stderr[-2000:]}")
+        block_reason = provider_block_reason(result.stdout)
+        if block_reason:
+            excerpt = result.stdout.strip()[:1000]
+            raise ValueError(f"provider_blocked: {block_reason}; raw_response={excerpt}")
         payload = extract_json_object(result.stdout)
         if not isinstance(payload.get("items"), list):
             raise ValueError("翻译后端 JSON 缺少 items 数组")

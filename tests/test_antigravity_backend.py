@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.antigravity_backend import build_prompt, extract_json_object
+from scripts.antigravity_backend import build_prompt, extract_json_object, provider_block_reason
 
 
 class AntigravityBackendTests(unittest.TestCase):
@@ -20,6 +20,10 @@ class AntigravityBackendTests(unittest.TestCase):
         self.assertIn("--- SYSTEM ---", prompt)
         self.assertIn("--- USER ---", prompt)
         self.assertIn("输入", prompt)
+
+    def test_detects_provider_content_filter(self) -> None:
+        self.assertEqual(provider_block_reason("The prompt contains sensitive words"), "content_filter")
+        self.assertEqual(provider_block_reason('{"items": []}'), "")
 
 
 def json_quote(value: str) -> str:

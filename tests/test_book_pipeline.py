@@ -366,12 +366,15 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=tool_call, reviewer=lambda _input, _output: None,
+                translated_root=root / "translated",
             )
             pipeline.initialize()
             result = pipeline.finalize()
             self.assertEqual(result["status"], "exported")
             self.assertEqual([call[0] for call in calls], ["translation-status", "failed-batches", "validate-export", "export", "validate-epub"])
             self.assertTrue(Path(result["output"]).exists())
+            self.assertTrue(Path(result["translated_output"]).exists())
+            self.assertEqual(Path(result["output"]).read_bytes(), Path(result["translated_output"]).read_bytes())
 
 
 if __name__ == "__main__":

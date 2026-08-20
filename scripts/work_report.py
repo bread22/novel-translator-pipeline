@@ -169,6 +169,7 @@ def generate_work_report(
     reviewer_backend: str,
     novel_root: Path,
     manifest: dict[str, Any],
+    layout: str = "preserve",
 ) -> Path:
     provenance = _read_json(workspace / "data" / "translation-provenance.json", {"items": {}})
     diagnostics = _read_json(workspace / "data" / "provider-diagnostics.json", {"attempts": []})
@@ -199,6 +200,10 @@ def generate_work_report(
         "quality": {
             "pending_paragraphs": sum(1 for c in manifest.get("chapters", []) for p in c.get("paragraphs", []) if not str(p.get("translated", "")).strip()),
             "provider_attempts": len(diagnostics.get("attempts", [])),
+        },
+        "export": {
+            "layout": layout,
+            "postprocess": layout == "horizontal",
         },
         "artifacts": {
             "workspace": str(workspace.resolve()),

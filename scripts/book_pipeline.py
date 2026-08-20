@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 from typing import Any, Callable
 
@@ -24,6 +25,7 @@ from scripts.book_workspace import (
 from scripts.codex_review import run_chapter_review
 from scripts.codex_review import run_review
 from scripts.codex_review import run_window_review
+from scripts.epub_layout import apply_horizontal_layout
 from scripts.novel_translator_tool import (
     NOVEL_TRANSLATOR_ROOT,
     call_novel_translator,
@@ -84,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
+    parser.add_argument("--layout", choices=["preserve", "horizontal"], default="preserve", help="导出 EPUB 的版式；horizontal 在导出后应用中文横排覆盖层")
     parser.add_argument("--health-check-timeout", type=int, default=60, help="启动前 provider/reviewer 健康检查超时秒数")
     parser.add_argument(
         "--reviewer-backend",
@@ -299,6 +302,8 @@ class IterativePipeline:
         apply: bool = False,
         autonomous: bool = False,
         reviewer_backend: str = "codex",
+        layout: str = "preserve",
+        translated_root: Path | None = None,
     ) -> None:
         if review_chunk_size < 1:
             raise ValueError("review_chunk_size 必须大于 0")
@@ -343,6 +348,10 @@ class IterativePipeline:
         self.apply = apply
         self.autonomous = autonomous
         self.reviewer_backend = reviewer_backend
+        if layout not in {"preserve", "horizontal"}:
+            raise ValueError(f"未知 EPUB layout：{layout}")
+        self.layout = layout
+        self.translated_root = (translated_root or ROOT / "translated").expanduser().resolve()
 
     def initialize(self) -> None:
         raw = read_json(self.manifest)
@@ -883,7 +892,13 @@ class IterativePipeline:
         output = self.workspace.root / f"{self.workspace.root.name}-中文.epub"
         validation = self.tool_call("validate-export", "--book", self.book, "--format", "epub")
         exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
+        layout_result = {"status": "preserved", "layout": "preserve"}
+        if self.layout == "horizontal":
+            layout_result = apply_horizontal_layout(output)
         epub_validation = self.tool_call("validate-epub", "--path", str(output))
+        translated_output = self.translated_root / output.name
+        self.translated_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(output, translated_output)
         manifest = read_json(self.manifest, {})
         report_path = generate_work_report(
             workspace=self.workspace.root,
@@ -891,14 +906,17 @@ class IterativePipeline:
             primary_provider=self.primary_provider,
             fallback_provider=self.fallback_provider,
             reviewer_backend=self.reviewer_backend,
+            layout=self.layout,
             novel_root=NOVEL_TRANSLATOR_ROOT,
             manifest=manifest,
         )
         result = {
             "status": "exported",
             "output": str(output),
+            "translated_output": str(translated_output),
             "validation": validation,
             "export": exported,
+            "layout": layout_result,
             "epub_validation": epub_validation,
             "work_report": str(report_path),
         }
@@ -950,6 +968,7 @@ def main() -> int:
         apply=args.apply,
         autonomous=args.autonomous,
         reviewer_backend=args.reviewer_backend,
+        layout=args.layout,
     )
     pipeline.initialize()
     write_json(workspace.data_dir / "preflight.json", preflight)

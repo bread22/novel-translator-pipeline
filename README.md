@@ -2,6 +2,8 @@
 
 本项目是 `novel-translator` 的流程自动化层，用于把一本 EPUB 按书籍目录管理，使用配置的本地/桥接模型翻译，再使用 Codex 或本地 OpenCode 对译文进行批量审阅，最后导出中文 EPUB。
 
+导出 EPUB 时默认保留原书版式；对于日文竖排书，可在流水线命令中加入 `--layout horizontal`。该选项不会修改翻译源或 `novel-translator`，而是在其完成 EPUB 导出后追加横排 CSS、更新正文 CSS 引用、将 spine 翻页方向设为 `ltr`，并将语言元数据设为 `zh-CN`，最后再执行 EPUB 校验。校验完成的成品同时会复制到项目根目录的 `translated/`。
+
 ## 当前架构
 
 ### Novel Translator

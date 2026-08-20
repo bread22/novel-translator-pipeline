@@ -13,4 +13,5 @@ reports/
 data/
 workspace/
 output/
+translated/
 *.log

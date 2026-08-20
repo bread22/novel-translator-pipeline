@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Callable
@@ -20,9 +21,9 @@ from scripts.book_workspace import (
     utc_now,
     write_json,
 )
-from scripts.codex_review import run_codex_review
-from scripts.codex_review import run_codex_chapter_review
-from scripts.codex_review import run_codex_window_review
+from scripts.codex_review import run_chapter_review
+from scripts.codex_review import run_review
+from scripts.codex_review import run_window_review
 from scripts.novel_translator_tool import (
     NOVEL_TRANSLATOR_ROOT,
     call_novel_translator,
@@ -66,12 +67,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recovery-batch-max-chars", type=int, default=700, help="失败批次最后一次重试使用的临时 batch 字符上限")
     parser.add_argument("--primary-batch-max-chars", type=int, default=4000, help="Gemini 主译每个大窗口的原文字符上限")
     parser.add_argument("--max-provider-split-depth", type=int, default=8, help="provider blocked 后最多二分深度")
-    parser.add_argument("--fallback-provider", default="murasaki-local", choices=["murasaki-local"], help="Gemini blocked 后的 fallback provider")
+    parser.add_argument(
+        "--primary-provider",
+        default=os.environ.get("TRANSLATION_PRIMARY_PROVIDER", "gemini"),
+        choices=["gemini", "opencode"],
+        help="主翻译 provider；opencode 使用本地 OpenCode CLI",
+    )
+    parser.add_argument(
+        "--fallback-provider",
+        default=os.environ.get("TRANSLATION_FALLBACK_PROVIDER", "murasaki-local"),
+        choices=["murasaki-local", "opencode"],
+        help="主 provider 失败后使用的 fallback provider",
+    )
     parser.add_argument("--translation-max-tokens", type=int, default=8192, help="单个翻译窗口的最大输出 token")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
     parser.add_argument("--health-check-timeout", type=int, default=60, help="启动前 provider/reviewer 健康检查超时秒数")
+    parser.add_argument(
+        "--reviewer-backend",
+        default=os.environ.get("REVIEWER_BACKEND", "codex"),
+        choices=["codex", "opencode"],
+        help="审阅后端；opencode 使用本地 OpenCode CLI",
+    )
     return parser.parse_args()
 
 
@@ -263,14 +281,15 @@ class IterativePipeline:
         tool_call: ToolCall = call_novel_translator,
         targeted_translator: Callable[..., dict[str, Any]] | None = None,
         recovery_tool_call: Callable[..., dict[str, Any]] = call_novel_translator_with_batch_limit,
-        reviewer: Reviewer = run_codex_review,
-        window_reviewer: Reviewer = run_codex_window_review,
-        chapter_reviewer: Reviewer = run_codex_chapter_review,
+        reviewer: Reviewer = run_review,
+        window_reviewer: Reviewer = run_window_review,
+        chapter_reviewer: Reviewer = run_chapter_review,
         review_chunk_size: int = 30,
         review_char_limit: int = 40000,
         translate_retries: int = 3,
         recovery_batch_max_chars: int = 700,
         primary_batch_max_chars: int = 4000,
+        primary_provider: str = "gemini",
         max_provider_split_depth: int = 8,
         fallback_provider: str = "murasaki-local",
         translation_max_tokens: int = 8192,
@@ -303,9 +322,14 @@ class IterativePipeline:
         if primary_batch_max_chars < 1:
             raise ValueError("primary_batch_max_chars 必须大于 0")
         self.primary_batch_max_chars = primary_batch_max_chars
+        if primary_provider not in {"gemini", "opencode"}:
+            raise ValueError(f"未知 primary provider：{primary_provider}")
+        self.primary_provider = primary_provider
         if max_provider_split_depth < 0:
             raise ValueError("max_provider_split_depth 必须大于等于 0")
         self.max_provider_split_depth = max_provider_split_depth
+        if fallback_provider not in {"murasaki-local", "opencode"}:
+            raise ValueError(f"未知 fallback provider：{fallback_provider}")
         self.fallback_provider = fallback_provider
         if translation_max_tokens < 1:
             raise ValueError("translation_max_tokens 必须大于 0")
@@ -505,20 +529,21 @@ class IterativePipeline:
         ids = [str(item["id"]) for item in paragraphs]
         source_chars = sum(len(str(item.get("source", ""))) for item in paragraphs)
         try:
-            result = self._translate_target("gemini", ids, source_chars)
+            primary_provider = self.primary_provider
+            result = self._translate_target(primary_provider, ids, source_chars)
             reason = provider_failure_reason(result)
         except Exception as exc:  # noqa: BLE001 - provider diagnostics are part of the run record
             result = {"status": "error", "error": str(exc)}
             reason = provider_failure_reason(result)
         remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-        attempt = {"provider": "gemini", "depth": depth, "ids": ids, "source_chars": source_chars, "result": result, "reason": reason, "remaining": sorted(remaining)}
+        attempt = {"provider": primary_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": result, "reason": reason, "remaining": sorted(remaining)}
         attempts.append(attempt)
         self._record_provider_attempt(attempt)
         if self.targeted_translator is None:
-            self._record_translation_provenance(ids, "gemini")
+            self._record_translation_provenance(ids, primary_provider)
             return
         if not (set(ids) & remaining):
-            self._record_translation_provenance(ids, "gemini")
+            self._record_translation_provenance(ids, primary_provider)
             return
         if reason in {"content_filter", "output_format"}:
             if len(ids) > 1 and depth < self.max_provider_split_depth:
@@ -530,9 +555,10 @@ class IterativePipeline:
                 if right:
                     self._translate_segment_with_recovery(chapter_id, right, attempts, depth + 1)
                 return
-            fallback_result = self._translate_target("murasaki-local", sorted(set(ids) & remaining, key=ids.index), source_chars)
+            fallback_ids = sorted(set(ids) & remaining, key=ids.index)
+            fallback_result = self._translate_target(self.fallback_provider, fallback_ids, source_chars)
             fallback_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-            fallback_reason = f"gemini_{reason}"
+            fallback_reason = f"{self.primary_provider}_{reason}"
             fallback_attempt = {"provider": self.fallback_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": fallback_result, "reason": fallback_reason, "remaining": sorted(fallback_remaining)}
             attempts.append(fallback_attempt)
             self._record_provider_attempt(fallback_attempt)
@@ -540,7 +566,7 @@ class IterativePipeline:
                 raise RuntimeError(f"fallback 未完成章节 {chapter_id}：{', '.join(sorted(set(ids) & fallback_remaining))}")
             self._record_translation_provenance(ids, self.fallback_provider, fallback_reason)
             return
-        raise RuntimeError(f"Gemini provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
+        raise RuntimeError(f"{self.primary_provider} provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
 
     def _translate_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
         chapter = self._chapter(chapter_id)
@@ -878,7 +904,13 @@ def main() -> int:
     workspace = BookWorkspace.at(args.output_root, args.name)
     targeted_translator = ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=manifest_path(args.book))
     try:
-        preflight = run_preflight(targeted_translator, timeout=args.health_check_timeout)
+        preflight = run_preflight(
+            targeted_translator,
+            timeout=args.health_check_timeout,
+            primary_provider=args.primary_provider,
+            fallback_provider=args.fallback_provider,
+            reviewer_backend=args.reviewer_backend,
+        )
     except PreflightError as exc:
         print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
         return 2
@@ -887,14 +919,15 @@ def main() -> int:
         workspace=workspace,
         manifest=manifest_path(args.book),
         targeted_translator=targeted_translator,
-        reviewer=lambda input_path, output_path: run_codex_review(input_path, output_path, autonomous=args.autonomous),
-        window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
-        chapter_reviewer=lambda input_path, output_path: run_codex_chapter_review(input_path, output_path, autonomous=args.autonomous),
+        reviewer=lambda input_path, output_path: run_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer_backend),
+        window_reviewer=lambda input_path, output_path: run_window_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer_backend),
+        chapter_reviewer=lambda input_path, output_path: run_chapter_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer_backend),
         review_chunk_size=args.review_chunk_size,
         review_char_limit=args.review_char_limit,
         translate_retries=args.translate_retries,
         recovery_batch_max_chars=args.recovery_batch_max_chars,
         primary_batch_max_chars=args.primary_batch_max_chars,
+        primary_provider=args.primary_provider,
         max_provider_split_depth=args.max_provider_split_depth,
         fallback_provider=args.fallback_provider,
         translation_max_tokens=args.translation_max_tokens,

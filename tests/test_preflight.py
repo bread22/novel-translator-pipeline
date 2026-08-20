@@ -82,6 +82,21 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual([item["status"] for item in report["checks"]], ["error", "error", "ok"])
         self.assertEqual(translator.health_check.call_count, 2)
 
+    def test_preflight_uses_selected_opencode_roles(self) -> None:
+        translator = Mock()
+        translator.health_check.return_value = {"name": "translator:opencode", "status": "ok"}
+        with patch("scripts.preflight.check_reviewer", return_value={"name": "opencode:reviewer", "status": "ok"}) as reviewer:
+            report = run_preflight(
+                translator,
+                timeout=3,
+                primary_provider="opencode",
+                fallback_provider="opencode",
+                reviewer_backend="opencode",
+            )
+        self.assertEqual(report["status"], "ok")
+        reviewer.assert_called_once_with(timeout=3, backend="opencode")
+        translator.health_check.assert_called_once_with("opencode", timeout=3)
+
 
 if __name__ == "__main__":
     unittest.main()

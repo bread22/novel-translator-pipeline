@@ -1,6 +1,6 @@
 # Erotic Novel Translator Automation
 
-本项目是 `novel-translator` 的流程自动化层，用于把一本 EPUB 按书籍目录管理，使用本地模型翻译，再使用 Codex 对译文进行批量审阅，最后导出中文 EPUB。
+本项目是 `novel-translator` 的流程自动化层，用于把一本 EPUB 按书籍目录管理，使用配置的本地/桥接模型翻译，再使用 Codex 或本地 OpenCode 对译文进行批量审阅，最后导出中文 EPUB。
 
 ## 当前架构
 
@@ -19,9 +19,9 @@
 本项目负责：
 
 - 为每本书建立独立的 `output/正式中文书名/` 工作目录；
-- 通过 provider adapter 调度 Gemini 主译和 LM Studio fallback；
+- 通过 provider adapter 调度 Gemini、OpenCode 主译和 LM Studio/OpenCode fallback；
 - 按大窗口调度翻译、审阅、术语表更新和修复应用；
-- 调用 `codex exec` 使用 GPT-5.6-Sol 审阅译文；
+- 调用 `codex exec` 或 `opencode run --format json` 审阅译文；
 - 校验审阅结果是否覆盖全部输入段落；
 - 保存快照、审阅 JSON、术语表和质量报告；
 - 在翻译完成后导出并验证中文 EPUB。
@@ -60,6 +60,17 @@ cp .env.example .env
 1. `~/src/novel-translator/.venv` 已安装 Novel Translator 依赖；
 2. LM Studio 已加载本地翻译模型并监听配置的 API 地址；
 3. Codex CLI 已登录，并能调用 `gpt-5.6-sol`。
+
+如果使用 OpenCode 作为 reviewer 或 translator，确保 `opencode` 在 `PATH` 中可用，并已在本机 OpenCode 配置中选定 provider/model。也可以用环境变量指定模型：
+
+```bash
+export REVIEWER_BACKEND=opencode
+export OPENCODE_REVIEWER_MODEL='provider/model'
+export TRANSLATION_PRIMARY_PROVIDER=opencode
+export OPENCODE_TRANSLATOR_MODEL='provider/model'
+```
+
+不设置 `OPENCODE_*_MODEL` 时，OpenCode 使用自己的默认模型。命令行参数 `--reviewer-backend`、`--primary-provider` 和 `--fallback-provider` 会覆盖对应环境变量。
 
 ## Antigravity 翻译后端
 
@@ -105,7 +116,34 @@ model = "murasaki-14b-v0.2"
 
 ### Gemini blocked fallback
 
-章节流程默认使用 Gemini 大窗口翻译；明确的 provider content-filter 会触发窗口二分，最小失败片段交给 LM Studio/Murasaki。设置 `MURASAKI_BASE_URL` 和 `MURASAKI_MODEL` 可覆盖 fallback 地址与模型。每段来源保存到 `translation-provenance.json`，provider 诊断保存到 `provider-diagnostics.json`，详见 `docs/provider-fallback.md`。
+章节流程默认使用 Gemini 大窗口翻译；明确的 provider content-filter 会触发窗口二分，最小失败片段交给配置的 fallback。默认 fallback 是 LM Studio/Murasaki，也可通过 `--fallback-provider opencode` 切换。设置 `MURASAKI_BASE_URL` 和 `MURASAKI_MODEL` 可覆盖 LM Studio fallback 地址与模型。每段来源保存到 `translation-provenance.json`，provider 诊断保存到 `provider-diagnostics.json`，详见 `docs/provider-fallback.md`。
+
+### OpenCode reviewer/translator 后端
+
+OpenCode 集成使用本地 CLI，不改动 `novel-translator`：
+
+```text
+book_pipeline
+   ├── reviewer:    opencode run --format json
+   └── translator:  opencode run --format json
+```
+
+启动前健康检查会实际执行一次 OpenCode JSON 请求；翻译请求也会严格校验 `items`、段落 ID 和输出完整性。推荐先单独验证：
+
+```bash
+opencode run --format json 'Return exactly {"ok":true}.'
+```
+
+选择 OpenCode 同时承担主译和审阅：
+
+```bash
+python scripts/book_pipeline.py \
+  --book 'BOOK_ID' \
+  --name '正式中文书名' \
+  --reviewer-backend opencode \
+  --primary-provider opencode \
+  --fallback-provider opencode
+```
 
 ## 当前翻译流程
 

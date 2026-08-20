@@ -1,11 +1,29 @@
 # Provider fallback workflow
 
-The chapter pipeline uses Gemini as the primary translator and treats an explicit
+The chapter pipeline uses the configured primary translator (Gemini by default,
+or local OpenCode) and treats an explicit
 provider content-filter response as a recoverable failure. It sends large source
 windows first (`--primary-batch-max-chars`, default `4000`). A blocked window is
 split recursively. The smallest still-blocked segment is sent to the configured
 fallback provider; the pipeline never rewrites or disguises the source to retry
 the same provider.
+
+## OpenCode backend
+
+OpenCode can be selected independently for review and translation. It is invoked
+through the local `opencode run --format json` CLI and does not require changes
+to Novel Translator:
+
+```bash
+export REVIEWER_BACKEND=opencode
+export TRANSLATION_PRIMARY_PROVIDER=opencode
+export OPENCODE_REVIEWER_MODEL='provider/model'   # optional
+export OPENCODE_TRANSLATOR_MODEL='provider/model' # optional
+```
+
+The startup preflight executes one real JSON request for the reviewer and each
+selected translator provider. A missing CLI, failed request, or malformed JSON
+stops the pipeline before the workspace is initialized.
 
 ## LM Studio fallback
 

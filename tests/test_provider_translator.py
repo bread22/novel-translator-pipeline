@@ -50,7 +50,7 @@ class ProviderTranslatorTests(unittest.TestCase):
     def _translator(self, manifest_path: Path) -> ProviderTranslator:
         return ProviderTranslator(novel_root=manifest_path.parent, manifest=manifest_path)
 
-    def test_local_freeform_response_is_rejected_without_manifest_write(self) -> None:
+    def test_local_single_item_freeform_response_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path = Path(temporary) / "manifest.json"
             _manifest(manifest_path)
@@ -65,15 +65,16 @@ class ProviderTranslatorTests(unittest.TestCase):
                 result = self._translator(manifest_path)(
                     "murasaki-local", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
-            self.assertEqual(result["status"], "error")
-            self.assertEqual(result["reason"], "output_format")
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["format"], "plain_single_item")
+            self.assertEqual(result["summary"]["translated"], 1)
             self.assertEqual(requests[0]["max_tokens"], 512)
             self.assertIn('"items"', requests[0]["messages"][0]["content"])
             local_payload = json.loads(requests[0]["messages"][1]["content"])
             self.assertEqual([item["id"] for item in local_payload["items"]], ["p2"])
             self.assertNotIn("context", local_payload)
             saved = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "")
+            self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "这不是 JSON 响应。")
 
     def test_truncated_json_response_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

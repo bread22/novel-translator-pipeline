@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from scripts.antigravity_backend import extract_json_object
+from scripts.opencode_backend import OpenCodeError, model_for, run_prompt
 
 
 def _toml_value(root: Path, section: str, key: str, default: str) -> str:
@@ -133,6 +134,24 @@ def _validate_translation_items(items: list[dict[str, str]], payload: dict[str, 
     return None
 
 
+def _plain_single_translation(content: str, requested: list[dict[str, Any]]) -> list[dict[str, str]] | None:
+    """Accept a bounded plain-text answer from LM Studio for one fallback item.
+
+    Some local models follow the translation instruction but omit the JSON
+    wrapper on sensitive single-paragraph retries.  The caller still runs the
+    normal length/repetition/context validation before writing the result.
+    """
+    if len(requested) != 1:
+        return None
+    text = str(content).strip()
+    if not text or text.startswith("{") or text.startswith("["):
+        return None
+    source = str(requested[0].get("text", ""))
+    if len(text) > max(512, len(source) * 6 + 256):
+        return None
+    return [{"id": str(requested[0].get("id", "")), "text": text}]
+
+
 class ProviderTranslator:
     """Direct provider adapter; Novel Translator remains a storage/export tool."""
 
@@ -161,6 +180,26 @@ class ProviderTranslator:
 
     def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
         """Verify endpoint, configured model, and one real translation-shaped request."""
+        if provider == "opencode":
+            payload = {
+                "source_language": "ja",
+                "target_language": "zh-Hans",
+                "quality_profile": {"requirements": ["只输出 JSON，不要解释。"]},
+                "items": [{"id": "__healthcheck__", "text": "テスト"}],
+            }
+            items, result = self._request(provider, payload, max_tokens=512, timeout=timeout)
+            if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
+                return {
+                    "name": "translator:opencode",
+                    "status": "error",
+                    "model": model_for("translator") or "(configured default)",
+                    "error": self._health_error(result),
+                }
+            return {
+                "name": "translator:opencode",
+                "status": "ok",
+                "model": model_for("translator") or "(configured default)",
+            }
         try:
             base_url, model, api_key = self._provider_config(provider)
             request = Request(
@@ -260,7 +299,50 @@ class ProviderTranslator:
         }
         return payload, {str(item["id"]): str(item.get("source", "")) for item in selected}
 
+    def _request_opencode(
+        self,
+        payload: dict[str, Any],
+        max_tokens: int,
+        timeout: int | None = None,
+    ) -> tuple[list[dict[str, str]], dict[str, Any]]:
+        prompt = (
+            "你是 Novel Translator 的日译中翻译后端。\n"
+            "严格遵守下面的翻译系统要求和 JSON payload。\n"
+            "只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。\n"
+            "不要输出 Markdown、解释、推理、标题、编号或 JSON 之外的文字。\n"
+            f"翻译系统要求：\n{self._system_prompt('opencode')}\n\n"
+            "JSON payload：\n"
+            f"{json.dumps(payload, ensure_ascii=False)}\n\n"
+            f"最多输出约 {max_tokens} 个 token；必须覆盖 payload.items 中的全部 ID，保持顺序。"
+        )
+        try:
+            content = run_prompt(prompt, role="translator", timeout=timeout or self.timeout)
+        except OpenCodeError as exc:
+            return [], {
+                "status": "blocked" if exc.reason == "content_filter" else "error",
+                "provider": "opencode",
+                "reason": exc.reason,
+                "error": str(exc),
+            }
+        common = {"provider": "opencode", "raw_response": content[:4000]}
+        try:
+            items = _parse_translation(content)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return [], {**common, "status": "error", "reason": "output_format", "error": str(exc)}
+        validation = _validate_translation_items(items, payload)
+        if validation:
+            return [], {
+                **common,
+                "status": "error",
+                "reason": "output_format",
+                "error": "翻译响应未通过完整性校验",
+                "validation": validation,
+            }
+        return items, {**common, "status": "ok"}
+
     def _request(self, provider: str, payload: dict[str, Any], max_tokens: int, timeout: int | None = None) -> tuple[list[dict[str, str]], dict[str, Any]]:
+        if provider == "opencode":
+            return self._request_opencode(payload, max_tokens, timeout)
         base_url, model, api_key = self._provider_config(provider)
         requested = payload.get("items", []) if isinstance(payload, dict) else []
         source_chars = sum(
@@ -333,6 +415,11 @@ class ProviderTranslator:
         try:
             items = _parse_translation(str(content))
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            plain_items = _plain_single_translation(str(content), requested)
+            if plain_items:
+                validation = _validate_translation_items(plain_items, payload)
+                if validation is None:
+                    return plain_items, {**common, "status": "ok", "raw_response": str(content)[:1000], "format": "plain_single_item"}
             return [], {**common, "status": "error", "reason": "output_format", "error": str(exc)}
         validation = _validate_translation_items(items, payload)
         if validation:

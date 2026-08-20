@@ -317,6 +317,36 @@ class PipelineFunctionTests(unittest.TestCase):
             provenance = json.loads((workspace.data_dir / "translation-provenance.json").read_text(encoding="utf-8"))
             self.assertEqual(provenance["items"]["p1"]["provider"], "murasaki-local")
 
+    def test_opencode_can_be_selected_as_primary_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest()
+            raw["chapters"][0]["id"] = "c1"
+            raw["chapters"][0]["paragraphs"] = [{"id": "p1", "source": "第一段", "translated": ""}]
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            calls: list[str] = []
+
+            def targeted(provider: str, _book: str, ids: list[str], **_kwargs: object) -> dict:
+                calls.append(provider)
+                if provider == "opencode":
+                    return {"status": "error", "error": "provider_blocked: content_filter"}
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                data["chapters"][0]["paragraphs"][0]["translated"] = "fallback译文"
+                manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                return {"status": "ok", "summary": {"translated": len(ids)}}
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=lambda *_args: {"status": "ok"}, targeted_translator=targeted,
+                primary_provider="opencode", primary_batch_max_chars=100,
+            )
+            pipeline.initialize()
+            result = pipeline._translate_chapter("c1", 1)
+            self.assertEqual(result["translated"], 1)
+            self.assertEqual(calls, ["opencode", "murasaki-local"])
+
     def test_finalize_exports_and_validates_completed_book(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

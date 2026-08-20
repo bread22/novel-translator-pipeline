@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.novel_translator_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
 from scripts.codex_review import run_codex_review
+from scripts.book_pipeline import approved_fixes
 
 
 ARTIFACTS = ROOT / "artifacts"
@@ -72,12 +73,7 @@ def main() -> int:
 
     review_path = ARTIFACTS / "review-results.json"
     review_path.write_text(json.dumps({"book": args.book, "items": reviews}, ensure_ascii=False, indent=2), encoding="utf-8")
-    fixes = [
-        item for item in reviews
-        if item.get("auto_apply") is True
-        and float(item.get("confidence", 0)) >= 0.9
-        and str(item.get("approved_translation", "")).strip()
-    ]
+    fixes = approved_fixes(reviews)
     fix_path = ARTIFACTS / "approved-fixes.json"
     fix_path.write_text(json.dumps({"book": args.book, "items": fixes}, ensure_ascii=False, indent=2), encoding="utf-8")
     result: dict[str, Any] = {"review": str(review_path), "candidate_fixes": len(fixes), "applied": False}

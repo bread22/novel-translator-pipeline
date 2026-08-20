@@ -11,6 +11,8 @@ from scripts.book_pipeline import (
     missing_checked_ids,
     missing_review_ids,
     newly_translated,
+    validate_chapter_review_payload,
+    validate_global_consistency_payload,
     validate_review_payload,
     validate_window_review_payload,
 )
@@ -40,6 +42,14 @@ class PipelineFunctionTests(unittest.TestCase):
         ]
         self.assertEqual([item["id"] for item in approved_fixes(items)], ["a"])
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a", "c"])
+
+    def test_approved_fixes_rejects_non_objective_chapter_fixes(self) -> None:
+        items = [
+            {"id": "a", "category": "mistranslation", "severity": "major", "confidence": 0.95, "replacement": "修复", "auto_apply": True},
+            {"id": "b", "category": "explicitness_intensity", "severity": "major", "confidence": 0.99, "replacement": "风格改写", "auto_apply": True},
+            {"id": "c", "category": "terminology", "severity": "minor", "confidence": 0.99, "replacement": "轻微改写", "auto_apply": True},
+        ]
+        self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a"])
 
     def test_review_payload_rejects_missing_ids(self) -> None:
         payload = validate_review_payload({"items": [], "term_updates": []}, {"p1"})
@@ -116,6 +126,21 @@ class PipelineFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "未知 ID"):
             validate_window_review_payload(payload, {"p1"})
 
+    def test_chapter_validation_requires_exact_checked_ids(self) -> None:
+        payload = {
+            "checked_ids": ["p1"],
+            "fixes": [],
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
+            "chapter_state": {"summary": "", "important_changes": []},
+        }
+        with self.assertRaisesRegex(ValueError, "缺少 ID"):
+            validate_chapter_review_payload(payload, {"p1", "p2"})
+
+    def test_global_consistency_validation_requires_all_chapters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "缺少章节 ID"):
+            validate_global_consistency_payload({"checked_chapters": ["c1"], "conflicts": [], "recommendations": []}, {"c1", "c2"})
+
     def test_translation_failure_retries_failed_batch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -189,6 +214,69 @@ class PipelineFunctionTests(unittest.TestCase):
             self.assertIn("apply-review-fixes", [call[0] for call in calls])
             glossary = json.loads(workspace.glossary_path.read_text())
             self.assertEqual(glossary["terms"][0]["target"], "银行职员")
+
+    def test_chapter_translates_until_complete_and_reviews_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest()
+            raw["chapters"][0]["id"] = "c1"
+            raw["chapters"][0]["paragraphs"] = [
+                {"id": "p1", "source": "第一段", "translated": ""},
+                {"id": "p2", "source": "第二段", "translated": ""},
+            ]
+            manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            calls: list[tuple[str, ...]] = []
+            translate_count = 0
+
+            def tool_call(*args: str) -> dict:
+                nonlocal translate_count
+                calls.append(args)
+                if args[0] == "translate":
+                    translate_count += 1
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    data["chapters"][0]["paragraphs"][translate_count - 1]["translated"] = f"译文{translate_count}"
+                    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+                if args[0] == "apply-review-fixes":
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    data["chapters"][0]["paragraphs"][1]["translated"] = "修正译文"
+                    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+                if args[0] == "quality-report":
+                    return {"status": "ok", "summary": {"translated": 2, "untranslated": 0}}
+                return {"status": "ok", "summary": {"command": args[0]}}
+
+            reviewer_calls = 0
+
+            def chapter_reviewer(input_path: Path, output_path: Path) -> None:
+                nonlocal reviewer_calls
+                reviewer_calls += 1
+                payload = json.loads(input_path.read_text(encoding="utf-8"))
+                self.assertEqual([item["id"] for item in payload["items"]], ["p1", "p2"])
+                output_path.write_text(json.dumps({
+                    "checked_ids": ["p1", "p2"],
+                    "fixes": [{"id": "p2", "category": "mistranslation", "severity": "major", "confidence": 0.99, "reason": "动作错误", "replacement": "修正译文", "auto_apply": True}],
+                    "glossary_delta": {"add": [{"source": "第一段", "target": "译文一", "category": "other", "note": "测试", "confidence": 0.99}], "update": [], "conflicts": []},
+                    "memory_delta": {"add": [{"key": "fact-1", "value": "持续事实", "category": "fact", "note": "测试", "confidence": 0.99}], "update": [], "conflicts": []},
+                    "chapter_state": {"summary": "章节摘要", "important_changes": ["状态变化"]},
+                }, ensure_ascii=False), encoding="utf-8")
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=tool_call, chapter_reviewer=chapter_reviewer,
+                apply=True, autonomous=True, max_chapter_batches=5,
+            )
+            pipeline.initialize()
+            result = pipeline.run_chapter("c1", 1)
+            self.assertEqual(result["translated"], 2)
+            self.assertEqual(result["reviewed"], 2)
+            self.assertEqual(reviewer_calls, 1)
+            self.assertEqual(translate_count, 2)
+            self.assertIn("apply-review-fixes", [call[0] for call in calls])
+            memory = json.loads(workspace.book_memory_path.read_text(encoding="utf-8"))
+            self.assertEqual(memory["entries"][0]["key"], "fact-1")
+            state = json.loads((workspace.chapter_states_dir / "c1.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "reviewed")
 
     def test_finalize_exports_and_validates_completed_book(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

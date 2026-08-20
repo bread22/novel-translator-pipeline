@@ -82,6 +82,14 @@ class BookWorkspace:
         return self.data_dir / "progress.json"
 
     @property
+    def book_memory_path(self) -> Path:
+        return self.data_dir / "book_memory.json"
+
+    @property
+    def chapter_states_dir(self) -> Path:
+        return self.data_dir / "chapter_states"
+
+    @property
     def reviews_dir(self) -> Path:
         return self.root / "reviews"
 
@@ -100,6 +108,7 @@ class BookWorkspace:
             self.reviews_dir,
             self.snapshots_dir,
             self.reports_dir,
+            self.chapter_states_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
         if source_epub is not None:
@@ -117,6 +126,8 @@ class BookWorkspace:
                 self.progress_path,
                 {"book": book_id, "state": "initialized", "completed_cycles": 0, "last_chunk": "", "updated_at": utc_now()},
             )
+        if not self.book_memory_path.exists():
+            write_json(self.book_memory_path, empty_book_memory(book_id))
 
 
 def merge_term_updates(
@@ -191,3 +202,96 @@ def novel_translator_terms(glossary: dict[str, Any]) -> dict[str, list[dict[str,
             if isinstance(item, dict) and str(item.get("source", "")).strip() and str(item.get("target", "")).strip()
         ]
     }
+
+
+def empty_book_memory(book: str = "") -> dict[str, Any]:
+    return {
+        "book": book,
+        "version": 1,
+        "entries": [],
+        "conflicts": [],
+        "updated_at": utc_now(),
+    }
+
+
+def merge_memory_delta(
+    memory: dict[str, Any],
+    delta: dict[str, Any],
+    *,
+    chapter_id: str,
+    threshold: float = 0.9,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Merge structured long-term memory without allowing a model to replace it wholesale."""
+    current = dict(memory or empty_book_memory())
+    entries = [dict(item) for item in current.get("entries", []) if isinstance(item, dict)]
+    conflicts = [dict(item) for item in current.get("conflicts", []) if isinstance(item, dict)]
+    by_key = {str(item.get("key", "")).strip(): item for item in entries if str(item.get("key", "")).strip()}
+    added = updated = rejected = conflicted = 0
+    if not isinstance(delta, dict):
+        return current, {"added": 0, "updated": 0, "rejected": 1, "conflicted": 0}
+    for operation in ("add", "update"):
+        raw_items = delta.get(operation, [])
+        if not isinstance(raw_items, list):
+            rejected += 1
+            continue
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                rejected += 1
+                continue
+            key = str(raw.get("key", "")).strip()
+            value = str(raw.get("value", "")).strip()
+            confidence = float(raw.get("confidence", 0) or 0)
+            if not key or not value or confidence < threshold:
+                rejected += 1
+                continue
+            existing = by_key.get(key)
+            if existing is not None and str(existing.get("value", "")).strip() != value:
+                conflicts.append({
+                    "key": key,
+                    "existing_value": existing.get("value", ""),
+                    "proposed_value": value,
+                    "confidence": confidence,
+                    "chapter_id": chapter_id,
+                    "created_at": utc_now(),
+                })
+                conflicted += 1
+                continue
+            if existing is None:
+                existing = {
+                    "key": key,
+                    "value": value,
+                    "category": str(raw.get("category", "fact")).strip() or "fact",
+                    "note": str(raw.get("note", "")).strip(),
+                    "confidence": confidence,
+                    "first_seen_chapter": chapter_id,
+                    "last_seen_chapter": chapter_id,
+                }
+                entries.append(existing)
+                by_key[key] = existing
+                added += 1
+            else:
+                existing["confidence"] = max(float(existing.get("confidence", 0) or 0), confidence)
+                existing["last_seen_chapter"] = chapter_id
+                if raw.get("note"):
+                    existing["note"] = str(raw["note"]).strip()
+                updated += 1
+    current["entries"] = sorted(entries, key=lambda item: str(item.get("key", "")))
+    current["conflicts"] = conflicts
+    current["updated_at"] = utc_now()
+    return current, {"added": added, "updated": updated, "rejected": rejected, "conflicted": conflicted}
+
+
+def merge_chapter_state(
+    state: dict[str, Any] | None,
+    delta: dict[str, Any],
+    *,
+    chapter_id: str,
+) -> dict[str, Any]:
+    current = dict(state or {"chapter_id": chapter_id})
+    if isinstance(delta, dict):
+        for key, value in delta.items():
+            if key not in {"chapter_id", "updated_at"}:
+                current[key] = value
+    current["chapter_id"] = chapter_id
+    current["updated_at"] = utc_now()
+    return current

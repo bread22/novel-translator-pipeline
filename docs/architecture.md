@@ -9,30 +9,33 @@ Novel Translator 导入/解包
    ↓
 manifest + 当前译文
    ↓
-Automation 选择下一个分片
+Automation 选择下一章并推进其全部翻译 batch
    ↓
-Novel Translator + LM Studio 翻译
+整章审阅
+   ├── checked_ids / fixes
+   ├── glossary_delta
+   ├── memory_delta
+   └── chapter_state
    ↓
-Codex CLI 审阅
-   ├── issues
-   ├── approved_translation
-   └── term_updates
+更新 glossary.json、book_memory.json 和 chapter_states
    ↓
-更新 glossary.json，应用高置信度修复
+应用客观高置信度修复
    ↓
-下一个分片
+下一章
    ↓
 最终质量报告与中文 EPUB
 ```
 
-## 分片定义
+## 章节审阅输入
 
-分片是带有稳定段落 ID 的小段译文，默认建议 10～30 个自然段。它不是新的 EPUB，也不是单纯的文本预览，而是包含源文、当前译文和元数据的审阅输入：
+章节审阅输入带有稳定段落 ID，包含整章源文、当前译文、Glossary、Book Memory 和上一章状态：
 
 ```json
 {
   "book": "BOOK",
-  "chunk_id": "chunk-0001",
+  "chapter_id": "c0001",
+  "book_memory": {},
+  "previous_chapter_state": {},
   "items": [
     {
       "id": "paragraph-id",
@@ -44,7 +47,7 @@ Codex CLI 审阅
 }
 ```
 
-Codex 输出问题、建议译文和术语候选。普通模式只有 `auto_apply=true` 且 `confidence >= 0.9` 的修复进入自动写回流程；`--autonomous` 模式则自动写回所有有明确 `approved_translation` 且 `confidence >= 0.9` 的项目。术语更新也记录来源分片和置信度，方便回滚。
+审阅输出问题、完整段落替换、Glossary 增量、Memory 增量和章节状态。只有客观类别、`major/critical`、`confidence >= 0.9` 且包含替换译文的项目进入自动写回流程。所有增量都记录来源章节和冲突，方便回滚。
 
 ## 文件边界
 
@@ -55,12 +58,13 @@ Automation 不直接改写原始 EPUB，也不直接连接 LM Studio；它通过
 
 ## 可靠性要求
 
-每个分片完成后保存：
+每章完成后保存：
 
 1. 当前术语表；
 2. 翻译前后快照；
-3. Codex 原始审阅结果；
+3. 原始章节审阅结果；
 4. 已应用修复清单；
-5. 质量报告。
+5. Book Memory 和 Chapter State；
+6. 质量报告。
 
 最终 EPUB 应从解包后的工作副本重新打包，并验证 `mimetype`、OPF、目录、章节顺序、HTML 标签和资源路径。

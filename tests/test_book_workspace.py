@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import zipfile
 
-from scripts.book_workspace import BookWorkspace, merge_term_updates, novel_translator_terms, safe_book_name
+from scripts.book_workspace import BookWorkspace, empty_book_memory, merge_memory_delta, merge_term_updates, novel_translator_terms, safe_book_name
 
 
 class BookWorkspaceTests(unittest.TestCase):
@@ -45,6 +45,22 @@ class BookWorkspaceTests(unittest.TestCase):
         self.assertEqual(summary, {"added": 1, "confirmed": 0, "rejected": 1, "conflicted": 1})
         exported = novel_translator_terms(merged)
         self.assertNotIn("confidence", exported["terms"][0])
+
+    def test_memory_merge_preserves_conflicts(self) -> None:
+        memory = empty_book_memory("book")
+        memory, first = merge_memory_delta(memory, {
+            "add": [{"key": "hero", "value": "主角", "category": "character", "note": "", "confidence": 0.99}],
+            "update": [],
+            "conflicts": [],
+        }, chapter_id="c1")
+        memory, second = merge_memory_delta(memory, {
+            "add": [],
+            "update": [{"key": "hero", "value": "另一译法", "category": "character", "note": "", "confidence": 0.99}],
+            "conflicts": [],
+        }, chapter_id="c2")
+        self.assertEqual(first["added"], 1)
+        self.assertEqual(second["conflicted"], 1)
+        self.assertEqual(memory["entries"][0]["value"], "主角")
 
 
 if __name__ == "__main__":

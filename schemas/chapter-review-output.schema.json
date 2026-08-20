@@ -2,26 +2,116 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["checked_ids", "issues", "term_updates"],
+  "required": ["checked_ids", "fixes", "glossary_delta", "memory_delta", "chapter_state"],
   "properties": {
     "checked_ids": {"type": "array", "items": {"type": "string"}},
-    "issues": {
+    "fixes": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "severity", "issues", "suggestion", "approved_translation", "auto_apply", "confidence"],
+        "required": ["id", "category", "severity", "confidence", "reason", "replacement", "auto_apply"],
         "properties": {
           "id": {"type": "string"},
-          "severity": {"type": "string", "enum": ["info", "low", "medium", "high"]},
-          "issues": {"type": "array", "items": {"type": "string"}},
-          "suggestion": {"type": "string"},
-          "approved_translation": {"type": "string"},
-          "auto_apply": {"type": "boolean"},
+          "category": {"type": "string", "enum": ["mistranslation", "subject_object", "pronoun_reference", "omission", "addition", "terminology", "factual_conflict", "context_conflict", "explicitness_intensity", "policy_violation"]},
+          "severity": {"type": "string", "enum": ["critical", "major"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "reason": {"type": "string"},
+          "replacement": {"type": "string"},
+          "auto_apply": {"type": "boolean"}
+        }
+      }
+    },
+    "glossary_delta": {"$ref": "#/$defs/glossaryDelta"},
+    "memory_delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "update", "conflicts"],
+      "properties": {
+        "add": {"$ref": "#/$defs/memoryEntries"},
+        "update": {"$ref": "#/$defs/memoryEntries"},
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "existing_target", "proposed_target", "note"],
+            "properties": {
+              "source": {"type": "string"},
+              "existing_target": {"type": "string"},
+              "proposed_target": {"type": "string"},
+              "note": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "chapter_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "important_changes", "active_entities", "location", "timeline"],
+      "properties": {
+        "summary": {"type": "string"},
+        "important_changes": {"type": "array", "items": {"type": "string"}},
+        "active_entities": {"type": "array", "items": {"type": "string"}},
+        "location": {"type": "string"},
+        "timeline": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "$defs": {
+    "glossaryDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "update", "conflicts"],
+      "properties": {
+        "add": {"$ref": "#/$defs/glossaryEntries"},
+        "update": {"$ref": "#/$defs/glossaryEntries"},
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "existing_value", "proposed_value", "note"],
+            "properties": {
+              "key": {"type": "string"},
+              "existing_value": {"type": "string"},
+              "proposed_value": {"type": "string"},
+              "note": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "glossaryEntries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target", "category", "note", "confidence"],
+        "properties": {
+          "source": {"type": "string"},
+          "target": {"type": "string"},
+          "category": {"type": "string", "enum": ["name", "place", "organization", "title", "object", "other"]},
+          "note": {"type": "string"},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         }
       }
     },
-    "term_updates": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["source", "target", "category", "note", "confidence"], "properties": {"source": {"type": "string"}, "target": {"type": "string"}, "category": {"type": "string", "enum": ["name", "place", "organization", "title", "object", "other"]}, "note": {"type": "string"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}}}
+    "memoryEntries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "value", "category", "note", "confidence"],
+        "properties": {
+          "key": {"type": "string"},
+          "value": {"type": "string"},
+          "category": {"type": "string", "enum": ["character", "relationship", "alias", "fact", "state", "address", "other"]},
+          "note": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    }
   }
 }

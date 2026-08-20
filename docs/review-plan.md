@@ -2,25 +2,22 @@
 
 ## 状态
 
-窗口审阅、`checked_ids` 和章节级一致性检查均已实施。章节级检查当前采用“先单章验证，再决定是否扩大范围”的运行方式。
+章节审阅、`checked_ids`、Book Memory、Chapter State 和全书一致性检查均已实施。章节级审阅是主流程，旧窗口审阅保留为回滚模式。
 
 ## 目标
 
 在不让低成本模型决定 GPT 审阅范围的前提下，减少 GPT 调用次数，并增加跨段落上下文。
 
-## 目标流程
+## 目标流程（默认已落地）
 
 ```text
-Murasaki 翻译 batch 1
-Murasaki 翻译 batch 2
-Murasaki 翻译 batch 3
-Murasaki 翻译 batch 4
+当前章节的全部翻译 batch
         ↓
-一次 GPT 审阅 3～4 个 batch
+一次 GPT 整章审阅
         ↓
-合并术语更新和译文修复
+合并术语、Book Memory、Chapter State 和译文修复
         ↓
-继续下一组 batch
+继续下一章
 ```
 
 GPT 仍然读取窗口内的全部段落，不使用本地模型的风险结果决定哪些段落可以跳过。
@@ -203,5 +200,28 @@ GPT 只提交增量，不直接重写整个 `book_memory.json`。程序负责 Sc
 - 人物称呼和术语一致性；
 - 误报数量；
 - GPT 调用次数、输入输出 token 和总耗时。
+
+## 当前默认实现
+
+章节级流程已经作为 `book_pipeline.py` 的默认模式：
+
+```text
+--review-mode chapter
+```
+
+每章会完整推进翻译、生成一次整章审阅输入、严格验证 `checked_ids`，然后合并 `glossary_delta`、`memory_delta` 和 `chapter_state`。旧的 4-batch 流程仍可通过以下参数运行：
+
+```text
+--review-mode window
+```
+
+章节级状态文件位于：
+
+```text
+data/book_memory.json
+data/chapter_states/{chapter_id}.json
+```
+
+自动修复仅接受客观错误类别、`major/critical`、置信度至少 `0.9` 且包含完整段落替换文本的项目。章节审阅输入同时携带翻译策略、Glossary、Book Memory 和上一章状态。
 
 当前 4-batch 窗口流程继续作为基线，完成 benchmark 后再决定是否将整章审阅提升为主审阅流程。

@@ -11,6 +11,9 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.book_workspace import (
     BookWorkspace,
+    empty_book_memory,
+    merge_chapter_state,
+    merge_memory_delta,
     merge_term_updates,
     novel_translator_terms,
     read_json,
@@ -18,6 +21,7 @@ from scripts.book_workspace import (
     write_json,
 )
 from scripts.codex_review import run_codex_review
+from scripts.codex_review import run_codex_chapter_review
 from scripts.codex_review import run_codex_window_review
 from scripts.novel_translator_tool import (
     NOVEL_TRANSLATOR_ROOT,
@@ -29,16 +33,32 @@ from scripts.novel_translator_tool import (
 ToolCall = Callable[..., dict[str, Any]]
 Reviewer = Callable[[Path, Path], None]
 
+OBJECTIVE_CATEGORIES = {
+    "mistranslation",
+    "subject_object",
+    "pronoun_reference",
+    "omission",
+    "addition",
+    "terminology",
+    "factual_conflict",
+    "context_conflict",
+    "policy_violation",
+}
+OBJECTIVE_SEVERITIES = {"critical", "major"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Iterative EPUB translation and Codex review pipeline")
     parser.add_argument("--book", required=True, help="Novel Translator book id")
     parser.add_argument("--name", required=True, help="output/ 下的书籍目录名和中文书名")
     parser.add_argument("--output-root", type=Path, default=ROOT / "output")
-    parser.add_argument("--max-cycles", type=int, default=1, help="本次最多翻译并审阅多少个批次")
+    parser.add_argument("--max-cycles", type=int, default=1, help="chapter 模式下最多处理多少章；window 模式下最多推进多少批次")
     parser.add_argument("--review-chunk-size", type=int, default=30)
     parser.add_argument("--review-window-size", type=int, default=4, help="每次合并多少个翻译 batch 调用一次 GPT")
     parser.add_argument("--review-char-limit", type=int, default=40000, help="单个 GPT 审阅窗口的最大字符数")
+    parser.add_argument("--review-mode", choices=["chapter", "window"], default="chapter", help="章节级审阅为默认；window 保留旧流程")
+    parser.add_argument("--max-chapter-batches", type=int, default=1000, help="单章最多推进多少个翻译 batch")
+    parser.add_argument("--translation-policy", type=Path, default=ROOT / "docs" / "prompts" / "translation-policy.md")
     parser.add_argument("--translate-retries", type=int, default=3, help="本地翻译失败批次的最大尝试次数")
     parser.add_argument("--recovery-batch-max-chars", type=int, default=700, help="失败批次最后一次重试使用的临时 batch 字符上限")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
@@ -72,12 +92,21 @@ def newly_translated(before: dict[str, Any], after: dict[str, Any]) -> list[dict
 
 
 def approved_fixes(items: list[dict[str, Any]], threshold: float = 0.9, *, autonomous: bool = False) -> list[dict[str, Any]]:
-    return [
-        item for item in items
-        if (autonomous or item.get("auto_apply") is True)
-        and float(item.get("confidence", 0) or 0) >= threshold
-        and str(item.get("approved_translation", "")).strip()
-    ]
+    approved: list[dict[str, Any]] = []
+    for raw in items:
+        item = dict(raw)
+        replacement = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
+        is_new_contract = "category" in item or "replacement" in item
+        if is_new_contract and (
+            str(item.get("category", "")) not in OBJECTIVE_CATEGORIES
+            or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
+        ):
+            continue
+        if (autonomous or item.get("auto_apply") is True) and float(item.get("confidence", 0) or 0) >= threshold and replacement:
+            item["approved_translation"] = replacement
+            item["replacement"] = replacement
+            approved.append(item)
+    return approved
 
 
 def validate_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
@@ -150,6 +179,72 @@ def validate_window_review_payload(payload: dict[str, Any], expected_ids: set[st
     return payload
 
 
+def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("章节审阅结果必须是 JSON 对象")
+    checked = payload.get("checked_ids")
+    fixes = payload.get("fixes")
+    glossary_delta = payload.get("glossary_delta")
+    memory_delta = payload.get("memory_delta")
+    chapter_state = payload.get("chapter_state")
+    if not isinstance(checked, list) or not isinstance(fixes, list):
+        raise ValueError("章节审阅结果必须包含 checked_ids 和 fixes 数组")
+    if not isinstance(glossary_delta, dict) or not isinstance(memory_delta, dict) or not isinstance(chapter_state, dict):
+        raise ValueError("章节审阅结果必须包含 glossary_delta、memory_delta 和 chapter_state 对象")
+    checked_ids = [str(item) for item in checked]
+    received = set(checked_ids)
+    unknown = sorted(received - expected_ids)
+    missing = sorted(expected_ids - received)
+    duplicate_ids = sorted({item for item in checked_ids if checked_ids.count(item) > 1})
+    fix_ids = {str(item.get("id", "")) for item in fixes if isinstance(item, dict)}
+    unknown_fixes = sorted(fix_ids - expected_ids)
+    details: list[str] = []
+    if unknown:
+        details.append(f"checked_ids 未知 ID：{', '.join(unknown)}")
+    if missing:
+        details.append(f"checked_ids 缺少 ID：{', '.join(missing)}")
+    if duplicate_ids:
+        details.append(f"checked_ids 重复 ID：{', '.join(duplicate_ids)}")
+    if unknown_fixes:
+        details.append(f"fixes 未知 ID：{', '.join(unknown_fixes)}")
+    if details:
+        raise ValueError("章节审阅结果段落不匹配；" + "；".join(details))
+    return payload
+
+
+def validate_global_consistency_payload(payload: dict[str, Any], expected_chapter_ids: set[str]) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("checked_chapters"), list):
+        raise ValueError("全书一致性结果必须包含 checked_chapters 数组")
+    checked = [str(item) for item in payload["checked_chapters"]]
+    if len(checked) != len(set(checked)):
+        raise ValueError("全书一致性结果包含重复章节 ID")
+    unknown = sorted(set(checked) - expected_chapter_ids)
+    missing = sorted(expected_chapter_ids - set(checked))
+    if unknown or missing:
+        details = []
+        if unknown:
+            details.append(f"未知章节 ID：{', '.join(unknown)}")
+        if missing:
+            details.append(f"缺少章节 ID：{', '.join(missing)}")
+        raise ValueError("全书一致性结果覆盖范围不匹配；" + "；".join(details))
+    if not isinstance(payload.get("conflicts"), list) or not isinstance(payload.get("recommendations"), list):
+        raise ValueError("全书一致性结果必须包含 conflicts 和 recommendations 数组")
+    return payload
+
+
+def verify_applied_fixes(manifest: dict[str, Any], fixes: list[dict[str, Any]]) -> None:
+    paragraphs = paragraph_map(manifest)
+    mismatches: list[str] = []
+    for fix in fixes:
+        item_id = str(fix.get("id", ""))
+        expected = str(fix.get("approved_translation", "") or fix.get("replacement", "")).strip()
+        actual = str(paragraphs.get(item_id, {}).get("translated", "")).strip()
+        if not item_id or not expected or actual != expected:
+            mismatches.append(item_id or "<empty>")
+    if mismatches:
+        raise ValueError(f"应用修复后 manifest 未验证通过：{', '.join(mismatches)}")
+
+
 class IterativePipeline:
     def __init__(
         self,
@@ -161,10 +256,13 @@ class IterativePipeline:
         recovery_tool_call: Callable[..., dict[str, Any]] = call_novel_translator_with_batch_limit,
         reviewer: Reviewer = run_codex_review,
         window_reviewer: Reviewer = run_codex_window_review,
+        chapter_reviewer: Reviewer = run_codex_chapter_review,
         review_chunk_size: int = 30,
         review_char_limit: int = 40000,
         translate_retries: int = 3,
         recovery_batch_max_chars: int = 700,
+        max_chapter_batches: int = 1000,
+        translation_policy: Path | None = None,
         apply: bool = False,
         autonomous: bool = False,
     ) -> None:
@@ -177,6 +275,7 @@ class IterativePipeline:
         self.recovery_tool_call = recovery_tool_call
         self.reviewer = reviewer
         self.window_reviewer = window_reviewer
+        self.chapter_reviewer = chapter_reviewer
         self.review_chunk_size = review_chunk_size
         if review_char_limit < 1:
             raise ValueError("review_char_limit 必须大于 0")
@@ -187,6 +286,10 @@ class IterativePipeline:
         if recovery_batch_max_chars < 1:
             raise ValueError("recovery_batch_max_chars 必须大于 0")
         self.recovery_batch_max_chars = recovery_batch_max_chars
+        if max_chapter_batches < 1:
+            raise ValueError("max_chapter_batches 必须大于 0")
+        self.max_chapter_batches = max_chapter_batches
+        self.translation_policy = translation_policy
         self.apply = apply
         self.autonomous = autonomous
 
@@ -205,7 +308,13 @@ class IterativePipeline:
         attempts: list[dict[str, Any]] = []
         for attempt in range(1, self.translate_retries + 1):
             try:
-                translation = self.tool_call("translate", "--book", self.book, "--max-batches", "1")
+                translation = self.tool_call(
+                    "translate",
+                    "--book", self.book,
+                    "--max-batches", "1",
+                    "--workers", "1",
+                    "--rpm", "30",
+                )
             except Exception as exc:  # noqa: BLE001 - record the CLI failure before recovery
                 translation = {"status": "error", "error": str(exc)}
             try:
@@ -266,6 +375,211 @@ class IterativePipeline:
         progress = read_json(self.workspace.progress_path, {})
         progress.update({"book": self.book, "state": "paused", "last_chunk": chunk_id, "failure_report": str(self.workspace.reports_dir / f"translation-failure-{chunk_id}.json"), "updated_at": utc_now()})
         write_json(self.workspace.progress_path, progress)
+
+    def _chapter(self, chapter_id: str) -> dict[str, Any]:
+        manifest = read_json(self.manifest)
+        for chapter in manifest.get("chapters", []):
+            if str(chapter.get("id", "")) == chapter_id:
+                return chapter
+        raise ValueError(f"没有匹配的章节：{chapter_id}")
+
+    @staticmethod
+    def _chapter_items(chapter: dict[str, Any]) -> list[dict[str, str]]:
+        return [
+            {
+                "id": str(paragraph["id"]),
+                "source": str(paragraph.get("source", "")),
+                "translated": str(paragraph.get("translated", "")),
+            }
+            for paragraph in chapter.get("paragraphs", [])
+            if isinstance(paragraph, dict) and paragraph.get("id") and str(paragraph.get("translated", "")).strip()
+        ]
+
+    @staticmethod
+    def _chapter_pending_ids(chapter: dict[str, Any]) -> set[str]:
+        return {
+            str(paragraph["id"])
+            for paragraph in chapter.get("paragraphs", [])
+            if isinstance(paragraph, dict) and paragraph.get("id") and not str(paragraph.get("translated", "")).strip()
+        }
+
+    def _read_translation_policy(self) -> str:
+        if self.translation_policy and self.translation_policy.exists():
+            return self.translation_policy.read_text(encoding="utf-8")
+        return "忠实翻译；不擅自增删事实、动作、人物关系、强度或信息。"
+
+    def _previous_chapter_state(self, chapter_id: str) -> dict[str, Any]:
+        manifest = read_json(self.manifest)
+        chapters = manifest.get("chapters", [])
+        for index, chapter in enumerate(chapters):
+            if str(chapter.get("id", "")) == chapter_id and index > 0:
+                previous_id = str(chapters[index - 1].get("id", ""))
+                return read_json(self.workspace.chapter_states_dir / f"{previous_id}.json", {}) or {}
+        return {}
+
+    def _translate_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
+        chapter = self._chapter(chapter_id)
+        before = read_json(self.manifest)
+        before_path = self.workspace.snapshots_dir / f"{chapter_id}-before.json"
+        if not before_path.exists():
+            snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"before-{chapter_id}")
+            write_json(before_path, snapshot)
+        attempts: list[dict[str, Any]] = []
+        initial_pending = self._chapter_pending_ids(chapter)
+        no_progress = 0
+        for batch_index in range(1, self.max_chapter_batches + 1):
+            current = self._chapter(chapter_id)
+            pending = self._chapter_pending_ids(current)
+            if not pending:
+                break
+            try:
+                translation = self.tool_call(
+                    "translate",
+                    "--book", self.book,
+                    "--max-batches", "1",
+                    "--workers", "1",
+                    "--rpm", "30",
+                )
+            except Exception as exc:  # noqa: BLE001 - preserve the recovery record
+                translation = {"status": "error", "error": str(exc)}
+            try:
+                failed = self.tool_call("failed-batches", "--book", self.book)
+            except Exception as exc:  # noqa: BLE001 - failure status itself is diagnostic data
+                failed = {"status": "error", "error": str(exc), "summary": {"failed": 1}, "details": {"batches": []}}
+            after = read_json(self.manifest)
+            after_chapter = self._chapter(chapter_id)
+            remaining = self._chapter_pending_ids(after_chapter)
+            translated_items = [
+                item for item in newly_translated(before, after)
+                if item["id"] in {str(paragraph.get("id", "")) for paragraph in after_chapter.get("paragraphs", [])}
+            ]
+            failed_ids = {
+                str(item_id)
+                for batch in failed.get("details", {}).get("batches", [])
+                if isinstance(batch, dict)
+                for item_id in batch.get("paragraph_ids", [])
+            } if isinstance(failed, dict) else set()
+            attempts.append({
+                "batch": batch_index,
+                "translated": translation,
+                "failed_batches": failed,
+                "newly_translated": len(translated_items),
+                "pending_before": len(pending),
+                "pending_after": len(remaining),
+            })
+            before = after
+            if remaining < pending:
+                no_progress = 0
+            else:
+                no_progress += 1
+            if remaining and no_progress >= self.translate_retries and not (remaining & failed_ids):
+                error = f"章节 {chapter_id} 翻译没有产生进展"
+                self._save_translation_failure(f"chapter-{chapter_id}", attempts, error)
+                raise RuntimeError(error)
+            # The next worker=1 translate invocation retries pending paragraphs itself.
+            # Avoid retry-failed here because that command fans out all historical
+            # failures using the global worker setting and can overload the backend.
+        final_chapter = self._chapter(chapter_id)
+        remaining = self._chapter_pending_ids(final_chapter)
+        if remaining:
+            error = f"章节 {chapter_id} 超过 max_chapter_batches，仍有未译段落：{', '.join(sorted(remaining))}"
+            self._save_translation_failure(f"chapter-{chapter_id}", attempts, error)
+            raise RuntimeError(error)
+        items = self._chapter_items(final_chapter)
+        return {
+            "chapter_id": chapter_id,
+            "items": items,
+            "translated": len(items),
+            "initial_pending": len(initial_pending),
+            "attempts": attempts,
+        }
+
+    def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
+        translated = self._translate_chapter(chapter_id, cycle)
+        items = translated["items"]
+        if not items:
+            return {"chapter_id": chapter_id, "translated": 0, "reviewed": 0, "done": True}
+        chapter = self._chapter(chapter_id)
+        glossary = read_json(self.workspace.glossary_path, {"book": self.book, "terms": [], "conflicts": []})
+        memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
+        previous_state = self._previous_chapter_state(chapter_id)
+        input_path = self.workspace.reviews_dir / f"{chapter_id}-input.json"
+        output_path = self.workspace.reviews_dir / f"{chapter_id}-output.json"
+        write_json(input_path, {
+            "book": self.book,
+            "chapter_id": chapter_id,
+            "chapter_title": chapter.get("title", ""),
+            "translation_policy": self._read_translation_policy(),
+            "book_memory": memory,
+            "previous_chapter_state": previous_state,
+            "items": items,
+            "glossary": glossary.get("terms", []),
+        })
+        self.chapter_reviewer(input_path, output_path)
+        review = read_json(output_path)
+        if not isinstance(review, dict):
+            raise ValueError(f"章节审阅结果不是 JSON 对象：{output_path}")
+        expected = {item["id"] for item in items}
+        for retry in range(1, 3):
+            if not missing_checked_ids(review, expected):
+                break
+            retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
+            self.chapter_reviewer(input_path, retry_path)
+            review = read_json(retry_path)
+            if not isinstance(review, dict):
+                raise ValueError(f"章节重审结果不是 JSON 对象：{retry_path}")
+        review = validate_chapter_review_payload(review, expected)
+        fixes = approved_fixes(review["fixes"], autonomous=self.autonomous)
+        fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
+        write_json(fixes_path, {"book": self.book, "chapter_id": chapter_id, "items": fixes})
+        applied: dict[str, Any] | bool = False
+        if self.apply and fixes:
+            applied = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+            verify_applied_fixes(read_json(self.manifest), fixes)
+        glossary, term_summary = merge_term_updates(glossary, review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []), chunk_id=f"chapter-{chapter_id}")
+        write_json(self.workspace.glossary_path, glossary)
+        terms_path = self.workspace.data_dir / "novel-translator-terms.json"
+        write_json(terms_path, novel_translator_terms(glossary))
+        terminology = self.tool_call("import-terminology", "--book", self.book, "--input", str(terms_path))
+        memory, memory_summary = merge_memory_delta(memory, review["memory_delta"], chapter_id=chapter_id)
+        write_json(self.workspace.book_memory_path, memory)
+        chapter_state = merge_chapter_state(
+            read_json(self.workspace.chapter_states_dir / f"{chapter_id}.json", {"chapter_id": chapter_id}),
+            review["chapter_state"],
+            chapter_id=chapter_id,
+        )
+        chapter_state.update({"status": "reviewed", "checked": len(expected), "fixes": len(fixes)})
+        write_json(self.workspace.chapter_states_dir / f"{chapter_id}.json", chapter_state)
+        after_snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"after-{chapter_id}")
+        write_json(self.workspace.snapshots_dir / f"{chapter_id}-after.json", after_snapshot)
+        quality = self.tool_call("quality-report", "--book", self.book)
+        report = {
+            "book": self.book,
+            "chapter_id": chapter_id,
+            "translated": len(items),
+            "reviewed": len(expected),
+            "fixes": len(fixes),
+            "applied": applied,
+            "term_updates": term_summary,
+            "memory_delta": memory_summary,
+            "terminology": terminology.get("summary", terminology),
+            "quality": quality.get("summary", quality),
+            "updated_at": utc_now(),
+        }
+        write_json(self.workspace.reports_dir / f"{chapter_id}.json", report)
+        progress = read_json(self.workspace.progress_path, {})
+        progress.update({
+            "book": self.book,
+            "state": "running",
+            "completed_cycles": cycle,
+            "last_chapter": chapter_id,
+            "chapter_status": "reviewed",
+            "last_translated": len(items),
+            "last_reviewed": len(expected),
+            "updated_at": utc_now(),
+        })
+        write_json(self.workspace.progress_path, progress)
+        return report
 
     def run_cycle(self, cycle: int) -> dict[str, Any]:
         translated = self._translate_only(cycle)
@@ -488,24 +802,44 @@ def main() -> int:
         manifest=manifest_path(args.book),
         reviewer=lambda input_path, output_path: run_codex_review(input_path, output_path, autonomous=args.autonomous),
         window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
+        chapter_reviewer=lambda input_path, output_path: run_codex_chapter_review(input_path, output_path, autonomous=args.autonomous),
         review_chunk_size=args.review_chunk_size,
         review_char_limit=args.review_char_limit,
         translate_retries=args.translate_retries,
         recovery_batch_max_chars=args.recovery_batch_max_chars,
+        max_chapter_batches=args.max_chapter_batches,
+        translation_policy=args.translation_policy,
         apply=args.apply,
         autonomous=args.autonomous,
     )
     pipeline.initialize()
     results = []
     progress = read_json(workspace.progress_path, {})
-    start = int(progress.get("completed_cycles", 0) or 0) + 1
-    step = max(1, args.review_window_size)
-    for cycle in range(start, start + args.max_cycles, step):
-        result = pipeline.run_window(cycle, min(step, start + args.max_cycles - cycle))
-        results.append(result)
-        if result["done"]:
-            break
-    payload: dict[str, Any] = {"book": args.book, "workspace": str(workspace.root), "cycles": results}
+    if args.review_mode == "chapter":
+        manifest = read_json(manifest_path(args.book))
+        chapters = manifest.get("chapters", [])
+        last_chapter = str(progress.get("last_chapter", ""))
+        start_index = 0
+        if last_chapter:
+            for index, chapter in enumerate(chapters):
+                if str(chapter.get("id", "")) == last_chapter:
+                    start_index = index + (1 if progress.get("chapter_status") == "reviewed" else 0)
+                    break
+        end_index = min(len(chapters), start_index + args.max_cycles)
+        for index in range(start_index, end_index):
+            chapter_id = str(chapters[index].get("id", ""))
+            if not chapter_id:
+                continue
+            results.append(pipeline.run_chapter(chapter_id, index + 1))
+    else:
+        start = int(progress.get("completed_cycles", 0) or 0) + 1
+        step = max(1, args.review_window_size)
+        for cycle in range(start, start + args.max_cycles, step):
+            result = pipeline.run_window(cycle, min(step, start + args.max_cycles - cycle))
+            results.append(result)
+            if result["done"]:
+                break
+    payload: dict[str, Any] = {"book": args.book, "workspace": str(workspace.root), "review_mode": args.review_mode, "cycles": results}
     if args.finalize:
         payload["finalize"] = pipeline.finalize()
     print(json.dumps(payload, ensure_ascii=False, indent=2))

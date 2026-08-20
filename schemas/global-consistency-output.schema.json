@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["checked_chapters", "conflicts", "recommendations"],
+  "properties": {
+    "checked_chapters": {"type": "array", "items": {"type": "string"}},
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "severity", "confidence", "evidence", "recommendation"],
+        "properties": {
+          "category": {"type": "string", "enum": ["glossary_conflict", "memory_conflict", "character_conflict", "relationship_conflict", "timeline_conflict", "terminology_conflict"]},
+          "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "recommendation": {"type": "string"}
+        }
+      }
+    },
+    "recommendations": {"type": "array", "items": {"type": "string"}}
+  }
+}

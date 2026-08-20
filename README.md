@@ -9,7 +9,7 @@
 位于 `~/src/novel-translator`，负责：
 
 - 导入、解包和解析 EPUB；
-- 调用 LM Studio 本地模型翻译段落；
+- 保存翻译 manifest，并提供 EPUB/状态/快照/导出能力；
 - 保存译文、manifest、术语表和翻译进度；
 - 执行快照、质量报告和修复写回；
 - 导出和验证 EPUB。
@@ -19,13 +19,14 @@
 本项目负责：
 
 - 为每本书建立独立的 `output/正式中文书名/` 工作目录；
-- 按窗口调度翻译、审阅、术语表更新和修复应用；
+- 通过 provider adapter 调度 Gemini 主译和 LM Studio fallback；
+- 按大窗口调度翻译、审阅、术语表更新和修复应用；
 - 调用 `codex exec` 使用 GPT-5.6-Sol 审阅译文；
 - 校验审阅结果是否覆盖全部输入段落；
 - 保存快照、审阅 JSON、术语表和质量报告；
 - 在翻译完成后导出并验证中文 EPUB。
 
-两者的边界是：Novel Translator 负责翻译和译文状态，Automation 负责流程编排和审阅推进。
+两者的边界是：Novel Translator 负责 manifest、快照、质量、修复和 EPUB 交付；Automation 负责 provider 调用、流程编排和审阅推进。
 
 ## 目录结构
 

@@ -26,10 +26,10 @@ from scripts.codex_review import run_codex_window_review
 from scripts.novel_translator_tool import (
     NOVEL_TRANSLATOR_ROOT,
     call_novel_translator,
-    call_novel_translator_targeted,
     call_novel_translator_with_batch_limit,
     provider_failure_reason,
 )
+from scripts.provider_translator import ProviderTranslator
 
 
 ToolCall = Callable[..., dict[str, Any]]
@@ -875,7 +875,7 @@ def main() -> int:
         book=args.book,
         workspace=workspace,
         manifest=manifest_path(args.book),
-        targeted_translator=call_novel_translator_targeted,
+        targeted_translator=ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=manifest_path(args.book)),
         reviewer=lambda input_path, output_path: run_codex_review(input_path, output_path, autonomous=args.autonomous),
         window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
         chapter_reviewer=lambda input_path, output_path: run_codex_chapter_review(input_path, output_path, autonomous=args.autonomous),

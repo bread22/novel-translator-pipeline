@@ -29,8 +29,10 @@ Run the normal chapter pipeline:
   --apply --autonomous --finalize
 ```
 
-The translator CLI must support targeted translation through `--target-ids`.
-The repository records paragraph provenance in
+The repository's direct provider adapter performs targeted translation and
+writes the selected results into the existing Novel Translator manifest. Novel
+Translator itself does not need a provider or CLI code change. The repository
+records paragraph provenance in
 `data/translation-provenance.json` and provider diagnostics in
 `data/provider-diagnostics.json`. Chapter review receives the provenance but
 judges the completed chapter uniformly.

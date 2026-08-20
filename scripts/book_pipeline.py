@@ -32,6 +32,7 @@ from scripts.novel_translator_tool import (
 )
 from scripts.preflight import PreflightError, run_preflight
 from scripts.provider_translator import ProviderTranslator
+from scripts.work_report import generate_work_report
 
 
 ToolCall = Callable[..., dict[str, Any]]
@@ -297,6 +298,7 @@ class IterativePipeline:
         translation_policy: Path | None = None,
         apply: bool = False,
         autonomous: bool = False,
+        reviewer_backend: str = "codex",
     ) -> None:
         if review_chunk_size < 1:
             raise ValueError("review_chunk_size 必须大于 0")
@@ -340,6 +342,7 @@ class IterativePipeline:
         self.translation_policy = translation_policy
         self.apply = apply
         self.autonomous = autonomous
+        self.reviewer_backend = reviewer_backend
 
     def initialize(self) -> None:
         raw = read_json(self.manifest)
@@ -881,12 +884,23 @@ class IterativePipeline:
         validation = self.tool_call("validate-export", "--book", self.book, "--format", "epub")
         exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
         epub_validation = self.tool_call("validate-epub", "--path", str(output))
+        manifest = read_json(self.manifest, {})
+        report_path = generate_work_report(
+            workspace=self.workspace.root,
+            book=self.book,
+            primary_provider=self.primary_provider,
+            fallback_provider=self.fallback_provider,
+            reviewer_backend=self.reviewer_backend,
+            novel_root=NOVEL_TRANSLATOR_ROOT,
+            manifest=manifest,
+        )
         result = {
             "status": "exported",
             "output": str(output),
             "validation": validation,
             "export": exported,
             "epub_validation": epub_validation,
+            "work_report": str(report_path),
         }
         write_json(self.workspace.reports_dir / "final-export.json", result)
         progress = read_json(self.workspace.progress_path, {})
@@ -935,6 +949,7 @@ def main() -> int:
         translation_policy=args.translation_policy,
         apply=args.apply,
         autonomous=args.autonomous,
+        reviewer_backend=args.reviewer_backend,
     )
     pipeline.initialize()
     write_json(workspace.data_dir / "preflight.json", preflight)

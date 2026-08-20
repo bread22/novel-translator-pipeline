@@ -204,7 +204,7 @@ class PipelineFunctionTests(unittest.TestCase):
 
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
-                tool_call=tool_call, reviewer=reviewer, apply=True,
+                tool_call=tool_call, review_runner=reviewer, apply=True,
             )
             pipeline.initialize()
             result = pipeline.run_cycle(1)
@@ -294,7 +294,7 @@ class PipelineFunctionTests(unittest.TestCase):
 
             def targeted(provider: str, book: str, ids: list[str], **_kwargs: object) -> dict:
                 calls.append((provider, tuple(ids)))
-                if provider == "gemini":
+                if provider == "antigravity":
                     return {"status": "error", "error": "provider_blocked: content_filter"}
                 data = json.loads(manifest_path.read_text(encoding="utf-8"))
                 for chapter in data["chapters"]:
@@ -312,10 +312,10 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline.initialize()
             result = pipeline._translate_chapter("c1", 1)
             self.assertEqual(result["translated"], 2)
-            self.assertEqual(calls[0], ("gemini", ("p1", "p2")))
-            self.assertEqual(calls[1:], [("gemini", ("p1",)), ("murasaki-local", ("p1",)), ("gemini", ("p2",)), ("murasaki-local", ("p2",))])
+            self.assertEqual(calls[0], ("antigravity", ("p1", "p2")))
+            self.assertEqual(calls[1:], [("antigravity", ("p1",)), ("lmstudio", ("p1",)), ("antigravity", ("p2",)), ("lmstudio", ("p2",))])
             provenance = json.loads((workspace.data_dir / "translation-provenance.json").read_text(encoding="utf-8"))
-            self.assertEqual(provenance["items"]["p1"]["provider"], "murasaki-local")
+            self.assertEqual(provenance["items"]["p1"]["provider"], "lmstudio")
 
     def test_opencode_can_be_selected_as_primary_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -340,12 +340,12 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=lambda *_args: {"status": "ok"}, targeted_translator=targeted,
-                primary_provider="opencode", primary_batch_max_chars=100,
+                primary_translator="opencode", primary_batch_max_chars=100,
             )
             pipeline.initialize()
             result = pipeline._translate_chapter("c1", 1)
             self.assertEqual(result["translated"], 1)
-            self.assertEqual(calls, ["opencode", "murasaki-local"])
+            self.assertEqual(calls, ["opencode", "lmstudio"])
 
     def test_finalize_exports_and_validates_completed_book(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -365,7 +365,7 @@ class PipelineFunctionTests(unittest.TestCase):
 
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
-                tool_call=tool_call, reviewer=lambda _input, _output: None,
+                tool_call=tool_call, review_runner=lambda _input, _output: None,
                 translated_root=root / "translated",
             )
             pipeline.initialize()

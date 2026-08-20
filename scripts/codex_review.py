@@ -22,7 +22,7 @@ GLOBAL_SCHEMA = ROOT / "schemas" / "global-consistency-output.schema.json"
 
 def _selected_backend(backend: str | None = None) -> str:
     config = load_config()
-    return (backend or setting(config, "roles.reviewer", "REVIEWER_BACKEND")).strip().casefold()
+    return (backend or setting(config, "roles.reviewer", "REVIEWER")).strip().casefold()
 
 
 def _codex_model_effort() -> tuple[str, str]:
@@ -37,7 +37,7 @@ def _codex_binary() -> str:
     return str(setting(load_config(), "providers.codex.binary", "CODEX_BIN"))
 
 
-def check_reviewer(timeout: int = 60, *, backend: str | None = "codex") -> dict[str, Any]:
+def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str, Any]:
     selected = _selected_backend(backend)
     if selected == "opencode":
         return check_opencode(timeout=timeout, role="reviewer")

@@ -43,7 +43,7 @@ Run the normal chapter pipeline:
   --name BOOK_NAME \
   --review-mode chapter \
   --primary-batch-max-chars 4000 \
-  --fallback-provider murasaki-local \
+  --fallback-translator lmstudio \
   --apply --autonomous --finalize
 ```
 

@@ -15,13 +15,6 @@ from scripts.config import load_config, setting
 from scripts.opencode_backend import OpenCodeError, model_for, run_prompt
 
 
-PROVIDER_ALIASES = {"gemini": "antigravity", "murasaki-local": "lmstudio"}
-
-
-def canonical_provider(provider: str) -> str:
-    return PROVIDER_ALIASES.get(provider, provider)
-
-
 def _toml_value(root: Path, section: str, key: str, default: str) -> str:
     path = root / "setting.toml"
     if not path.exists():
@@ -181,15 +174,14 @@ class ProviderTranslator:
         self.config = load_config()
 
     def _provider_config(self, provider: str) -> tuple[str, str, str]:
-        provider = canonical_provider(provider)
         if provider == "antigravity":
-            base_url = setting(self.config, "providers.antigravity.base_url", "PRIMARY_BASE_URL")
-            model = setting(self.config, "providers.antigravity.model", "PRIMARY_MODEL")
-            api_key = setting(self.config, "providers.antigravity.api_key", "PRIMARY_API_KEY")
+            base_url = setting(self.config, "providers.antigravity.base_url", "ANTIGRAVITY_BASE_URL")
+            model = setting(self.config, "providers.antigravity.model", "ANTIGRAVITY_MODEL")
+            api_key = setting(self.config, "providers.antigravity.api_key", "ANTIGRAVITY_API_KEY")
         elif provider == "lmstudio":
-            base_url = setting(self.config, "providers.lmstudio.base_url", "MURASAKI_BASE_URL")
-            model = setting(self.config, "providers.lmstudio.model", "MURASAKI_MODEL")
-            api_key = setting(self.config, "providers.lmstudio.api_key", "MURASAKI_API_KEY")
+            base_url = setting(self.config, "providers.lmstudio.base_url", "LMSTUDIO_BASE_URL")
+            model = setting(self.config, "providers.lmstudio.model", "LMSTUDIO_MODEL")
+            api_key = setting(self.config, "providers.lmstudio.api_key", "LMSTUDIO_API_KEY")
         else:
             raise ValueError(f"未知翻译 provider：{provider}")
         return base_url.rstrip("/"), model, api_key
@@ -201,7 +193,6 @@ class ProviderTranslator:
 
     def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
         """Verify endpoint, configured model, and one real translation-shaped request."""
-        provider = canonical_provider(provider)
         if provider == "opencode":
             payload = {
                 "source_language": "ja",
@@ -269,7 +260,7 @@ class ProviderTranslator:
             return {"name": f"translator:{provider}", "status": "error", "error": str(exc)[:800]}
 
     def _system_prompt(self, provider: str) -> str:
-        if canonical_provider(provider) == "lmstudio":
+        if provider == "lmstudio":
             return (
                 "你是备用日中小说翻译器。把用户 payload 中每个 source 翻译成自然、忠实的简体中文。"
                 "严格只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。"
@@ -363,7 +354,6 @@ class ProviderTranslator:
         return items, {**common, "status": "ok"}
 
     def _request(self, provider: str, payload: dict[str, Any], max_tokens: int, timeout: int | None = None) -> tuple[list[dict[str, str]], dict[str, Any]]:
-        provider = canonical_provider(provider)
         if provider == "opencode":
             return self._request_opencode(payload, max_tokens, timeout)
         base_url, model, api_key = self._provider_config(provider)
@@ -391,7 +381,7 @@ class ProviderTranslator:
             # requested output exceeds the model context.  Check the exact
             # message payload before opening the connection and recursively
             # split it into two requests when necessary.
-            context_limit = int(setting(self.config, "providers.lmstudio.context_tokens", "MURASAKI_CONTEXT_TOKENS"))
+            context_limit = int(setting(self.config, "providers.lmstudio.context_tokens", "LMSTUDIO_CONTEXT_TOKENS"))
             estimated_input = _estimate_local_input_tokens(self._system_prompt(provider), request_payload)
             available_output = context_limit - estimated_input - 128
             if available_output < 512:

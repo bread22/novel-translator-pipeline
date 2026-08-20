@@ -16,10 +16,10 @@ class WorkReportTests(unittest.TestCase):
             (root / "reviews").mkdir()
             (root / "reports").mkdir()
             (root / "data" / "translation-provenance.json").write_text(
-                json.dumps({"items": {"p1": {"provider": "gemini"}, "p2": {"provider": "murasaki-local"}}}), encoding="utf-8"
+                json.dumps({"items": {"p1": {"provider": "antigravity"}, "p2": {"provider": "lmstudio"}}}), encoding="utf-8"
             )
             (root / "data" / "provider-diagnostics.json").write_text(
-                json.dumps({"attempts": [{"provider": "gemini", "reason": "content_filter", "ids": ["p2"]}]}), encoding="utf-8"
+                json.dumps({"attempts": [{"provider": "antigravity", "reason": "content_filter", "ids": ["p2"]}]}), encoding="utf-8"
             )
             (root / "reviews" / "c0001-output.json").write_text(
                 json.dumps({"checked_ids": ["p1", "p2"], "fixes": [{"id": "p2", "category": "omission"}]}), encoding="utf-8"
@@ -31,9 +31,9 @@ class WorkReportTests(unittest.TestCase):
             path = generate_work_report(
                 workspace=root,
                 book="book",
-                primary_provider="gemini",
-                fallback_provider="murasaki-local",
-                reviewer_backend="opencode",
+                primary_translator="antigravity",
+                fallback_translator="lmstudio",
+                reviewer="opencode",
                 novel_root=root,
                 manifest=manifest,
             )

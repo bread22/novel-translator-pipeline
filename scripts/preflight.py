@@ -22,16 +22,16 @@ def run_preflight(
     translator: ProviderTranslator,
     timeout: int = 60,
     *,
-    primary_provider: str | None = None,
-    fallback_provider: str | None = None,
-    reviewer_backend: str | None = None,
+    primary_translator: str | None = None,
+    fallback_translator: str | None = None,
+    reviewer: str | None = None,
 ) -> dict[str, Any]:
     roles = load_config()["roles"]
-    primary_provider = primary_provider or str(roles["primary_translator"])
-    fallback_provider = fallback_provider or str(roles["fallback_translator"])
-    reviewer_backend = reviewer_backend or str(roles["reviewer"])
-    checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=reviewer_backend)]
-    for provider in dict.fromkeys((primary_provider, fallback_provider)):
+    primary_translator = primary_translator or str(roles["primary_translator"])
+    fallback_translator = fallback_translator or str(roles["fallback_translator"])
+    reviewer = reviewer or str(roles["reviewer"])
+    checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=reviewer)]
+    for provider in dict.fromkeys((primary_translator, fallback_translator)):
         checks.append(translator.health_check(provider, timeout=timeout))
     report = {
         "status": "ok" if all(item.get("status") == "ok" for item in checks) else "error",

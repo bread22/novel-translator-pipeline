@@ -25,6 +25,7 @@ model = "gemini-3.7-flash"
 effort = "low"
 timeout = 600
 concurrency = 1
+context_tokens = 1048576
 
 [providers.opencode]
 binary = "opencode"
@@ -52,3 +53,11 @@ max_provider_split_depth = 8
 translation_max_tokens = 8192
 health_check_timeout = 60
 layout = "preserve"
+
+[queue]
+source_root = "source"
+max_cycles = 1000
+apply = true
+autonomous = true
+finalize = true
+stop_on_error = true

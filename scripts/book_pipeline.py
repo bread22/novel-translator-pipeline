@@ -76,14 +76,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--primary-batch-max-chars", type=int, default=pipeline["primary_batch_max_chars"], help="Gemini 主译每个大窗口的原文字符上限")
     parser.add_argument("--max-provider-split-depth", type=int, default=pipeline["max_provider_split_depth"], help="provider blocked 后最多二分深度")
     parser.add_argument(
-        "--primary-translator", "--primary-provider", dest="primary_provider",
-        default=setting(config, "roles.primary_translator", "TRANSLATION_PRIMARY_PROVIDER"),
+        "--primary-translator", dest="primary_translator",
+        default=setting(config, "roles.primary_translator", "PRIMARY_TRANSLATOR"),
         choices=["antigravity", "opencode"],
         help="primary_translator 使用的 provider",
     )
     parser.add_argument(
-        "--fallback-translator", "--fallback-provider", dest="fallback_provider",
-        default=setting(config, "roles.fallback_translator", "TRANSLATION_FALLBACK_PROVIDER"),
+        "--fallback-translator", dest="fallback_translator",
+        default=setting(config, "roles.fallback_translator", "FALLBACK_TRANSLATOR"),
         choices=["lmstudio", "opencode"],
         help="fallback_translator 使用的 provider",
     )
@@ -94,8 +94,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--layout", choices=["preserve", "horizontal"], default=pipeline["layout"], help="导出 EPUB 的版式；horizontal 在导出后应用中文横排覆盖层")
     parser.add_argument("--health-check-timeout", type=int, default=pipeline["health_check_timeout"], help="启动前 provider/reviewer 健康检查超时秒数")
     parser.add_argument(
-        "--reviewer", "--reviewer-backend", dest="reviewer_backend",
-        default=setting(config, "roles.reviewer", "REVIEWER_BACKEND"),
+        "--reviewer", dest="reviewer",
+        default=setting(config, "roles.reviewer", "REVIEWER"),
         choices=["codex", "opencode"],
         help="审阅后端；opencode 使用本地 OpenCode CLI",
     )
@@ -290,7 +290,7 @@ class IterativePipeline:
         tool_call: ToolCall = call_novel_translator,
         targeted_translator: Callable[..., dict[str, Any]] | None = None,
         recovery_tool_call: Callable[..., dict[str, Any]] = call_novel_translator_with_batch_limit,
-        reviewer: Reviewer = run_review,
+        review_runner: Reviewer = run_review,
         window_reviewer: Reviewer = run_window_review,
         chapter_reviewer: Reviewer = run_chapter_review,
         review_chunk_size: int = 30,
@@ -298,15 +298,15 @@ class IterativePipeline:
         translate_retries: int = 3,
         recovery_batch_max_chars: int = 700,
         primary_batch_max_chars: int = 4000,
-        primary_provider: str = "gemini",
+        primary_translator: str = "antigravity",
         max_provider_split_depth: int = 8,
-        fallback_provider: str = "murasaki-local",
+        fallback_translator: str = "lmstudio",
         translation_max_tokens: int = 8192,
         max_chapter_batches: int = 1000,
         translation_policy: Path | None = None,
         apply: bool = False,
         autonomous: bool = False,
-        reviewer_backend: str = "codex",
+        reviewer: str = "opencode",
         layout: str = "preserve",
         translated_root: Path | None = None,
     ) -> None:
@@ -318,7 +318,7 @@ class IterativePipeline:
         self.tool_call = tool_call
         self.targeted_translator = targeted_translator
         self.recovery_tool_call = recovery_tool_call
-        self.reviewer = reviewer
+        self.review_runner = review_runner
         self.window_reviewer = window_reviewer
         self.chapter_reviewer = chapter_reviewer
         self.review_chunk_size = review_chunk_size
@@ -334,15 +334,15 @@ class IterativePipeline:
         if primary_batch_max_chars < 1:
             raise ValueError("primary_batch_max_chars 必须大于 0")
         self.primary_batch_max_chars = primary_batch_max_chars
-        if primary_provider not in {"antigravity", "gemini", "opencode"}:
-            raise ValueError(f"未知 primary provider：{primary_provider}")
-        self.primary_provider = primary_provider
+        if primary_translator not in {"antigravity", "opencode"}:
+            raise ValueError(f"未知 primary_translator provider：{primary_translator}")
+        self.primary_translator = primary_translator
         if max_provider_split_depth < 0:
             raise ValueError("max_provider_split_depth 必须大于等于 0")
         self.max_provider_split_depth = max_provider_split_depth
-        if fallback_provider not in {"lmstudio", "murasaki-local", "opencode"}:
-            raise ValueError(f"未知 fallback provider：{fallback_provider}")
-        self.fallback_provider = fallback_provider
+        if fallback_translator not in {"lmstudio", "opencode"}:
+            raise ValueError(f"未知 fallback_translator provider：{fallback_translator}")
+        self.fallback_translator = fallback_translator
         if translation_max_tokens < 1:
             raise ValueError("translation_max_tokens 必须大于 0")
         self.translation_max_tokens = translation_max_tokens
@@ -352,7 +352,9 @@ class IterativePipeline:
         self.translation_policy = translation_policy
         self.apply = apply
         self.autonomous = autonomous
-        self.reviewer_backend = reviewer_backend
+        if reviewer not in {"opencode", "codex"}:
+            raise ValueError(f"未知 reviewer provider：{reviewer}")
+        self.reviewer_provider = reviewer
         if layout not in {"preserve", "horizontal"}:
             raise ValueError(f"未知 EPUB layout：{layout}")
         self.layout = layout
@@ -519,7 +521,7 @@ class IterativePipeline:
 
     def _translate_target(self, provider: str, ids: list[str], source_chars: int) -> dict[str, Any]:
         if self.targeted_translator is None:
-            if provider not in {"antigravity", "gemini"}:
+            if provider != "antigravity":
                 raise RuntimeError("测试/兼容模式未配置 fallback translator")
             return self.tool_call(
                 "translate",
@@ -546,21 +548,21 @@ class IterativePipeline:
         ids = [str(item["id"]) for item in paragraphs]
         source_chars = sum(len(str(item.get("source", ""))) for item in paragraphs)
         try:
-            primary_provider = self.primary_provider
-            result = self._translate_target(primary_provider, ids, source_chars)
+            primary_translator = self.primary_translator
+            result = self._translate_target(primary_translator, ids, source_chars)
             reason = provider_failure_reason(result)
         except Exception as exc:  # noqa: BLE001 - provider diagnostics are part of the run record
             result = {"status": "error", "error": str(exc)}
             reason = provider_failure_reason(result)
         remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-        attempt = {"provider": primary_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": result, "reason": reason, "remaining": sorted(remaining)}
+        attempt = {"provider": primary_translator, "depth": depth, "ids": ids, "source_chars": source_chars, "result": result, "reason": reason, "remaining": sorted(remaining)}
         attempts.append(attempt)
         self._record_provider_attempt(attempt)
         if self.targeted_translator is None:
-            self._record_translation_provenance(ids, primary_provider)
+            self._record_translation_provenance(ids, primary_translator)
             return
         if not (set(ids) & remaining):
-            self._record_translation_provenance(ids, primary_provider)
+            self._record_translation_provenance(ids, primary_translator)
             return
         if reason in {"content_filter", "output_format"}:
             if len(ids) > 1 and depth < self.max_provider_split_depth:
@@ -573,17 +575,17 @@ class IterativePipeline:
                     self._translate_segment_with_recovery(chapter_id, right, attempts, depth + 1)
                 return
             fallback_ids = sorted(set(ids) & remaining, key=ids.index)
-            fallback_result = self._translate_target(self.fallback_provider, fallback_ids, source_chars)
+            fallback_result = self._translate_target(self.fallback_translator, fallback_ids, source_chars)
             fallback_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-            fallback_reason = f"{self.primary_provider}_{reason}"
-            fallback_attempt = {"provider": self.fallback_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": fallback_result, "reason": fallback_reason, "remaining": sorted(fallback_remaining)}
+            fallback_reason = f"{self.primary_translator}_{reason}"
+            fallback_attempt = {"provider": self.fallback_translator, "depth": depth, "ids": ids, "source_chars": source_chars, "result": fallback_result, "reason": fallback_reason, "remaining": sorted(fallback_remaining)}
             attempts.append(fallback_attempt)
             self._record_provider_attempt(fallback_attempt)
             if set(ids) & fallback_remaining:
                 raise RuntimeError(f"fallback 未完成章节 {chapter_id}：{', '.join(sorted(set(ids) & fallback_remaining))}")
-            self._record_translation_provenance(ids, self.fallback_provider, fallback_reason)
+            self._record_translation_provenance(ids, self.fallback_translator, fallback_reason)
             return
-        raise RuntimeError(f"{self.primary_provider} provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
+        raise RuntimeError(f"{self.primary_translator} provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
 
     def _translate_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
         chapter = self._chapter(chapter_id)
@@ -722,7 +724,7 @@ class IterativePipeline:
                 input_path,
                 {"book": self.book, "chunk_id": chunk_id, "items": review_items, "glossary": glossary.get("terms", [])},
             )
-            self.reviewer(input_path, output_path)
+            self.review_runner(input_path, output_path)
             review = read_json(output_path)
             if not isinstance(review, dict):
                 raise ValueError(f"审阅结果不是 JSON 对象：{output_path}")
@@ -732,7 +734,7 @@ class IterativePipeline:
                 if not missing:
                     break
                 retry_path = self.workspace.reviews_dir / f"{chunk_id}-part-{part:03d}-retry-{retry:02d}.json"
-                self.reviewer(input_path, retry_path)
+                self.review_runner(input_path, retry_path)
                 retried = read_json(retry_path)
                 if not isinstance(retried, dict):
                     raise ValueError(f"重审结果不是 JSON 对象：{retry_path}")
@@ -908,9 +910,9 @@ class IterativePipeline:
         report_path = generate_work_report(
             workspace=self.workspace.root,
             book=self.book,
-            primary_provider=self.primary_provider,
-            fallback_provider=self.fallback_provider,
-            reviewer_backend=self.reviewer_backend,
+            primary_translator=self.primary_translator,
+            fallback_translator=self.fallback_translator,
+            reviewer=self.reviewer_provider,
             layout=self.layout,
             novel_root=NOVEL_TRANSLATOR_ROOT,
             manifest=manifest,
@@ -944,9 +946,9 @@ def main() -> int:
         preflight = run_preflight(
             targeted_translator,
             timeout=args.health_check_timeout,
-            primary_provider=args.primary_provider,
-            fallback_provider=args.fallback_provider,
-            reviewer_backend=args.reviewer_backend,
+            primary_translator=args.primary_translator,
+            fallback_translator=args.fallback_translator,
+            reviewer=args.reviewer,
         )
     except PreflightError as exc:
         print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
@@ -956,23 +958,23 @@ def main() -> int:
         workspace=workspace,
         manifest=manifest_path(args.book),
         targeted_translator=targeted_translator,
-        reviewer=lambda input_path, output_path: run_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer_backend),
-        window_reviewer=lambda input_path, output_path: run_window_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer_backend),
-        chapter_reviewer=lambda input_path, output_path: run_chapter_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer_backend),
+        review_runner=lambda input_path, output_path: run_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer),
+        window_reviewer=lambda input_path, output_path: run_window_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer),
+        chapter_reviewer=lambda input_path, output_path: run_chapter_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer),
         review_chunk_size=args.review_chunk_size,
         review_char_limit=args.review_char_limit,
         translate_retries=args.translate_retries,
         recovery_batch_max_chars=args.recovery_batch_max_chars,
         primary_batch_max_chars=args.primary_batch_max_chars,
-        primary_provider=args.primary_provider,
+        primary_translator=args.primary_translator,
         max_provider_split_depth=args.max_provider_split_depth,
-        fallback_provider=args.fallback_provider,
+        fallback_translator=args.fallback_translator,
         translation_max_tokens=args.translation_max_tokens,
         max_chapter_batches=args.max_chapter_batches,
         translation_policy=args.translation_policy,
         apply=args.apply,
         autonomous=args.autonomous,
-        reviewer_backend=args.reviewer_backend,
+        reviewer=args.reviewer,
         layout=args.layout,
     )
     pipeline.initialize()

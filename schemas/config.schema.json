@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Translator automation configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["paths", "roles", "providers", "pipeline", "queue"],
+  "properties": {
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output_root", "translation_policy"],
+      "properties": {
+        "output_root": {"type": "string", "minLength": 1},
+        "translation_policy": {"type": "string", "minLength": 1}
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_translator", "fallback_translator", "reviewer"],
+      "properties": {
+        "primary_translator": {"enum": ["antigravity", "opencode"]},
+        "fallback_translator": {"enum": ["lmstudio", "opencode"]},
+        "reviewer": {"enum": ["opencode", "codex"]}
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lmstudio", "antigravity", "opencode", "codex"],
+      "properties": {
+        "lmstudio": {"$ref": "#/$defs/httpProvider"},
+        "antigravity": {
+          "allOf": [
+            {"$ref": "#/$defs/httpProvider"},
+            {
+              "type": "object",
+              "required": ["host", "port", "agy", "effort", "timeout", "concurrency"],
+              "properties": {
+                "host": {"type": "string", "minLength": 1},
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "agy": {"type": "string", "minLength": 1},
+                "effort": {"enum": ["low", "medium", "high"]},
+                "timeout": {"type": "integer", "minimum": 1},
+                "concurrency": {"type": "integer", "minimum": 1}
+              }
+            }
+          ]
+        },
+        "opencode": {"$ref": "#/$defs/cliProvider"},
+        "codex": {
+          "allOf": [
+            {"$ref": "#/$defs/cliProvider"},
+            {
+              "type": "object",
+              "required": ["reasoning_effort"],
+              "properties": {"reasoning_effort": {"type": "string"}}
+            }
+          ]
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_cycles", "review_chunk_size", "review_window_size", "review_char_limit", "review_mode", "max_chapter_batches", "translate_retries", "recovery_batch_max_chars", "primary_batch_max_chars", "max_provider_split_depth", "translation_max_tokens", "health_check_timeout", "layout"],
+      "properties": {
+        "max_cycles": {"type": "integer", "minimum": 0},
+        "review_chunk_size": {"type": "integer", "minimum": 1},
+        "review_window_size": {"type": "integer", "minimum": 1},
+        "review_char_limit": {"type": "integer", "minimum": 1},
+        "review_mode": {"enum": ["chapter", "window"]},
+        "max_chapter_batches": {"type": "integer", "minimum": 1},
+        "translate_retries": {"type": "integer", "minimum": 1},
+        "recovery_batch_max_chars": {"type": "integer", "minimum": 1},
+        "primary_batch_max_chars": {"type": "integer", "minimum": 1},
+        "max_provider_split_depth": {"type": "integer", "minimum": 0},
+        "translation_max_tokens": {"type": "integer", "minimum": 1},
+        "health_check_timeout": {"type": "integer", "minimum": 1},
+        "layout": {"enum": ["preserve", "horizontal"]}
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_root", "max_cycles", "apply", "autonomous", "finalize", "stop_on_error"],
+      "properties": {
+        "source_root": {"type": "string", "minLength": 1},
+        "max_cycles": {"type": "integer", "minimum": 1},
+        "apply": {"type": "boolean"},
+        "autonomous": {"type": "boolean"},
+        "finalize": {"type": "boolean"},
+        "stop_on_error": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "httpProvider": {
+      "type": "object",
+      "required": ["base_url", "model", "api_key", "context_tokens"],
+      "properties": {
+        "base_url": {"type": "string", "pattern": "^https?://"},
+        "model": {"type": "string", "minLength": 1},
+        "api_key": {"type": "string"},
+        "context_tokens": {"type": "integer", "minimum": 1024}
+      }
+    },
+    "cliProvider": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["binary", "model", "timeout"],
+      "properties": {
+        "binary": {"type": "string", "minLength": 1},
+        "model": {"type": "string"},
+        "timeout": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

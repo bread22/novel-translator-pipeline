@@ -65,7 +65,6 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _model(provider: str, role: str, novel_root: Path) -> str:
     config = load_config()
-    provider = {"gemini": "antigravity", "murasaki-local": "lmstudio"}.get(provider, provider)
     if provider == "antigravity":
         return setting(config, "providers.antigravity.model", "PRIMARY_MODEL")
     if provider == "lmstudio":
@@ -169,18 +168,18 @@ def generate_work_report(
     *,
     workspace: Path,
     book: str,
-    primary_provider: str,
-    fallback_provider: str,
-    reviewer_backend: str,
+    primary_translator: str,
+    fallback_translator: str,
+    reviewer: str,
     novel_root: Path,
     manifest: dict[str, Any],
     layout: str = "preserve",
 ) -> Path:
     provenance = _read_json(workspace / "data" / "translation-provenance.json", {"items": {}})
     diagnostics = _read_json(workspace / "data" / "provider-diagnostics.json", {"attempts": []})
-    counts, _origins = _provider_counts(provenance, primary_provider, fallback_provider)
+    counts, _origins = _provider_counts(provenance, primary_translator, fallback_translator)
     total = sum(counts.values())
-    review = _review_summary(workspace, _origins, primary_provider, fallback_provider)
+    review = _review_summary(workspace, _origins, primary_translator, fallback_translator)
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "report_type": "translation_work_report",
@@ -193,13 +192,13 @@ def generate_work_report(
         },
         "translation": {
             "total_translated": total,
-            "primary": {"provider": primary_provider, "model": _model(primary_provider, "translator", novel_root), "paragraphs": counts[primary_provider], "percentage": round(counts[primary_provider] * 100 / total, 2) if total else 0},
-            "fallback": {"provider": fallback_provider, "model": _model(fallback_provider, "translator", novel_root), "paragraphs": counts[fallback_provider], "percentage": round(counts[fallback_provider] * 100 / total, 2) if total else 0},
-            "fallback_reasons": _diagnostic_summary(diagnostics, primary_provider, fallback_provider),
+            "primary": {"provider": primary_translator, "model": _model(primary_translator, "translator", novel_root), "paragraphs": counts[primary_translator], "percentage": round(counts[primary_translator] * 100 / total, 2) if total else 0},
+            "fallback": {"provider": fallback_translator, "model": _model(fallback_translator, "translator", novel_root), "paragraphs": counts[fallback_translator], "percentage": round(counts[fallback_translator] * 100 / total, 2) if total else 0},
+            "fallback_reasons": _diagnostic_summary(diagnostics, primary_translator, fallback_translator),
         },
         "review": {
-            "backend": reviewer_backend,
-            "model": _model(reviewer_backend, "reviewer", novel_root),
+            "provider": reviewer,
+            "model": _model(reviewer, "reviewer", novel_root),
             **review,
         },
         "quality": {

@@ -46,7 +46,7 @@ class PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             translator = ProviderTranslator(novel_root=Path(temporary), manifest=Path(temporary) / "manifest.json")
             with patch("scripts.provider_translator.urlopen", side_effect=lambda request, timeout: next(responses)):
-                result = translator.health_check("murasaki-local", timeout=3)
+                result = translator.health_check("lmstudio", timeout=3)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["model"], "murasaki-14b-v0.2")
 
@@ -54,7 +54,7 @@ class PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             translator = ProviderTranslator(novel_root=Path(temporary), manifest=Path(temporary) / "manifest.json")
             with patch("scripts.provider_translator.urlopen", return_value=_Response({"data": []})):
-                result = translator.health_check("murasaki-local", timeout=3)
+                result = translator.health_check("lmstudio", timeout=3)
         self.assertEqual(result["status"], "error")
         self.assertIn("not listed", result["error"])
 
@@ -65,14 +65,14 @@ class PreflightTests(unittest.TestCase):
             return Mock(returncode=0, stdout="", stderr="")
 
         with patch("scripts.codex_review.shutil.which", return_value="/usr/bin/codex"), patch("scripts.codex_review.subprocess.run", side_effect=fake_run):
-            result = check_reviewer(timeout=3)
+            result = check_reviewer(timeout=3, backend="codex")
         self.assertEqual(result["status"], "ok")
 
     def test_preflight_reports_all_provider_failures(self) -> None:
         translator = Mock()
         translator.health_check.side_effect = [
-            {"name": "translator:gemini", "status": "error", "error": "bridge down"},
-            {"name": "translator:murasaki-local", "status": "ok"},
+            {"name": "translator:antigravity", "status": "error", "error": "bridge down"},
+            {"name": "translator:lmstudio", "status": "ok"},
         ]
         with patch("scripts.preflight.check_reviewer", return_value={"name": "reviewer", "status": "error", "error": "codex down"}):
             with self.assertRaises(PreflightError) as context:
@@ -89,9 +89,9 @@ class PreflightTests(unittest.TestCase):
             report = run_preflight(
                 translator,
                 timeout=3,
-                primary_provider="opencode",
-                fallback_provider="opencode",
-                reviewer_backend="opencode",
+                primary_translator="opencode",
+                fallback_translator="opencode",
+                reviewer="opencode",
             )
         self.assertEqual(report["status"], "ok")
         reviewer.assert_called_once_with(timeout=3, backend="opencode")

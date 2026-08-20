@@ -63,7 +63,7 @@ class ProviderTranslatorTests(unittest.TestCase):
 
             with patch("scripts.provider_translator.urlopen", side_effect=fake_urlopen):
                 result = self._translator(manifest_path)(
-                    "murasaki-local", "book", ["p2"], source_chars=10, max_tokens=8192
+                    "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["format"], "plain_single_item")
@@ -90,7 +90,7 @@ class ProviderTranslatorTests(unittest.TestCase):
             }
             with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
-                    "murasaki-local", "book", ["p2"], source_chars=10, max_tokens=8192
+                    "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["reason"], "output_format")
@@ -116,7 +116,7 @@ class ProviderTranslatorTests(unittest.TestCase):
             }
             with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
-                    "murasaki-local", "book", ["p2"], source_chars=10, max_tokens=8192
+                    "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["validation"]["kind"], "repeated_line")
@@ -141,7 +141,7 @@ class ProviderTranslatorTests(unittest.TestCase):
             }
             with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
-                    "murasaki-local", "book", ["p2"], source_chars=10, max_tokens=8192
+                    "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["validation"]["kind"], "previous_context_overlap")
@@ -165,7 +165,7 @@ class ProviderTranslatorTests(unittest.TestCase):
             }
             with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
-                    "murasaki-local", "book", ["p2"], source_chars=10, max_tokens=8192
+                    "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["summary"]["translated"], 1)
@@ -194,7 +194,7 @@ class ProviderTranslatorTests(unittest.TestCase):
 
             with patch("scripts.provider_translator.urlopen", side_effect=fake_urlopen):
                 result = self._translator(manifest_path)(
-                    "murasaki-local", "book", ["p1"], source_chars=len(source), max_tokens=8192
+                    "lmstudio", "book", ["p1"], source_chars=len(source), max_tokens=8192
                 )
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["split"], "single_item_halves")

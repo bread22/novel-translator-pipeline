@@ -29,6 +29,7 @@ from scripts.novel_translator_tool import (
     call_novel_translator_with_batch_limit,
     provider_failure_reason,
 )
+from scripts.preflight import PreflightError, run_preflight
 from scripts.provider_translator import ProviderTranslator
 
 
@@ -70,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
+    parser.add_argument("--health-check-timeout", type=int, default=60, help="启动前 provider/reviewer 健康检查超时秒数")
     return parser.parse_args()
 
 
@@ -871,12 +873,20 @@ def main() -> int:
     args = parse_args()
     if args.max_cycles < 0:
         raise ValueError("max_cycles 必须大于或等于 0")
+    if args.health_check_timeout <= 0:
+        raise ValueError("health_check_timeout 必须大于 0")
     workspace = BookWorkspace.at(args.output_root, args.name)
+    targeted_translator = ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=manifest_path(args.book))
+    try:
+        preflight = run_preflight(targeted_translator, timeout=args.health_check_timeout)
+    except PreflightError as exc:
+        print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
     pipeline = IterativePipeline(
         book=args.book,
         workspace=workspace,
         manifest=manifest_path(args.book),
-        targeted_translator=ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=manifest_path(args.book)),
+        targeted_translator=targeted_translator,
         reviewer=lambda input_path, output_path: run_codex_review(input_path, output_path, autonomous=args.autonomous),
         window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
         chapter_reviewer=lambda input_path, output_path: run_codex_chapter_review(input_path, output_path, autonomous=args.autonomous),
@@ -894,6 +904,7 @@ def main() -> int:
         autonomous=args.autonomous,
     )
     pipeline.initialize()
+    write_json(workspace.data_dir / "preflight.json", preflight)
     results = []
     progress = read_json(workspace.progress_path, {})
     if args.review_mode == "chapter":
@@ -920,7 +931,7 @@ def main() -> int:
             results.append(result)
             if result["done"]:
                 break
-    payload: dict[str, Any] = {"book": args.book, "workspace": str(workspace.root), "review_mode": args.review_mode, "cycles": results}
+    payload: dict[str, Any] = {"book": args.book, "workspace": str(workspace.root), "review_mode": args.review_mode, "preflight": preflight, "cycles": results}
     if args.finalize:
         payload["finalize"] = pipeline.finalize()
     print(json.dumps(payload, ensure_ascii=False, indent=2))

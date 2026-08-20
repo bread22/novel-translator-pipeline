@@ -154,6 +154,59 @@ class ProviderTranslator:
             raise ValueError(f"未知翻译 provider：{provider}")
         return base_url.rstrip("/"), model, api_key
 
+    @staticmethod
+    def _health_error(result: dict[str, Any]) -> str:
+        parts = [str(result.get(key, "")) for key in ("reason", "error", "validation") if result.get(key)]
+        return "; ".join(parts)[:800] or "provider returned an unusable response"
+
+    def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
+        """Verify endpoint, configured model, and one real translation-shaped request."""
+        try:
+            base_url, model, api_key = self._provider_config(provider)
+            request = Request(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                method="GET",
+            )
+            with urlopen(request, timeout=timeout) as response:
+                models_payload = _load_json_from_text(response.read().decode("utf-8", errors="replace"))
+            model_ids = {
+                str(item.get("id"))
+                for item in models_payload.get("data", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            if model not in model_ids:
+                return {
+                    "name": f"translator:{provider}",
+                    "status": "error",
+                    "base_url": base_url,
+                    "model": model,
+                    "error": f"configured model not listed; available={sorted(model_ids)}",
+                }
+            payload = {
+                "source_language": "ja",
+                "target_language": "zh-Hans",
+                "quality_profile": {"requirements": ["只输出 JSON，不要解释。"]},
+                "items": [{"id": "__healthcheck__", "text": "テスト"}],
+            }
+            items, result = self._request(provider, payload, max_tokens=512, timeout=timeout)
+            if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
+                return {
+                    "name": f"translator:{provider}",
+                    "status": "error",
+                    "base_url": base_url,
+                    "model": model,
+                    "error": self._health_error(result),
+                }
+            return {
+                "name": f"translator:{provider}",
+                "status": "ok",
+                "base_url": base_url,
+                "model": model,
+            }
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, KeyError) as exc:
+            return {"name": f"translator:{provider}", "status": "error", "error": str(exc)[:800]}
+
     def _system_prompt(self, provider: str) -> str:
         if provider == "murasaki-local":
             return (
@@ -207,7 +260,7 @@ class ProviderTranslator:
         }
         return payload, {str(item["id"]): str(item.get("source", "")) for item in selected}
 
-    def _request(self, provider: str, payload: dict[str, Any], max_tokens: int) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    def _request(self, provider: str, payload: dict[str, Any], max_tokens: int, timeout: int | None = None) -> tuple[list[dict[str, str]], dict[str, Any]]:
         base_url, model, api_key = self._provider_config(provider)
         requested = payload.get("items", []) if isinstance(payload, dict) else []
         source_chars = sum(
@@ -245,7 +298,7 @@ class ProviderTranslator:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with urlopen(request, timeout=timeout or self.timeout) as response:
                 raw = response.read().decode("utf-8", errors="replace")
                 status = int(response.status)
         except HTTPError as exc:

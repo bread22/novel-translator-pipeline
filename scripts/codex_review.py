@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import tempfile
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +14,64 @@ SCHEMA = ROOT / "schemas" / "review-output.schema.json"
 WINDOW_SCHEMA = ROOT / "schemas" / "window-review-output.schema.json"
 CHAPTER_SCHEMA = ROOT / "schemas" / "chapter-review-output.schema.json"
 GLOBAL_SCHEMA = ROOT / "schemas" / "global-consistency-output.schema.json"
+
+
+def check_reviewer(timeout: int = 60) -> dict[str, Any]:
+    """Run a minimal real Codex call before translation starts."""
+    executable = shutil.which("codex")
+    if not executable:
+        return {"name": "reviewer", "status": "error", "error": "codex executable not found in PATH"}
+    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
+    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+        "additionalProperties": False,
+    }
+    try:
+        with tempfile.TemporaryDirectory(prefix="reviewer-health-") as temporary:
+            root = Path(temporary)
+            schema_path = root / "schema.json"
+            output_path = root / "result.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            command = [
+                executable,
+                "exec",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "--model",
+                model,
+                "-c",
+                f'model_reasoning_effort="{effort}"',
+                "--output-schema",
+                str(schema_path),
+                "-o",
+                str(output_path),
+                "-C",
+                str(ROOT),
+                'Return exactly {"ok":true}. Do not include any other fields or text.',
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=timeout, check=False)
+            if result.returncode != 0:
+                return {
+                    "name": "reviewer",
+                    "status": "error",
+                    "error": f"codex exited {result.returncode}: {(result.stderr or result.stdout)[-600:]}",
+                }
+            try:
+                payload = json.loads(output_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError) as exc:
+                return {"name": "reviewer", "status": "error", "error": f"invalid health response: {exc}"}
+            if not isinstance(payload, dict) or payload.get("ok") is not True:
+                return {"name": "reviewer", "status": "error", "error": f"unexpected health response: {payload!r}"}
+    except subprocess.TimeoutExpired:
+        return {"name": "reviewer", "status": "error", "error": f"codex health check timed out after {timeout}s"}
+    except OSError as exc:
+        return {"name": "reviewer", "status": "error", "error": str(exc)}
+    return {"name": "reviewer", "status": "ok", "model": model}
 
 
 def run_codex_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:

@@ -1,0 +1,54 @@
+# Novel Translator unified parameters. Values here are the runtime source of truth.
+
+[paths]
+output_root = "output"
+translation_policy = "docs/prompts/translation-policy.md"
+
+[roles]
+primary_translator = "antigravity"
+fallback_translator = "lmstudio"
+reviewer = "opencode"
+
+[providers.lmstudio]
+base_url = "http://127.0.0.1:1234/v1"
+model = "murasaki-14b-v0.2"
+api_key = "lm-studio"
+context_tokens = 8192
+
+[providers.antigravity]
+base_url = "http://127.0.0.1:1235/v1"
+api_key = "antigravity"
+host = "127.0.0.1"
+port = 1235
+agy = "agy"
+model = "gemini-3.7-flash"
+effort = "low"
+timeout = 600
+concurrency = 1
+
+[providers.opencode]
+binary = "opencode"
+model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
+
+[providers.codex]
+binary = "codex"
+model = ""
+reasoning_effort = ""
+timeout = 600
+
+[pipeline]
+max_cycles = 1
+review_chunk_size = 30
+review_window_size = 4
+review_char_limit = 40000
+review_mode = "chapter"
+max_chapter_batches = 1000
+translate_retries = 3
+recovery_batch_max_chars = 700
+primary_batch_max_chars = 4000
+max_provider_split_depth = 8
+translation_max_tokens = 8192
+health_check_timeout = 60
+layout = "preserve"

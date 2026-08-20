@@ -7,10 +7,16 @@ import argparse
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import sys
 from threading import BoundedSemaphore
 import subprocess
 import time
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.config import load_config, setting
 
 
 def provider_block_reason(text: str) -> str:
@@ -181,14 +187,16 @@ def make_handler(bridge: AntigravityBridge):
 
 
 def main() -> int:
+    config = load_config()
+    agy = config["providers"]["antigravity"]
     parser = argparse.ArgumentParser(description="Expose agy Gemini as an OpenAI-compatible Novel Translator backend")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1235)
-    parser.add_argument("--agy", default=os.environ.get("AGY_BIN", "agy"))
-    parser.add_argument("--model", default=os.environ.get("ANTIGRAVITY_MODEL", "gemini-3.7-flash"))
-    parser.add_argument("--effort", choices=("low", "medium", "high"), default=os.environ.get("ANTIGRAVITY_EFFORT", "low"))
-    parser.add_argument("--timeout", type=int, default=int(os.environ.get("ANTIGRAVITY_TIMEOUT", "600")))
-    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--host", default=agy["host"])
+    parser.add_argument("--port", type=int, default=agy["port"])
+    parser.add_argument("--agy", default=setting(config, "providers.antigravity.agy", "AGY_BIN"))
+    parser.add_argument("--model", default=setting(config, "providers.antigravity.model", "ANTIGRAVITY_MODEL"))
+    parser.add_argument("--effort", choices=("low", "medium", "high"), default=setting(config, "providers.antigravity.effort", "ANTIGRAVITY_EFFORT"))
+    parser.add_argument("--timeout", type=int, default=int(setting(config, "providers.antigravity.timeout", "ANTIGRAVITY_TIMEOUT")))
+    parser.add_argument("--concurrency", type=int, default=agy["concurrency"])
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(AntigravityBridge(agy=args.agy, model=args.model, effort=args.effort, timeout=args.timeout, concurrency=args.concurrency)))
     print(f"Antigravity bridge listening on http://{args.host}:{args.port}/v1", flush=True)

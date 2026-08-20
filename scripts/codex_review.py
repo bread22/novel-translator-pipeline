@@ -10,6 +10,7 @@ from typing import Any
 
 from scripts.opencode_backend import check as check_opencode
 from scripts.opencode_backend import parse_json_object, run_prompt
+from scripts.config import load_config, setting
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,10 +21,23 @@ GLOBAL_SCHEMA = ROOT / "schemas" / "global-consistency-output.schema.json"
 
 
 def _selected_backend(backend: str | None = None) -> str:
-    return (backend or os.environ.get("REVIEWER_BACKEND", "codex")).strip().casefold()
+    config = load_config()
+    return (backend or setting(config, "roles.reviewer", "REVIEWER_BACKEND")).strip().casefold()
 
 
-def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str, Any]:
+def _codex_model_effort() -> tuple[str, str]:
+    config = load_config()
+    return (
+        setting(config, "providers.codex.model", "CODEX_MODEL"),
+        setting(config, "providers.codex.reasoning_effort", "CODEX_REASONING_EFFORT"),
+    )
+
+
+def _codex_binary() -> str:
+    return str(setting(load_config(), "providers.codex.binary", "CODEX_BIN"))
+
+
+def check_reviewer(timeout: int = 60, *, backend: str | None = "codex") -> dict[str, Any]:
     selected = _selected_backend(backend)
     if selected == "opencode":
         return check_opencode(timeout=timeout, role="reviewer")
@@ -34,11 +48,10 @@ def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str
 
 def _check_codex_reviewer(timeout: int = 60) -> dict[str, Any]:
     """Run a minimal real Codex call before translation starts."""
-    executable = shutil.which("codex")
+    executable = shutil.which(_codex_binary())
     if not executable:
         return {"name": "reviewer", "status": "error", "error": "codex executable not found in PATH"}
-    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
-    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    model, effort = _codex_model_effort()
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
@@ -91,8 +104,7 @@ def _check_codex_reviewer(timeout: int = 60) -> dict[str, Any]:
 
 
 def _run_codex_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
-    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
-    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    model, effort = _codex_model_effort()
     prompt = f"""
 审校 Novel Translator 的译文分片，并从本分片总结可复用的日译中术语。
 输入 JSON：{input_path}
@@ -109,7 +121,7 @@ def _run_codex_review(input_path: Path, output_path: Path, autonomous: bool = Fa
 - 严格输出符合 {SCHEMA} 的 JSON，不要 Markdown。
 """.strip()
     command = [
-        "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
+        _codex_binary(), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
         "--model", model, "-c", f'model_reasoning_effort="{effort}"',
         "--output-schema", str(SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
     ]
@@ -119,8 +131,7 @@ def _run_codex_review(input_path: Path, output_path: Path, autonomous: bool = Fa
 
 
 def _run_codex_window_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
-    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
-    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    model, effort = _codex_model_effort()
     prompt = f"""
 审校输入 JSON 中的全部译文段落。这是多个连续翻译 batch 合并成的审阅窗口。
 输入 JSON：{input_path}
@@ -136,7 +147,7 @@ def _run_codex_window_review(input_path: Path, output_path: Path, autonomous: bo
 - 严格输出符合 {WINDOW_SCHEMA} 的 JSON，不要 Markdown。
 """.strip()
     command = [
-        "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
+        _codex_binary(), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
         "--model", model, "-c", f'model_reasoning_effort="{effort}"',
         "--output-schema", str(WINDOW_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
     ]
@@ -146,8 +157,7 @@ def _run_codex_window_review(input_path: Path, output_path: Path, autonomous: bo
 
 
 def _run_codex_chapter_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
-    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
-    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    model, effort = _codex_model_effort()
     prompt = f"""
 你是日译中小说审阅者。对输入 JSON 中的整章译文做章节级一致性审阅。
 输入 JSON：{input_path}
@@ -168,7 +178,7 @@ def _run_codex_chapter_review(input_path: Path, output_path: Path, autonomous: b
 严格输出符合 {CHAPTER_SCHEMA} 的 JSON，不要 Markdown。
 """.strip()
     command = [
-        "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
+        _codex_binary(), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
         "--model", model, "-c", f'model_reasoning_effort="{effort}"',
         "--output-schema", str(CHAPTER_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
     ]
@@ -178,8 +188,7 @@ def _run_codex_chapter_review(input_path: Path, output_path: Path, autonomous: b
 
 
 def _run_codex_global_consistency_review(input_path: Path, output_path: Path) -> None:
-    model = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
-    effort = os.environ.get("CODEX_REASONING_EFFORT", "low")
+    model, effort = _codex_model_effort()
     prompt = f"""
 对输入 JSON 中的全书状态做一次轻量一致性审阅。
 输入 JSON：{input_path}
@@ -191,7 +200,7 @@ def _run_codex_global_consistency_review(input_path: Path, output_path: Path) ->
 严格输出符合 {GLOBAL_SCHEMA} 的 JSON，不要 Markdown。
 """.strip()
     command = [
-        "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
+        _codex_binary(), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
         "--model", model, "-c", f'model_reasoning_effort="{effort}"',
         "--output-schema", str(GLOBAL_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
     ]
@@ -278,7 +287,7 @@ def _run_opencode_review(kind: str, input_path: Path, output_path: Path, autonom
         output = run_prompt(
             _opencode_review_prompt(kind, input_payload, schema_path, autonomous),
             role="reviewer",
-            timeout=int(os.environ.get("OPENCODE_REVIEW_TIMEOUT", "600")),
+            timeout=int(setting(load_config(), "providers.opencode.timeout", "OPENCODE_REVIEW_TIMEOUT")),
         )
         payload = parse_json_object(output)
     except (ValueError, RuntimeError) as exc:

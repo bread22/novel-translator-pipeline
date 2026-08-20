@@ -4,6 +4,10 @@
 
 导出 EPUB 时默认保留原书版式；对于日文竖排书，可在流水线命令中加入 `--layout horizontal`。该选项不会修改翻译源或 `novel-translator`，而是在其完成 EPUB 导出后追加横排 CSS、更新正文 CSS 引用、将 spine 翻页方向设为 `ltr`，并将语言元数据设为 `zh-CN`，最后再执行 EPUB 校验。校验完成的成品同时会复制到项目根目录的 `translated/`。
 
+运行参数集中在根目录 `config.toml`，包括 provider 地址、模型、LM Studio 上下文上限、AGY、OpenCode、审阅器和流水线设置。Python 代码读取该文件；环境变量仅作为显式临时覆盖。可用 `TRANSLATOR_CONFIG=/path/to/config.toml` 指定另一份参数文件。
+
+配置分为两层：`[roles]` 只把程序角色映射到 provider；`[providers.*]` 只定义各后端本身。例如当前为 `primary_translator = "antigravity"`、`fallback_translator = "lmstudio"`、`reviewer = "opencode"`，后端参数分别位于 `[providers.antigravity]`、`[providers.lmstudio]`、`[providers.opencode]` 和 `[providers.codex]`。
+
 ## 当前架构
 
 ### Novel Translator

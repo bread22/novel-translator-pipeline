@@ -172,6 +172,36 @@ class ProviderTranslatorTests(unittest.TestCase):
             saved = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "当前段落的合法译文。")
 
+    def test_local_request_is_split_before_context_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            source = "日" * 7000
+            manifest_path.write_text(
+                json.dumps({"id": "book", "chapters": [{"id": "c1", "paragraphs": [{"id": "p1", "source": source, "translated": ""}]}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            requests: list[dict] = []
+
+            def fake_urlopen(request, timeout):
+                body = json.loads(request.data)
+                requests.append(body)
+                local_payload = json.loads(body["messages"][1]["content"])
+                response_items = [
+                    {"id": item["id"], "text": "译" * len(item["text"])}
+                    for item in local_payload["items"]
+                ]
+                return _Response({"choices": [{"message": {"content": json.dumps({"items": response_items}, ensure_ascii=False)}, "finish_reason": "stop"}]})
+
+            with patch("scripts.provider_translator.urlopen", side_effect=fake_urlopen):
+                result = self._translator(manifest_path)(
+                    "murasaki-local", "book", ["p1"], source_chars=len(source), max_tokens=8192
+                )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["split"], "single_item_halves")
+            self.assertEqual(len(requests), 2)
+            self.assertTrue(all(body["max_tokens"] <= 8192 for body in requests))
+            self.assertTrue(all(len(body["messages"][1]["content"]) < 8192 for body in requests))
+
 
 if __name__ == "__main__":
     unittest.main()

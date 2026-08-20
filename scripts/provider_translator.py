@@ -11,7 +11,15 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from scripts.antigravity_backend import extract_json_object
+from scripts.config import load_config, setting
 from scripts.opencode_backend import OpenCodeError, model_for, run_prompt
+
+
+PROVIDER_ALIASES = {"gemini": "antigravity", "murasaki-local": "lmstudio"}
+
+
+def canonical_provider(provider: str) -> str:
+    return PROVIDER_ALIASES.get(provider, provider)
 
 
 def _toml_value(root: Path, section: str, key: str, default: str) -> str:
@@ -152,6 +160,17 @@ def _plain_single_translation(content: str, requested: list[dict[str, Any]]) -> 
     return [{"id": str(requested[0].get("id", "")), "text": text}]
 
 
+def _estimate_local_input_tokens(system_prompt: str, payload: dict[str, Any]) -> int:
+    """Conservative preflight estimate for an LM Studio chat request.
+
+    Japanese text can approach one token per character.  Counting characters
+    rather than relying on a provider-specific tokenizer prevents an 8192-token
+    rejection before the HTTP request is sent.
+    """
+    user_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return len(system_prompt) + len(user_json) + 256
+
+
 class ProviderTranslator:
     """Direct provider adapter; Novel Translator remains a storage/export tool."""
 
@@ -159,16 +178,18 @@ class ProviderTranslator:
         self.novel_root = novel_root
         self.manifest = manifest
         self.timeout = timeout
+        self.config = load_config()
 
     def _provider_config(self, provider: str) -> tuple[str, str, str]:
-        if provider == "gemini":
-            base_url = os.environ.get("PRIMARY_BASE_URL", "http://127.0.0.1:1235/v1")
-            model = os.environ.get("PRIMARY_MODEL", "gemini-3.7-flash")
-            api_key = os.environ.get("PRIMARY_API_KEY", "antigravity")
-        elif provider == "murasaki-local":
-            base_url = os.environ.get("MURASAKI_BASE_URL", "http://127.0.0.1:1234/v1")
-            model = os.environ.get("MURASAKI_MODEL", "murasaki-14b-v0.2")
-            api_key = os.environ.get("MURASAKI_API_KEY", "lm-studio")
+        provider = canonical_provider(provider)
+        if provider == "antigravity":
+            base_url = setting(self.config, "providers.antigravity.base_url", "PRIMARY_BASE_URL")
+            model = setting(self.config, "providers.antigravity.model", "PRIMARY_MODEL")
+            api_key = setting(self.config, "providers.antigravity.api_key", "PRIMARY_API_KEY")
+        elif provider == "lmstudio":
+            base_url = setting(self.config, "providers.lmstudio.base_url", "MURASAKI_BASE_URL")
+            model = setting(self.config, "providers.lmstudio.model", "MURASAKI_MODEL")
+            api_key = setting(self.config, "providers.lmstudio.api_key", "MURASAKI_API_KEY")
         else:
             raise ValueError(f"未知翻译 provider：{provider}")
         return base_url.rstrip("/"), model, api_key
@@ -180,6 +201,7 @@ class ProviderTranslator:
 
     def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
         """Verify endpoint, configured model, and one real translation-shaped request."""
+        provider = canonical_provider(provider)
         if provider == "opencode":
             payload = {
                 "source_language": "ja",
@@ -247,7 +269,7 @@ class ProviderTranslator:
             return {"name": f"translator:{provider}", "status": "error", "error": str(exc)[:800]}
 
     def _system_prompt(self, provider: str) -> str:
-        if provider == "murasaki-local":
+        if canonical_provider(provider) == "lmstudio":
             return (
                 "你是备用日中小说翻译器。把用户 payload 中每个 source 翻译成自然、忠实的简体中文。"
                 "严格只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。"
@@ -341,6 +363,7 @@ class ProviderTranslator:
         return items, {**common, "status": "ok"}
 
     def _request(self, provider: str, payload: dict[str, Any], max_tokens: int, timeout: int | None = None) -> tuple[list[dict[str, str]], dict[str, Any]]:
+        provider = canonical_provider(provider)
         if provider == "opencode":
             return self._request_opencode(payload, max_tokens, timeout)
         base_url, model, api_key = self._provider_config(provider)
@@ -351,18 +374,29 @@ class ProviderTranslator:
             if isinstance(item, dict)
         )
         effective_max_tokens = max_tokens
-        if provider == "murasaki-local":
+        if provider == "lmstudio":
             # Keep a malformed local response from consuming the whole context
             # window.  Longer source windows still receive a proportional cap.
             effective_max_tokens = min(max_tokens, max(512, source_chars * 4 + 256))
         request_payload: dict[str, Any] = payload
-        if provider == "murasaki-local" and len(requested) == 1:
+        if provider == "lmstudio" and len(requested) == 1:
             request_payload = {
                 "source_language": "auto",
                 "target_language": "zh-Hans",
                 "instructions": ["只翻译下面这一项 source；不要翻译上下文，不要添加标题、注释或说明。"],
                 "items": requested,
             }
+        if provider == "lmstudio":
+            # LM Studio rejects the request before generation when prompt plus
+            # requested output exceeds the model context.  Check the exact
+            # message payload before opening the connection and recursively
+            # split it into two requests when necessary.
+            context_limit = int(setting(self.config, "providers.lmstudio.context_tokens", "MURASAKI_CONTEXT_TOKENS"))
+            estimated_input = _estimate_local_input_tokens(self._system_prompt(provider), request_payload)
+            available_output = context_limit - estimated_input - 128
+            if available_output < 512:
+                return self._request_local_split(payload, max_tokens, timeout)
+            effective_max_tokens = min(effective_max_tokens, available_output)
         body_data: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -431,6 +465,55 @@ class ProviderTranslator:
                 "validation": validation,
             }
         return items, {**common, "status": "ok", "raw_response": str(content)[:1000]}
+
+    def _request_local_split(
+        self,
+        payload: dict[str, Any],
+        max_tokens: int,
+        timeout: int | None,
+    ) -> tuple[list[dict[str, str]], dict[str, Any]]:
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        if not isinstance(items, list) or not items:
+            return [], {"status": "error", "provider": "lmstudio", "reason": "input_too_long", "error": "请求内容超过上下文限制且没有可分割项目"}
+
+        if len(items) == 1:
+            item = items[0]
+            source = str(item.get("text", "")) if isinstance(item, dict) else ""
+            if len(source) < 2:
+                return [], {"status": "error", "provider": "lmstudio", "reason": "input_too_long", "error": "单个段落无法继续切分"}
+            midpoint = len(source) // 2
+            left, right = source[:midpoint], source[midpoint:]
+            item_id = str(item.get("id", "item"))
+            parts = []
+            for suffix, text in (("a", left), ("b", right)):
+                part = dict(item)
+                part["id"] = f"{item_id}__split_{suffix}"
+                part["text"] = text
+                parts.append(part)
+            first = dict(payload, items=[parts[0]])
+            second = dict(payload, items=[parts[1]])
+            first_items, first_result = self._request("lmstudio", first, max_tokens, timeout)
+            if first_result.get("status") != "ok":
+                return [], {**first_result, "split": "first_half"}
+            second_items, second_result = self._request("lmstudio", second, max_tokens, timeout)
+            if second_result.get("status") != "ok":
+                return [], {**second_result, "split": "second_half"}
+            combined = {
+                "id": item_id,
+                "text": "".join([str(first_items[0]["text"]), str(second_items[0]["text"])])
+                if first_items and second_items else "",
+            }
+            return [combined], {"status": "ok", "provider": "lmstudio", "split": "single_item_halves"}
+
+        midpoint = max(1, len(items) // 2)
+        results: list[dict[str, str]] = []
+        for label, subset in (("first_half", items[:midpoint]), ("second_half", items[midpoint:])):
+            part_payload = dict(payload, items=subset)
+            part_items, part_result = self._request("lmstudio", part_payload, max_tokens, timeout)
+            if part_result.get("status") != "ok":
+                return [], {**part_result, "split": label}
+            results.extend(part_items)
+        return results, {"status": "ok", "provider": "lmstudio", "split": "item_halves", "parts": 2}
 
     def __call__(self, provider: str, book: str, ids: list[str], *, source_chars: int, max_tokens: int) -> dict[str, Any]:
         if not ids:

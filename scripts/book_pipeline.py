@@ -22,6 +22,7 @@ from scripts.book_workspace import (
     utc_now,
     write_json,
 )
+from scripts.config import load_config, setting
 from scripts.codex_review import run_chapter_review
 from scripts.codex_review import run_review
 from scripts.codex_review import run_window_review
@@ -55,42 +56,46 @@ OBJECTIVE_SEVERITIES = {"critical", "major"}
 
 
 def parse_args() -> argparse.Namespace:
+    config = load_config()
+    pipeline = config["pipeline"]
+    roles = config["roles"]
+    paths = config["paths"]
     parser = argparse.ArgumentParser(description="Iterative EPUB translation and Codex review pipeline")
     parser.add_argument("--book", required=True, help="Novel Translator book id")
     parser.add_argument("--name", required=True, help="output/ 下的书籍目录名和中文书名")
-    parser.add_argument("--output-root", type=Path, default=ROOT / "output")
-    parser.add_argument("--max-cycles", type=int, default=1, help="chapter 模式下最多处理多少章；window 模式下最多推进多少批次")
-    parser.add_argument("--review-chunk-size", type=int, default=30)
-    parser.add_argument("--review-window-size", type=int, default=4, help="每次合并多少个翻译 batch 调用一次 GPT")
-    parser.add_argument("--review-char-limit", type=int, default=40000, help="单个 GPT 审阅窗口的最大字符数")
-    parser.add_argument("--review-mode", choices=["chapter", "window"], default="chapter", help="章节级审阅为默认；window 保留旧流程")
-    parser.add_argument("--max-chapter-batches", type=int, default=1000, help="单章最多推进多少个翻译 batch")
-    parser.add_argument("--translation-policy", type=Path, default=ROOT / "docs" / "prompts" / "translation-policy.md")
-    parser.add_argument("--translate-retries", type=int, default=3, help="本地翻译失败批次的最大尝试次数")
-    parser.add_argument("--recovery-batch-max-chars", type=int, default=700, help="失败批次最后一次重试使用的临时 batch 字符上限")
-    parser.add_argument("--primary-batch-max-chars", type=int, default=4000, help="Gemini 主译每个大窗口的原文字符上限")
-    parser.add_argument("--max-provider-split-depth", type=int, default=8, help="provider blocked 后最多二分深度")
+    parser.add_argument("--output-root", type=Path, default=ROOT / paths["output_root"])
+    parser.add_argument("--max-cycles", type=int, default=pipeline["max_cycles"], help="chapter 模式下最多处理多少章；window 模式下最多推进多少批次")
+    parser.add_argument("--review-chunk-size", type=int, default=pipeline["review_chunk_size"])
+    parser.add_argument("--review-window-size", type=int, default=pipeline["review_window_size"], help="每次合并多少个翻译 batch 调用一次 GPT")
+    parser.add_argument("--review-char-limit", type=int, default=pipeline["review_char_limit"], help="单个 GPT 审阅窗口的最大字符数")
+    parser.add_argument("--review-mode", choices=["chapter", "window"], default=pipeline["review_mode"], help="章节级审阅为默认；window 保留旧流程")
+    parser.add_argument("--max-chapter-batches", type=int, default=pipeline["max_chapter_batches"], help="单章最多推进多少个翻译 batch")
+    parser.add_argument("--translation-policy", type=Path, default=ROOT / paths["translation_policy"])
+    parser.add_argument("--translate-retries", type=int, default=pipeline["translate_retries"], help="本地翻译失败批次的最大尝试次数")
+    parser.add_argument("--recovery-batch-max-chars", type=int, default=pipeline["recovery_batch_max_chars"], help="失败批次最后一次重试使用的临时 batch 字符上限")
+    parser.add_argument("--primary-batch-max-chars", type=int, default=pipeline["primary_batch_max_chars"], help="Gemini 主译每个大窗口的原文字符上限")
+    parser.add_argument("--max-provider-split-depth", type=int, default=pipeline["max_provider_split_depth"], help="provider blocked 后最多二分深度")
     parser.add_argument(
-        "--primary-provider",
-        default=os.environ.get("TRANSLATION_PRIMARY_PROVIDER", "gemini"),
-        choices=["gemini", "opencode"],
-        help="主翻译 provider；opencode 使用本地 OpenCode CLI",
+        "--primary-translator", "--primary-provider", dest="primary_provider",
+        default=setting(config, "roles.primary_translator", "TRANSLATION_PRIMARY_PROVIDER"),
+        choices=["antigravity", "opencode"],
+        help="primary_translator 使用的 provider",
     )
     parser.add_argument(
-        "--fallback-provider",
-        default=os.environ.get("TRANSLATION_FALLBACK_PROVIDER", "murasaki-local"),
-        choices=["murasaki-local", "opencode"],
-        help="主 provider 失败后使用的 fallback provider",
+        "--fallback-translator", "--fallback-provider", dest="fallback_provider",
+        default=setting(config, "roles.fallback_translator", "TRANSLATION_FALLBACK_PROVIDER"),
+        choices=["lmstudio", "opencode"],
+        help="fallback_translator 使用的 provider",
     )
-    parser.add_argument("--translation-max-tokens", type=int, default=8192, help="单个翻译窗口的最大输出 token")
+    parser.add_argument("--translation-max-tokens", type=int, default=pipeline["translation_max_tokens"], help="单个翻译窗口的最大输出 token")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
-    parser.add_argument("--layout", choices=["preserve", "horizontal"], default="preserve", help="导出 EPUB 的版式；horizontal 在导出后应用中文横排覆盖层")
-    parser.add_argument("--health-check-timeout", type=int, default=60, help="启动前 provider/reviewer 健康检查超时秒数")
+    parser.add_argument("--layout", choices=["preserve", "horizontal"], default=pipeline["layout"], help="导出 EPUB 的版式；horizontal 在导出后应用中文横排覆盖层")
+    parser.add_argument("--health-check-timeout", type=int, default=pipeline["health_check_timeout"], help="启动前 provider/reviewer 健康检查超时秒数")
     parser.add_argument(
-        "--reviewer-backend",
-        default=os.environ.get("REVIEWER_BACKEND", "codex"),
+        "--reviewer", "--reviewer-backend", dest="reviewer_backend",
+        default=setting(config, "roles.reviewer", "REVIEWER_BACKEND"),
         choices=["codex", "opencode"],
         help="审阅后端；opencode 使用本地 OpenCode CLI",
     )
@@ -329,13 +334,13 @@ class IterativePipeline:
         if primary_batch_max_chars < 1:
             raise ValueError("primary_batch_max_chars 必须大于 0")
         self.primary_batch_max_chars = primary_batch_max_chars
-        if primary_provider not in {"gemini", "opencode"}:
+        if primary_provider not in {"antigravity", "gemini", "opencode"}:
             raise ValueError(f"未知 primary provider：{primary_provider}")
         self.primary_provider = primary_provider
         if max_provider_split_depth < 0:
             raise ValueError("max_provider_split_depth 必须大于等于 0")
         self.max_provider_split_depth = max_provider_split_depth
-        if fallback_provider not in {"murasaki-local", "opencode"}:
+        if fallback_provider not in {"lmstudio", "murasaki-local", "opencode"}:
             raise ValueError(f"未知 fallback provider：{fallback_provider}")
         self.fallback_provider = fallback_provider
         if translation_max_tokens < 1:
@@ -514,7 +519,7 @@ class IterativePipeline:
 
     def _translate_target(self, provider: str, ids: list[str], source_chars: int) -> dict[str, Any]:
         if self.targeted_translator is None:
-            if provider != "gemini":
+            if provider not in {"antigravity", "gemini"}:
                 raise RuntimeError("测试/兼容模式未配置 fallback translator")
             return self.tool_call(
                 "translate",

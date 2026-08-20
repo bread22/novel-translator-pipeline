@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from scripts.codex_review import check_reviewer
+from scripts.config import load_config
 from scripts.provider_translator import ProviderTranslator
 
 
@@ -21,10 +22,14 @@ def run_preflight(
     translator: ProviderTranslator,
     timeout: int = 60,
     *,
-    primary_provider: str = "gemini",
-    fallback_provider: str = "murasaki-local",
+    primary_provider: str | None = None,
+    fallback_provider: str | None = None,
     reviewer_backend: str | None = None,
 ) -> dict[str, Any]:
+    roles = load_config()["roles"]
+    primary_provider = primary_provider or str(roles["primary_translator"])
+    fallback_provider = fallback_provider or str(roles["fallback_translator"])
+    reviewer_backend = reviewer_backend or str(roles["reviewer"])
     checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=reviewer_backend)]
     for provider in dict.fromkeys((primary_provider, fallback_provider)):
         checks.append(translator.health_check(provider, timeout=timeout))

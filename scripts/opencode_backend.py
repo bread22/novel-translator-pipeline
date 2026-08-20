@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from typing import Any
 
+from scripts.config import load_config, setting
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,17 +19,26 @@ class OpenCodeError(RuntimeError):
 
 
 def executable() -> str | None:
-    return shutil.which(os.environ.get("OPENCODE_BIN", "opencode"))
+    config = load_config()
+    return shutil.which(setting(config, "providers.opencode.binary", "OPENCODE_BIN"))
 
 
 def model_for(role: str) -> str:
     role_key = role.upper().replace("-", "_")
-    return os.environ.get(f"OPENCODE_{role_key}_MODEL", os.environ.get("OPENCODE_MODEL", "")).strip()
+    config = load_config()
+    env_name = f"OPENCODE_{role_key}_MODEL"
+    if env_name in os.environ:
+        return os.environ[env_name].strip()
+    return setting(config, "providers.opencode.model", "OPENCODE_MODEL").strip()
 
 
 def _agent_for(role: str) -> str:
     role_key = role.upper().replace("-", "_")
-    return os.environ.get(f"OPENCODE_{role_key}_AGENT", os.environ.get("OPENCODE_AGENT", "")).strip()
+    config = load_config()
+    env_name = f"OPENCODE_{role_key}_AGENT"
+    if env_name in os.environ:
+        return os.environ[env_name].strip()
+    return setting(config, "providers.opencode.agent", "OPENCODE_AGENT").strip()
 
 
 def _event_text(stdout: str) -> str:
@@ -73,11 +83,11 @@ def run_prompt(prompt: str, *, role: str, timeout: int = 600) -> str:
     agent = _agent_for(role)
     if agent:
         command.extend(["--agent", agent])
-    command.append(prompt)
     try:
         result = subprocess.run(
             command,
             cwd=ROOT,
+            input=prompt,
             text=True,
             capture_output=True,
             timeout=timeout,

@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import unittest
+
+from scripts.config import load_config
+from scripts.opencode_backend import model_for
+
+
+class ConfigTests(unittest.TestCase):
+    def test_roles_reference_named_providers(self) -> None:
+        config = load_config()
+        self.assertEqual(
+            config["roles"],
+            {
+                "primary_translator": "antigravity",
+                "fallback_translator": "lmstudio",
+                "reviewer": "opencode",
+            },
+        )
+        self.assertTrue(set(config["roles"].values()) <= set(config["providers"]))
+        self.assertNotIn("primary", config["providers"])
+        self.assertNotIn("murasaki_local", config["providers"])
+
+    def test_reviewer_model_comes_from_opencode_provider(self) -> None:
+        config = load_config()
+        self.assertEqual(config["providers"]["opencode"]["model"], "opencode/muse-spark-1.2-contributor-free")
+        self.assertEqual(model_for("reviewer"), config["providers"]["opencode"]["model"])
+
+
+if __name__ == "__main__":
+    unittest.main()

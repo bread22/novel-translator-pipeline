@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from scripts.config import load_config, setting
+
 
 REPORT_SCHEMA_VERSION = 1
 
@@ -62,19 +64,22 @@ def _read_json(path: Path, default: Any) -> Any:
 
 
 def _model(provider: str, role: str, novel_root: Path) -> str:
-    if provider == "gemini":
-        return os.environ.get("PRIMARY_MODEL", "gemini-3.7-flash")
-    if provider == "murasaki-local":
-        setting = novel_root / "setting.toml"
-        if setting.exists():
-            for line in setting.read_text(encoding="utf-8").splitlines():
+    config = load_config()
+    provider = {"gemini": "antigravity", "murasaki-local": "lmstudio"}.get(provider, provider)
+    if provider == "antigravity":
+        return setting(config, "providers.antigravity.model", "PRIMARY_MODEL")
+    if provider == "lmstudio":
+        novel_setting = novel_root / "setting.toml"
+        if novel_setting.exists():
+            for line in novel_setting.read_text(encoding="utf-8").splitlines():
                 if line.strip().startswith("model ="):
                     return line.split("=", 1)[1].strip().strip('"\'')
-        return os.environ.get("MURASAKI_MODEL", "murasaki-14b-v0.2")
-    return os.environ.get(
-        "OPENCODE_REVIEWER_MODEL" if role == "reviewer" else "OPENCODE_TRANSLATOR_MODEL",
-        os.environ.get("OPENCODE_MODEL", "(configured default)"),
-    )
+        return setting(config, "providers.lmstudio.model", "MURASAKI_MODEL")
+    role_env = "OPENCODE_REVIEWER_MODEL" if role == "reviewer" else "OPENCODE_TRANSLATOR_MODEL"
+    if role_env in os.environ:
+        return os.environ[role_env]
+    model = setting(config, f"providers.{provider}.model", "OPENCODE_MODEL" if provider == "opencode" else "CODEX_MODEL")
+    return model or "(configured default)"
 
 
 def _provider_counts(provenance: dict[str, Any], primary: str, fallback: str) -> tuple[dict[str, int], dict[str, str]]:

@@ -2,7 +2,7 @@
 
 The chapter pipeline uses Gemini as the primary translator and treats an explicit
 provider content-filter response as a recoverable failure. It sends large source
-windows first (`--primary-batch-max-chars`, default `12000`). A blocked window is
+windows first (`--primary-batch-max-chars`, default `4000`). A blocked window is
 split recursively. The smallest still-blocked segment is sent to the configured
 fallback provider; the pipeline never rewrites or disguises the source to retry
 the same provider.
@@ -24,7 +24,7 @@ Run the normal chapter pipeline:
   --book BOOK_ID \
   --name BOOK_NAME \
   --review-mode chapter \
-  --primary-batch-max-chars 12000 \
+  --primary-batch-max-chars 4000 \
   --fallback-provider murasaki-local \
   --apply --autonomous --finalize
 ```
@@ -36,6 +36,13 @@ records paragraph provenance in
 `data/translation-provenance.json` and provider diagnostics in
 `data/provider-diagnostics.json`. Chapter review receives the provenance but
 judges the completed chapter uniformly.
+
+The adapter accepts only the required JSON envelope. It rejects freeform output,
+truncated responses (`finish_reason=length`), duplicate or repeated content,
+whole-paragraph copies from previous context, and suspiciously oversized
+translations before writing the manifest. Local fallback requests also receive
+a source-size-based `max_tokens` cap so a malformed response cannot consume the
+full context window.
 
 The Gemini bridge records a short raw provider response excerpt when it detects
 `content_filter`, allowing the failure to be distinguished from network,

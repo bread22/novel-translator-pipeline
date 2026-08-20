@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
 from pathlib import Path
 import re
 import tempfile
@@ -54,9 +55,82 @@ def _parse_translation(content: str) -> list[dict[str, str]]:
         raise ValueError("翻译响应缺少 items 数组")
     result: list[dict[str, str]] = []
     for item in items:
-        if isinstance(item, dict) and str(item.get("id", "")).strip():
-            result.append({"id": str(item["id"]).strip(), "text": str(item.get("text", ""))})
+        if not isinstance(item, dict) or not str(item.get("id", "")).strip():
+            raise ValueError("翻译响应包含无效 items 项")
+        result.append({"id": str(item["id"]).strip(), "text": str(item.get("text", ""))})
     return result
+
+
+def _normalized_text(text: str) -> str:
+    """Normalize line wrapping while keeping content and punctuation intact."""
+    return re.sub(r"\s+", "", text.replace("\\n", "\n"))
+
+
+def _repeated_content(text: str) -> dict[str, Any] | None:
+    """Return a diagnostic when a response repeats a substantial line."""
+    lines = [
+        re.sub(r"\s+", " ", line).strip()
+        for line in text.replace("\\n", "\n").splitlines()
+        if line.strip()
+    ]
+    counts = Counter(line for line in lines if len(line) >= 24)
+    for line, count in counts.items():
+        if count >= 2:
+            return {"kind": "repeated_line", "count": count, "sample": line[:160]}
+    return None
+
+
+def _previous_context_overlap(text: str, payload: dict[str, Any], item_id: str) -> dict[str, Any] | None:
+    """Reject a single-item response that copies a whole previous translation."""
+    haystack = _normalized_text(text)
+    context = payload.get("context", {}) if isinstance(payload, dict) else {}
+    previous = context.get("previous", []) if isinstance(context, dict) else []
+    for item in previous:
+        if not isinstance(item, dict) or str(item.get("id", "")) == item_id:
+            continue
+        translated = str(item.get("translated", ""))
+        candidate = _normalized_text(translated)
+        if len(candidate) >= 48 and candidate in haystack:
+            return {
+                "kind": "previous_context_overlap",
+                "source_id": str(item.get("id", "")),
+                "sample": translated[:160],
+            }
+    return None
+
+
+def _validate_translation_items(items: list[dict[str, str]], payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Guard the manifest against truncation, repetition, and context feedback."""
+    requested = payload.get("items", []) if isinstance(payload, dict) else []
+    sources = {
+        str(item.get("id", "")): str(item.get("text", ""))
+        for item in requested
+        if isinstance(item, dict) and str(item.get("id", "")).strip()
+    }
+    for item in items:
+        item_id = str(item.get("id", "")).strip()
+        text = str(item.get("text", "")).strip()
+        if not text:
+            return {"kind": "empty_translation", "id": item_id}
+        source = sources.get(item_id, "")
+        # A single translated paragraph may expand, but a many-fold expansion
+        # with a fixed floor is a strong signal that adjacent context leaked in.
+        max_chars = max(512, len(source) * 6 + 256)
+        if len(text) > max_chars:
+            return {
+                "kind": "output_too_long",
+                "id": item_id,
+                "text_chars": len(text),
+                "source_chars": len(source),
+                "max_chars": max_chars,
+            }
+        repeated = _repeated_content(text)
+        if repeated:
+            return {"id": item_id, **repeated}
+        overlap = _previous_context_overlap(text, payload, item_id)
+        if overlap:
+            return {"id": item_id, **overlap}
+    return None
 
 
 class ProviderTranslator:
@@ -80,7 +154,13 @@ class ProviderTranslator:
             raise ValueError(f"未知翻译 provider：{provider}")
         return base_url.rstrip("/"), model, api_key
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, provider: str) -> str:
+        if provider == "murasaki-local":
+            return (
+                "你是备用日中小说翻译器。把用户 payload 中每个 source 翻译成自然、忠实的简体中文。"
+                "严格只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。"
+                "不要输出分析、推理、解释、编号或 JSON 之外的文字；保留段落顺序。"
+            )
         path = self.novel_root / "prompts" / "novel_translation_system.md"
         if path.exists():
             return path.read_text(encoding="utf-8")
@@ -129,15 +209,35 @@ class ProviderTranslator:
 
     def _request(self, provider: str, payload: dict[str, Any], max_tokens: int) -> tuple[list[dict[str, str]], dict[str, Any]]:
         base_url, model, api_key = self._provider_config(provider)
-        body = json.dumps({
+        requested = payload.get("items", []) if isinstance(payload, dict) else []
+        source_chars = sum(
+            len(str(item.get("text", "")))
+            for item in requested
+            if isinstance(item, dict)
+        )
+        effective_max_tokens = max_tokens
+        if provider == "murasaki-local":
+            # Keep a malformed local response from consuming the whole context
+            # window.  Longer source windows still receive a proportional cap.
+            effective_max_tokens = min(max_tokens, max(512, source_chars * 4 + 256))
+        request_payload: dict[str, Any] = payload
+        if provider == "murasaki-local" and len(requested) == 1:
+            request_payload = {
+                "source_language": "auto",
+                "target_language": "zh-Hans",
+                "instructions": ["只翻译下面这一项 source；不要翻译上下文，不要添加标题、注释或说明。"],
+                "items": requested,
+            }
+        body_data: dict[str, Any] = {
             "model": model,
             "messages": [
-                {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                {"role": "system", "content": self._system_prompt(provider)},
+                {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
             ],
             "temperature": 0.3,
-            "max_tokens": max_tokens,
-        }, ensure_ascii=False).encode("utf-8")
+            "max_tokens": effective_max_tokens,
+        }
+        body = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
         request = Request(
             f"{base_url}/chat/completions",
             data=body,
@@ -156,14 +256,41 @@ class ProviderTranslator:
         except (URLError, TimeoutError, OSError) as exc:
             return [], {"status": "error", "provider": provider, "reason": "network", "error": str(exc)}
         response = _load_json_from_text(raw)
-        content = response.get("choices", [{}])[0].get("message", {}).get("content", "") if isinstance(response, dict) else ""
+        choices = response.get("choices", []) if isinstance(response, dict) else []
+        choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+        finish_reason = str(choice.get("finish_reason", "")).casefold() or None
+        content = choice.get("message", {}).get("content", "") if isinstance(choice.get("message"), dict) else ""
         if isinstance(content, dict):
             content = json.dumps(content, ensure_ascii=False)
+        common = {
+            "provider": provider,
+            "http_status": status,
+            "finish_reason": finish_reason,
+            "raw_response": raw[:4000],
+        }
+        if finish_reason == "length":
+            return [], {
+                **common,
+                "status": "error",
+                "reason": "output_format",
+                "error": "翻译响应达到 max_tokens，未接受截断结果",
+            }
+        if finish_reason == "content_filter":
+            return [], {**common, "status": "blocked", "reason": "content_filter"}
         try:
             items = _parse_translation(str(content))
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return [], {"status": "error", "provider": provider, "reason": "output_format", "error": str(exc), "raw_response": raw[:4000]}
-        return items, {"status": "ok", "provider": provider, "http_status": status, "raw_response": str(content)[:1000]}
+            return [], {**common, "status": "error", "reason": "output_format", "error": str(exc)}
+        validation = _validate_translation_items(items, payload)
+        if validation:
+            return [], {
+                **common,
+                "status": "error",
+                "reason": "output_format",
+                "error": "翻译响应未通过完整性校验",
+                "validation": validation,
+            }
+        return items, {**common, "status": "ok", "raw_response": str(content)[:1000]}
 
     def __call__(self, provider: str, book: str, ids: list[str], *, source_chars: int, max_tokens: int) -> dict[str, Any]:
         if not ids:
@@ -173,11 +300,21 @@ class ProviderTranslator:
         if result.get("status") != "ok":
             return result
         expected = set(ids)
-        received = {item["id"] for item in items}
+        received_ids = [item["id"] for item in items]
+        received = set(received_ids)
         missing = sorted(expected - received)
         unknown = sorted(received - expected)
-        if missing or unknown:
-            return {"status": "error", "provider": provider, "reason": "output_format", "missing": missing, "unknown": unknown, "raw_response": result.get("raw_response", "")}
+        duplicate_ids = sorted({item_id for item_id in received_ids if received_ids.count(item_id) > 1})
+        if missing or unknown or duplicate_ids:
+            return {
+                "status": "error",
+                "provider": provider,
+                "reason": "output_format",
+                "missing": missing,
+                "unknown": unknown,
+                "duplicate_ids": duplicate_ids,
+                "raw_response": result.get("raw_response", ""),
+            }
         manifest = _load_json(self.manifest, {})
         by_id = {str(item.get("id")): item for chapter in manifest.get("chapters", []) for item in chapter.get("paragraphs", [])}
         for item in items:

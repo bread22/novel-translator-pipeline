@@ -22,6 +22,12 @@ def provider_failure_reason(result: dict[str, Any] | None) -> str:
     """Classify a provider result without treating every failure as a block."""
     if not isinstance(result, dict):
         return "unknown"
+    status = str(result.get("status", "")).casefold()
+    explicit_reason = str(result.get("reason", "")).casefold()
+    if status in {"ok", "success"}:
+        return "ok"
+    if explicit_reason in {"content_filter", "output_format", "network"}:
+        return explicit_reason
     text = json.dumps(result, ensure_ascii=False).casefold()
     if any(marker in text for marker in ("content_filter", "content policy", "sensitive words", "safety policy", "provider_blocked")):
         return "content_filter"

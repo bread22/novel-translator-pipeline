@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--translation-policy", type=Path, default=ROOT / "docs" / "prompts" / "translation-policy.md")
     parser.add_argument("--translate-retries", type=int, default=3, help="本地翻译失败批次的最大尝试次数")
     parser.add_argument("--recovery-batch-max-chars", type=int, default=700, help="失败批次最后一次重试使用的临时 batch 字符上限")
-    parser.add_argument("--primary-batch-max-chars", type=int, default=12000, help="Gemini 主译每个大窗口的原文字符上限")
+    parser.add_argument("--primary-batch-max-chars", type=int, default=4000, help="Gemini 主译每个大窗口的原文字符上限")
     parser.add_argument("--max-provider-split-depth", type=int, default=8, help="provider blocked 后最多二分深度")
     parser.add_argument("--fallback-provider", default="murasaki-local", choices=["murasaki-local"], help="Gemini blocked 后的 fallback provider")
     parser.add_argument("--translation-max-tokens", type=int, default=8192, help="单个翻译窗口的最大输出 token")
@@ -268,7 +268,7 @@ class IterativePipeline:
         review_char_limit: int = 40000,
         translate_retries: int = 3,
         recovery_batch_max_chars: int = 700,
-        primary_batch_max_chars: int = 12000,
+        primary_batch_max_chars: int = 4000,
         max_provider_split_depth: int = 8,
         fallback_provider: str = "murasaki-local",
         translation_max_tokens: int = 8192,
@@ -518,7 +518,7 @@ class IterativePipeline:
         if not (set(ids) & remaining):
             self._record_translation_provenance(ids, "gemini")
             return
-        if reason == "content_filter":
+        if reason in {"content_filter", "output_format"}:
             if len(ids) > 1 and depth < self.max_provider_split_depth:
                 midpoint = max(1, len(ids) // 2)
                 left = [item for item in paragraphs[:midpoint] if str(item["id"]) in remaining]
@@ -530,12 +530,13 @@ class IterativePipeline:
                 return
             fallback_result = self._translate_target("murasaki-local", sorted(set(ids) & remaining, key=ids.index), source_chars)
             fallback_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-            fallback_attempt = {"provider": self.fallback_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": fallback_result, "reason": "gemini_content_filter", "remaining": sorted(fallback_remaining)}
+            fallback_reason = f"gemini_{reason}"
+            fallback_attempt = {"provider": self.fallback_provider, "depth": depth, "ids": ids, "source_chars": source_chars, "result": fallback_result, "reason": fallback_reason, "remaining": sorted(fallback_remaining)}
             attempts.append(fallback_attempt)
             self._record_provider_attempt(fallback_attempt)
             if set(ids) & fallback_remaining:
                 raise RuntimeError(f"fallback 未完成章节 {chapter_id}：{', '.join(sorted(set(ids) & fallback_remaining))}")
-            self._record_translation_provenance(ids, self.fallback_provider, "gemini_content_filter")
+            self._record_translation_provenance(ids, self.fallback_provider, fallback_reason)
             return
         raise RuntimeError(f"Gemini provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
 

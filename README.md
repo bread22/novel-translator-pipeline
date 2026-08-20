@@ -105,11 +105,14 @@ python scripts/book_pipeline.py \
   --name '正式中文书名' \
   --max-cycles 1000 \
   --review-window-size 4 \
+  --translate-retries 3 \
   --apply \
   --autonomous
 ```
 
 `progress.json` 保存窗口进度。重复执行同一命令会从上次未完成的位置继续，而不是重新翻译已经完成的段落。
+
+本地翻译每个 batch 后都会检查 `translate` 返回值和 `failed-batches`。发现失败批次时自动调用 `retry-failed`，最多尝试 3 次；仍然失败则写入 `reports/translation-failure-*.json`，将进度标记为 `paused` 并停止。翻译没有产生新段落但仍有 pending 段落时也会暂停，不会误判为完成。
 
 翻译完成后导出中文 EPUB：
 
@@ -121,7 +124,7 @@ python scripts/book_pipeline.py \
   --finalize
 ```
 
-`--finalize` 只在待翻译段落为零时导出单语中文 EPUB，并执行导出验证。
+`--finalize` 会再次确认 pending 段落为零且没有失败批次，之后才导出单语中文 EPUB，并执行导出验证。
 
 ## 单章一致性审阅
 

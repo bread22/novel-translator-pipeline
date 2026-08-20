@@ -116,6 +116,38 @@ class PipelineFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "未知 ID"):
             validate_window_review_payload(payload, {"p1"})
 
+    def test_translation_failure_retries_failed_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest()), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            calls: list[str] = []
+            translate_count = 0
+
+            def tool_call(*args: str) -> dict:
+                nonlocal translate_count
+                calls.append(args[0])
+                if args[0] == "translate":
+                    translate_count += 1
+                    if translate_count == 2:
+                        manifest_path.write_text(json.dumps(manifest("译文")), encoding="utf-8")
+                if args[0] == "failed-batches":
+                    return {"status": "warning" if translate_count == 1 else "ok", "summary": {"failed": 1 if translate_count == 1 else 0}}
+                if args[0] == "translation-status":
+                    return {"status": "ok", "summary": {"pending": 0 if translate_count == 2 else 1}}
+                return {"status": "ok", "summary": {"command": args[0]}}
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=tool_call, translate_retries=3,
+            )
+            pipeline.initialize()
+            result = pipeline._translate_only(1)
+            self.assertEqual([item["id"] for item in result["items"]], ["p1"])
+            self.assertEqual(translate_count, 2)
+            self.assertIn("retry-failed", calls)
+
     def test_one_cycle_translates_reviews_updates_terms_and_applies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -181,7 +213,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline.initialize()
             result = pipeline.finalize()
             self.assertEqual(result["status"], "exported")
-            self.assertEqual([call[0] for call in calls], ["translation-status", "validate-export", "export", "validate-epub"])
+            self.assertEqual([call[0] for call in calls], ["translation-status", "failed-batches", "validate-export", "export", "validate-epub"])
             self.assertTrue(Path(result["output"]).exists())
 
 

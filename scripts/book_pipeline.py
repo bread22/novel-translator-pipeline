@@ -19,7 +19,11 @@ from scripts.book_workspace import (
 )
 from scripts.codex_review import run_codex_review
 from scripts.codex_review import run_codex_window_review
-from scripts.novel_translator_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
+from scripts.novel_translator_tool import (
+    NOVEL_TRANSLATOR_ROOT,
+    call_novel_translator,
+    call_novel_translator_with_batch_limit,
+)
 
 
 ToolCall = Callable[..., dict[str, Any]]
@@ -35,6 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--review-chunk-size", type=int, default=30)
     parser.add_argument("--review-window-size", type=int, default=4, help="每次合并多少个翻译 batch 调用一次 GPT")
     parser.add_argument("--review-char-limit", type=int, default=40000, help="单个 GPT 审阅窗口的最大字符数")
+    parser.add_argument("--translate-retries", type=int, default=3, help="本地翻译失败批次的最大尝试次数")
+    parser.add_argument("--recovery-batch-max-chars", type=int, default=700, help="失败批次最后一次重试使用的临时 batch 字符上限")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用 Codex 置信度 >= 0.9 的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
@@ -115,6 +121,14 @@ def missing_checked_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[
     return expected_ids - {str(item) for item in checked}
 
 
+def failed_batch_count(payload: dict[str, Any]) -> int:
+    summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+    try:
+        return max(0, int(summary.get("failed", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def validate_window_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
     checked = payload.get("checked_ids")
     issues = payload.get("issues")
@@ -144,10 +158,13 @@ class IterativePipeline:
         workspace: BookWorkspace,
         manifest: Path,
         tool_call: ToolCall = call_novel_translator,
+        recovery_tool_call: Callable[..., dict[str, Any]] = call_novel_translator_with_batch_limit,
         reviewer: Reviewer = run_codex_review,
         window_reviewer: Reviewer = run_codex_window_review,
         review_chunk_size: int = 30,
         review_char_limit: int = 40000,
+        translate_retries: int = 3,
+        recovery_batch_max_chars: int = 700,
         apply: bool = False,
         autonomous: bool = False,
     ) -> None:
@@ -157,12 +174,19 @@ class IterativePipeline:
         self.workspace = workspace
         self.manifest = manifest
         self.tool_call = tool_call
+        self.recovery_tool_call = recovery_tool_call
         self.reviewer = reviewer
         self.window_reviewer = window_reviewer
         self.review_chunk_size = review_chunk_size
         if review_char_limit < 1:
             raise ValueError("review_char_limit 必须大于 0")
         self.review_char_limit = review_char_limit
+        if translate_retries < 1:
+            raise ValueError("translate_retries 必须大于 0")
+        self.translate_retries = translate_retries
+        if recovery_batch_max_chars < 1:
+            raise ValueError("recovery_batch_max_chars 必须大于 0")
+        self.recovery_batch_max_chars = recovery_batch_max_chars
         self.apply = apply
         self.autonomous = autonomous
 
@@ -178,10 +202,70 @@ class IterativePipeline:
         chunk_id = f"chunk-{cycle:05d}"
         snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"before-{chunk_id}")
         write_json(self.workspace.snapshots_dir / f"{chunk_id}.json", snapshot)
-        translation = self.tool_call("translate", "--book", self.book, "--max-batches", "1")
-        after = read_json(self.manifest)
-        items = newly_translated(before, after)
-        return {"chunk_id": chunk_id, "translation": translation, "items": items}
+        attempts: list[dict[str, Any]] = []
+        for attempt in range(1, self.translate_retries + 1):
+            try:
+                translation = self.tool_call("translate", "--book", self.book, "--max-batches", "1")
+            except Exception as exc:  # noqa: BLE001 - record the CLI failure before recovery
+                translation = {"status": "error", "error": str(exc)}
+            try:
+                failed = self.tool_call("failed-batches", "--book", self.book)
+            except Exception as exc:  # noqa: BLE001 - failure status itself is diagnostic data
+                failed = {"status": "error", "error": str(exc), "summary": {"failed": 1}}
+            failed_count = failed_batch_count(failed)
+            after = read_json(self.manifest)
+            items = newly_translated(before, after)
+            try:
+                status = self.tool_call("translation-status", "--book", self.book)
+            except Exception as exc:  # noqa: BLE001 - preserve the recovery record
+                status = {"status": "error", "error": str(exc), "summary": {"pending": 1}}
+            summary = status.get("summary", {}) if isinstance(status, dict) else {}
+            try:
+                pending = max(0, int(summary.get("pending", 1) or 0))
+            except (TypeError, ValueError):
+                pending = 1
+            attempts.append({
+                "attempt": attempt,
+                "translation": translation,
+                "failed_batches": failed,
+                "newly_translated": len(items),
+                "pending": pending,
+            })
+            if failed_count == 0:
+                if items or pending == 0:
+                    return {
+                        "chunk_id": chunk_id,
+                        "translation": translation,
+                        "items": items,
+                        "pending": pending,
+                        "done": pending == 0 and not items,
+                        "attempts": attempts,
+                    }
+                error = "翻译没有产生新段落，但仍有待译段落"
+                self._save_translation_failure(chunk_id, attempts, error)
+                raise RuntimeError(error)
+            if attempt < self.translate_retries:
+                if attempt == self.translate_retries - 1:
+                    self.recovery_tool_call(self.recovery_batch_max_chars, "retry-failed", "--book", self.book)
+                else:
+                    self.tool_call("retry-failed", "--book", self.book)
+
+        error = f"本地翻译失败批次连续 {self.translate_retries} 次未恢复"
+        self._save_translation_failure(chunk_id, attempts, error)
+        raise RuntimeError(error)
+
+    def _save_translation_failure(self, chunk_id: str, attempts: list[dict[str, Any]], error: str) -> None:
+        report = {
+            "book": self.book,
+            "chunk_id": chunk_id,
+            "error": error,
+            "attempts": attempts,
+            "updated_at": utc_now(),
+        }
+        write_json(self.workspace.reports_dir / f"translation-failure-{chunk_id}.json", report)
+        progress = read_json(self.workspace.progress_path, {})
+        progress.update({"book": self.book, "state": "paused", "last_chunk": chunk_id, "failure_report": str(self.workspace.reports_dir / f"translation-failure-{chunk_id}.json"), "updated_at": utc_now()})
+        write_json(self.workspace.progress_path, progress)
 
     def run_cycle(self, cycle: int) -> dict[str, Any]:
         translated = self._translate_only(cycle)
@@ -276,7 +360,7 @@ class IterativePipeline:
             items = translated["items"]
             cycles.append({"chunk_id": translated["chunk_id"], "translated": len(items)})
             if not items:
-                done = True
+                done = bool(translated.get("done", False))
                 break
             collected.extend(items)
 
@@ -370,6 +454,11 @@ class IterativePipeline:
         status = self.tool_call("translation-status", "--book", self.book)
         if int(status.get("summary", {}).get("pending", 1)) != 0:
             return {"status": "pending", "translation": status.get("summary", status)}
+        failed = self.tool_call("failed-batches", "--book", self.book)
+        if failed_batch_count(failed) > 0:
+            report = {"book": self.book, "status": "paused", "error": "仍存在失败翻译批次", "failed_batches": failed, "updated_at": utc_now()}
+            write_json(self.workspace.reports_dir / "finalize-blocked.json", report)
+            return report
         output = self.workspace.root / f"{self.workspace.root.name}-中文.epub"
         validation = self.tool_call("validate-export", "--book", self.book, "--format", "epub")
         exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
@@ -401,6 +490,8 @@ def main() -> int:
         window_reviewer=lambda input_path, output_path: run_codex_window_review(input_path, output_path, autonomous=args.autonomous),
         review_chunk_size=args.review_chunk_size,
         review_char_limit=args.review_char_limit,
+        translate_retries=args.translate_retries,
+        recovery_batch_max_chars=args.recovery_batch_max_chars,
         apply=args.apply,
         autonomous=args.autonomous,
     )

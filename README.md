@@ -68,6 +68,110 @@ output/正式中文书名/
 
 ---
 
+## 配置设置指南 (`config.toml`)
+
+项目参数在根目录 `config.toml` 中集中定义，采用**分层解耦**设计：
+
+```toml
+# ==========================================
+# 1. 基础路径配置
+# ==========================================
+[paths]
+output_root = "output"                                   # 书籍处理工作区目录
+translation_policy = "docs/prompts/translation-policy.md"# 翻译规范与风格策略文档
+
+# ==========================================
+# 2. 角色绑定 (Roles)
+# 将流水线工作角色映射到具体的 Provider 名称
+# ==========================================
+[roles]
+primary_translator = "antigravity"                      # 主译提供商 (长上下文/高质量)
+fallback_translators = ["opencode", "lmstudio"]         # 多级备用链 (顺序降级救回)
+reviewer = "opencode"                                   # 章节一致性审阅者
+
+# ==========================================
+# 3. 提供商具体参数 (Providers)
+# ==========================================
+
+# --- Antigravity (Gemini CLI) ---
+[providers.antigravity]
+type = "antigravity"
+agy = "agy"                                             # agy 可执行文件路径
+model = "gemini-3.7-flash"                              # 模型标识
+effort = "low"                                          # 思考深度: low / medium / high
+concurrency = 1                                         # 进程内并发控制槽位
+timeout = 600
+
+# --- OpenCode (CLI) ---
+[providers.opencode]
+type = "opencode"
+binary = "opencode"                                     # opencode 可执行文件路径
+model = "opencode/muse-spark-1.2-contributor-free"      # 默认模型
+agent = ""                                              # 指定 agent 别名 (可选)
+timeout = 600
+
+# --- 本地 LM Studio (OpenAI 协议) ---
+[providers.lmstudio]
+type = "openai"
+base_url = "http://127.0.0.1:1234/v1"
+model = "murasaki-14b-v0.2"                             # 本地无审查翻译模型
+api_key = "lm-studio"
+context_tokens = 8192                                   # 本地加载时分配的上下文上限
+timeout = 600
+
+# --- Codex (CLI) ---
+[providers.codex]
+type = "codex"
+binary = "codex"
+model = "gpt-5.6"
+reasoning_effort = "low"
+timeout = 600
+
+# --- 通用在线 API (DeepSeek / OpenRouter / SiliconFlow / OpenAI 等) ---
+[providers.online_api]
+type = "openai"
+base_url = "https://api.deepseek.com/v1"                # API Base URL
+model = "deepseek-chat"                                 # 模型名称
+api_key = "sk-..."                                      # API Key (或设置 DEEPSEEK_API_KEY)
+context_tokens = 65536                                  # 上下文窗口
+timeout = 600
+
+# ==========================================
+# 4. 流水线策略参数 (Pipeline)
+# ==========================================
+[pipeline]
+max_cycles = 1000                                       # 单次运行最大处理章节数
+max_chapter_batches = 1000                              # 单章推进最大批次数
+primary_batch_max_chars = 4000                          # 主译大窗口原文字符上限
+max_provider_split_depth = 8                            # 遇到审查时最大二分递归深度
+translation_max_tokens = 8192                           # 单次翻译最大输出 token
+health_check_timeout = 60                               # 启动预检超时秒数
+layout = "preserve"                                     # 默认导出版式: preserve (保持) 或 horizontal (横排)
+
+# ==========================================
+# 5. 批量翻译队列 (Queue)
+# ==========================================
+[queue]
+source_root = "source"                                  # 待翻译原始 EPUB 投放目录
+max_cycles = 1000
+apply = true
+autonomous = true
+finalize = true
+stop_on_error = true
+```
+
+### 常见配置场景
+
+1. **接入 DeepSeek 作为主译**：
+   - 在 `[providers.online_api]` 填入 `api_key = "sk-..."`；
+   - 将 `[roles]` 的 `primary_translator` 设为 `"online_api"` 即可。
+2. **将 Codex 作为审阅者**：
+   - 将 `[roles]` 的 `reviewer` 设为 `"codex"`。
+3. **临时指定配置文件**：
+   - 通过环境变量 `TRANSLATOR_CONFIG=/path/to/my-config.toml` 指定独立配置。
+
+---
+
 ## 快速上手
 
 ### 1. 安装与环境准备

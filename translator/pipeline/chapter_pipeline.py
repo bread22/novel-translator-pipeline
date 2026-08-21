@@ -304,44 +304,42 @@ class IterativePipeline:
         if not (set(ids) & remaining):
             self._record_translation_provenance(ids, primary_translator)
             return
-        if reason in {"content_filter", "output_format", "provider_blocked", "http_error", "network", "process"}:
-            if len(ids) > 1 and depth < self.max_provider_split_depth:
-                midpoint = max(1, len(ids) // 2)
-                left = [item for item in paragraphs[:midpoint] if str(item["id"]) in remaining]
-                right = [item for item in paragraphs[midpoint:] if str(item["id"]) in remaining]
-                if left:
-                    self._translate_segment_with_recovery(chapter_id, left, attempts, depth + 1)
-                if right:
-                    self._translate_segment_with_recovery(chapter_id, right, attempts, depth + 1)
-                return
-
-            fallback_ids = sorted(set(ids) & remaining, key=ids.index)
-            recovered = False
-            for fb_idx, fb_provider in enumerate(self.fallback_translators):
-                fb_result = self._translate_target(fb_provider, fallback_ids, source_chars)
-                fb_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-                fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
-                fb_attempt = {
-                    "provider": fb_provider,
-                    "depth": depth,
-                    "ids": ids,
-                    "source_chars": source_chars,
-                    "result": fb_result,
-                    "reason": fb_reason,
-                    "remaining": sorted(fb_remaining),
-                }
-                attempts.append(fb_attempt)
-                self._record_provider_attempt(fb_attempt)
-                if not (set(ids) & fb_remaining):
-                    self._record_translation_provenance(ids, fb_provider, fb_reason)
-                    recovered = True
-                    break
-
-            if not recovered:
-                unresolved = sorted(set(ids) & {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)})
-                raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")
+        if len(ids) > 1 and depth < self.max_provider_split_depth and reason in {"content_filter", "output_format", "provider_blocked"}:
+            midpoint = max(1, len(ids) // 2)
+            left = [item for item in paragraphs[:midpoint] if str(item["id"]) in remaining]
+            right = [item for item in paragraphs[midpoint:] if str(item["id"]) in remaining]
+            if left:
+                self._translate_segment_with_recovery(chapter_id, left, attempts, depth + 1)
+            if right:
+                self._translate_segment_with_recovery(chapter_id, right, attempts, depth + 1)
             return
-        raise RuntimeError(f"{self.primary_translator} provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
+
+        fallback_ids = sorted(set(ids) & remaining, key=ids.index)
+        recovered = False
+        for fb_idx, fb_provider in enumerate(self.fallback_translators):
+            fb_result = self._translate_target(fb_provider, fallback_ids, source_chars)
+            fb_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+            fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
+            fb_attempt = {
+                "provider": fb_provider,
+                "depth": depth,
+                "ids": ids,
+                "source_chars": source_chars,
+                "result": fb_result,
+                "reason": fb_reason,
+                "remaining": sorted(fb_remaining),
+            }
+            attempts.append(fb_attempt)
+            self._record_provider_attempt(fb_attempt)
+            if not (set(ids) & fb_remaining):
+                self._record_translation_provenance(ids, fb_provider, fb_reason)
+                recovered = True
+                break
+
+        if not recovered:
+            unresolved = sorted(set(ids) & {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)})
+            raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")
+        return
 
     def _translate_chapter(self, chapter_id: str, _cycle: int) -> dict[str, Any]:
         chapter = self._chapter(chapter_id)

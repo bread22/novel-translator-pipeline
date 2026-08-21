@@ -29,6 +29,8 @@ def provider_failure_reason(result: dict[str, Any] | None) -> str:
     text = json.dumps(result, ensure_ascii=False).casefold()
     if any(marker in text for marker in ("content_filter", "content policy", "sensitive words", "safety policy", "provider_blocked")):
         return "content_filter"
+    if any(marker in text for marker in ("quota", "rate limit", "overloaded", "subscription to increase")):
+        return "quota_reached"
     if any(marker in text for marker in ("timeout", "timed out", "connection error", "connection refused")):
         return "network"
     if "json" in text and any(marker in text for marker in ("parse", "items", "schema")):

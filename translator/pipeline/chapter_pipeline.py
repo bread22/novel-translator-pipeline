@@ -137,19 +137,19 @@ class IterativePipeline:
         tool_call: ToolCall = call_novel_translator,
         targeted_translator: Callable[..., dict[str, Any]] | None = None,
         chapter_reviewer: Reviewer = run_chapter_review,
-        primary_batch_max_chars: int = 4000,
-        primary_translator: str = "antigravity",
-        max_provider_split_depth: int = 2,
+        primary_batch_max_chars: int | None = None,
+        primary_translator: str | None = None,
+        max_provider_split_depth: int | None = None,
         fallback_translators: list[str] | None = None,
         fallback_translator: str | None = None,
         secondary_fallback_translator: str | None = None,
-        translation_max_tokens: int = 8192,
-        max_chapter_batches: int = 1000,
+        translation_max_tokens: int | None = None,
+        max_chapter_batches: int | None = None,
         translation_policy: Path | None = None,
         apply: bool = False,
         autonomous: bool = False,
-        reviewer: str = "opencode",
-        layout: str = "preserve",
+        reviewer: str | None = None,
+        layout: str | None = None,
         translated_root: Path | None = None,
     ) -> None:
         self.book = book
@@ -158,11 +158,18 @@ class IterativePipeline:
         self.tool_call = tool_call
         self.targeted_translator = targeted_translator
         self.chapter_reviewer = chapter_reviewer
-        if primary_batch_max_chars < 1:
+
+        config = load_config()
+        pipeline_cfg = config.get("pipeline", {})
+
+        eff_batch_max_chars = primary_batch_max_chars if primary_batch_max_chars is not None else int(pipeline_cfg.get("primary_batch_max_chars", 4000))
+        if eff_batch_max_chars < 1:
             raise ValueError("primary_batch_max_chars 必须大于 0")
-        self.primary_batch_max_chars = primary_batch_max_chars
-        self.primary_translator = primary_translator
-        self.max_provider_split_depth = max(0, max_provider_split_depth)
+        self.primary_batch_max_chars = eff_batch_max_chars
+
+        self.primary_translator = primary_translator or primary_translator_name(config)
+        eff_split_depth = max_provider_split_depth if max_provider_split_depth is not None else int(pipeline_cfg.get("max_provider_split_depth", 2))
+        self.max_provider_split_depth = max(0, eff_split_depth)
 
         # Configure fallback chain
         if fallback_translators:
@@ -172,16 +179,18 @@ class IterativePipeline:
             if secondary_fallback_translator and secondary_fallback_translator not in self.fallback_translators:
                 self.fallback_translators.append(secondary_fallback_translator)
         else:
-            self.fallback_translators = fallback_translators_names(load_config())
+            self.fallback_translators = fallback_translators_names(config)
 
         self.fallback_translator = self.fallback_translators[0] if self.fallback_translators else "lmstudio"
-        self.translation_max_tokens = max(512, translation_max_tokens)
-        self.max_chapter_batches = max(1, max_chapter_batches)
-        self.translation_policy = translation_policy
+        eff_max_tokens = translation_max_tokens if translation_max_tokens is not None else int(pipeline_cfg.get("translation_max_tokens", 8192))
+        self.translation_max_tokens = max(512, eff_max_tokens)
+        eff_max_batches = max_chapter_batches if max_chapter_batches is not None else int(pipeline_cfg.get("max_chapter_batches", 1000))
+        self.max_chapter_batches = max(1, eff_max_batches)
+        self.translation_policy = translation_policy or ROOT / config.get("paths", {}).get("translation_policy", "docs/prompts/translation-policy.md")
         self.apply = apply
         self.autonomous = autonomous
-        self.reviewer = reviewer
-        self.layout = layout
+        self.reviewer = reviewer or reviewer_name(config)
+        self.layout = layout or str(pipeline_cfg.get("layout", "preserve"))
         self.translated_root = translated_root or ROOT / "translated"
 
     def initialize(self) -> None:

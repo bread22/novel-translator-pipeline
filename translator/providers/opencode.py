@@ -191,7 +191,9 @@ class OpenCodeProvider(BaseProvider):
         self.timeout = int(config.get("timeout", 600))
 
     def health_check(self, timeout: int = 60) -> dict[str, Any]:
-        return check(timeout=timeout, role="reviewer")
+        result = check(timeout=timeout, role="reviewer")
+        result["name"] = f"provider:{self.name}"
+        return result
 
     def translate(
         self,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from translator.core.config import load_config
-from translator.providers.antigravity_bridge import AntigravityProvider
+from translator.providers.antigravity import AntigravityProvider
 from translator.providers.base import BaseProvider
 from translator.providers.codex import CodexProvider
 from translator.providers.opencode import OpenCodeProvider

@@ -77,47 +77,21 @@ export OPENCODE_TRANSLATOR_MODEL='provider/model'
 
 不设置 `OPENCODE_*_MODEL` 时，OpenCode 使用自己的默认模型。命令行参数 `--reviewer-backend`、`--primary-provider` 和 `--fallback-provider` 会覆盖对应环境变量。
 
-## Antigravity 翻译后端
+## Antigravity (Gemini) 翻译与审阅
 
-项目提供了一个 OpenAI-compatible 中间层，把 Novel Translator 的翻译请求转发给 Antigravity CLI：
-
-```text
-Novel Translator
-        ↓ OpenAI-compatible HTTP
-scripts/antigravity_backend.py
-        ↓ agy CLI
-Gemini 3.7 Flash
-```
-
-启动桥接服务：
-
-```bash
-source .venv/bin/activate
-python scripts/antigravity_backend.py \
-  --model gemini-3.7-flash \
-  --port 1235
-```
-
-然后将 `~/src/novel-translator/setting.toml` 的 `[llm]` 临时切换为：
+项目原生集成了 Antigravity Provider 适配器，直接在流水线进程内通过 `agy` CLI 调用 Gemini 模型，无需启动任何独立的 HTTP 代理服务：
 
 ```toml
-[llm]
-base_url = "http://127.0.0.1:1235/v1"
-api_key = "antigravity"
+[providers.antigravity]
+type = "antigravity"
+agy = "agy"
 model = "gemini-3.7-flash"
+effort = "low"
 timeout = 600
+concurrency = 1
 ```
 
-切回 LM Studio 时恢复：
-
-```toml
-[llm]
-base_url = "http://127.0.0.1:1234/v1"
-api_key = "lm-studio"
-model = "murasaki-14b-v0.2"
-```
-
-这里的 Gemini 是通过 `agy` 调用的远程/CLI 后端，不是 LM Studio 中的本地模型。桥接层默认并发为 1，以避免同时启动大量 CLI 进程；可通过 `--concurrency` 调整。
+流水线会自动处理输入构建、并发控制（`concurrency` 信号量）和安全审查识别（`content_filter`），在遇到敏感词拦截时无缝触发二分递归拆解与多级备用降级（如 OpenCode / LM Studio）。
 
 ### Gemini blocked fallback
 

@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import argparse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 from threading import BoundedSemaphore
-import time
 from typing import Any
 
-from translator.core.config import load_config, setting
 from translator.providers.base import (
     BaseProvider,
     build_review_prompt,
@@ -34,48 +29,6 @@ def build_prompt(messages: list[dict[str, Any]]) -> str:
             content = "\n".join(str(item.get("text", item)) for item in content if isinstance(item, dict))
         parts.append(f"\n--- {role} ---\n{content}")
     return "\n".join(parts)
-
-
-class AntigravityBridge:
-    def __init__(self, *, agy: str, model: str, effort: str, timeout: int, concurrency: int) -> None:
-        self.agy = agy
-        self.model = model
-        self.effort = effort
-        self.timeout = timeout
-        self.slots = BoundedSemaphore(max(1, concurrency))
-
-    def complete(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        prompt = build_prompt(messages)
-        command = [
-            self.agy,
-            "--model",
-            self.model,
-            "--effort",
-            self.effort,
-            "--output-format",
-            "text",
-            "--print-timeout",
-            f"{self.timeout}s",
-            "--print",
-            prompt,
-        ]
-        acquired = self.slots.acquire(timeout=self.timeout)
-        if not acquired:
-            raise TimeoutError("等待 Antigravity 并发槽位超时")
-        try:
-            result = subprocess.run(command, text=True, capture_output=True, timeout=self.timeout, check=False)
-        finally:
-            self.slots.release()
-        if result.returncode != 0:
-            raise RuntimeError(f"agy failed ({result.returncode}): {result.stderr[-2000:]}")
-        block_reason = provider_block_reason(result.stdout)
-        if block_reason:
-            excerpt = result.stdout.strip()[:1000]
-            raise ValueError(f"provider_blocked: {block_reason}; raw_response={excerpt}")
-        payload = extract_json_object(result.stdout)
-        if not isinstance(payload.get("items"), list):
-            raise ValueError("翻译后端 JSON 缺少 items 数组")
-        return payload
 
 
 class AntigravityProvider(BaseProvider):
@@ -203,71 +156,3 @@ class AntigravityProvider(BaseProvider):
         if block:
             raise RuntimeError(f"Antigravity review blocked by content filter: {raw[:1000]}")
         return extract_json_object(raw)
-
-
-def make_handler(bridge: AntigravityBridge):
-    class Handler(BaseHTTPRequestHandler):
-        def _send(self, status: int, payload: dict[str, Any]) -> None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_GET(self) -> None:  # noqa: N802
-            if self.path.rstrip("/") == "/v1/models":
-                self._send(200, {"object": "list", "data": [{"id": bridge.model, "object": "model", "owned_by": "antigravity"}]})
-                return
-            self._send(404, {"error": {"message": "not found"}})
-
-        def do_POST(self) -> None:  # noqa: N802
-            if self.path.rstrip("/") != "/v1/chat/completions":
-                self._send(404, {"error": {"message": "not found"}})
-                return
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-                request = json.loads(self.rfile.read(length))
-                response = bridge.complete(request.get("messages", []))
-                content = json.dumps(response, ensure_ascii=False)
-                self._send(200, {
-                    "id": f"antigravity-{int(time.time() * 1000)}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": request.get("model", bridge.model),
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-                })
-            except Exception as exc:
-                self._send(502, {"error": {"message": str(exc), "type": type(exc).__name__}})
-
-        def log_message(self, _format: str, *_args: Any) -> None:
-            return
-
-    return Handler
-
-
-def main() -> int:
-    config = load_config()
-    agy_cfg = config["providers"]["antigravity"]
-    parser = argparse.ArgumentParser(description="Expose agy Gemini as an OpenAI-compatible Novel Translator backend")
-    parser.add_argument("--host", default=agy_cfg.get("host", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=agy_cfg.get("port", 1235))
-    parser.add_argument("--agy", default=setting(config, "providers.antigravity.agy", "AGY_BIN"))
-    parser.add_argument("--model", default=setting(config, "providers.antigravity.model", "ANTIGRAVITY_MODEL"))
-    parser.add_argument("--effort", choices=("low", "medium", "high"), default=setting(config, "providers.antigravity.effort", "ANTIGRAVITY_EFFORT"))
-    parser.add_argument("--timeout", type=int, default=int(setting(config, "providers.antigravity.timeout", "ANTIGRAVITY_TIMEOUT")))
-    parser.add_argument("--concurrency", type=int, default=agy_cfg.get("concurrency", 1))
-    args = parser.parse_args()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(AntigravityBridge(agy=args.agy, model=args.model, effort=args.effort, timeout=args.timeout, concurrency=args.concurrency)))
-    print(f"Antigravity bridge listening on http://{args.host}:{args.port}/v1", flush=True)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        server.server_close()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from translator.core.config import load_config
-from translator.providers.antigravity_bridge import AntigravityProvider
+from translator.providers.antigravity import AntigravityProvider
 from translator.providers.base import (
     extract_json_object,
     parse_translation_items,

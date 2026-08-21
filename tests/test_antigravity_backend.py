@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from translator.providers.antigravity_bridge import build_prompt, extract_json_object, provider_block_reason
+from translator.providers.antigravity import build_prompt, extract_json_object, provider_block_reason
 
 
 class AntigravityBackendTests(unittest.TestCase):

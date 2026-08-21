@@ -1,227 +1,90 @@
-# 后续审阅流程改进计划
+# 章节一致性审阅与长程记忆机制
 
-## 状态
+## 1. 架构目标
 
-章节审阅、`checked_ids`、Book Memory、Chapter State 和全书一致性检查均已实施。章节级审阅是主流程，旧窗口审阅保留为回滚模式。
+在保证审阅深度与跨段落长上下文连贯性的同时，最小化高阶模型调用成本，并实现长程记忆追踪与客观事实的自动沉淀。
 
-## 目标
+---
 
-在不让低成本模型决定 GPT 审阅范围的前提下，减少 GPT 调用次数，并增加跨段落上下文。
-
-## 目标流程（默认已落地）
+## 2. 审阅数据流
 
 ```text
-当前章节的全部翻译 batch
-        ↓
-一次 GPT 整章审阅
-        ↓
-合并术语、Book Memory、Chapter State 和译文修复
-        ↓
-继续下一章
+当前章节翻译完成全部段落
+         ↓
+组装审阅输入 Payload:
+  - 当前章节全部段落 (带稳定 ID)
+  - 翻译策略文档 (Translation Policy)
+  - 全书长程记忆 (Book Memory)
+  - 上一章节状态 (Previous Chapter State)
+  - 动态术语表 (Glossary)
+         ↓
+执行通用 Reviewer 审阅 (OpenCode / Codex / Antigravity / Online API)
+         ↓
+产出结构化审阅结果:
+  ├── checked_ids (全量覆盖校验)
+  ├── fixes (译文缺陷与修复建议)
+  ├── glossary_delta (术语新增/更新/冲突)
+  ├── memory_delta (角色/世界观/关键事实变更)
+  └── chapter_state (本章关键事实总结与状态演进)
+         ↓
+验证 checked_ids 覆盖全部输入（缺失则自动重试，最多 2 次）
+         ↓
+原子更新并持久化：
+  - data/glossary.json
+  - data/book_memory.json
+  - data/chapter_states/<chapter_id>.json
+  - data/novel-translator-terms.json
+         ↓
+筛选高置信度客观修复 (auto_apply=true, confidence>=0.9, major/critical)
+         ↓
+原子写回 manifest.json 并生成本章审阅报告
 ```
 
-GPT 仍然读取窗口内的全部段落，不使用本地模型的风险结果决定哪些段落可以跳过。
+---
 
-## 已实施与计划改动
+## 3. 校验与安全写回规则
 
-### 1. 延迟合并审阅（已实施）
+为了防止审阅模型破坏有效译文，自动写回必须严格遵守以下守卫条件：
 
-- 每次先翻译 3～4 个 Novel Translator batch；
-- 将这些 batch 合并为一个 GPT 审阅窗口；
-- 使用字符数上限控制输入，建议初始上限为 30,000～50,000 字符；
-- 保留每个段落的稳定 ID；
-- 只有整个窗口审阅完成后才更新术语表。
+1. **`checked_ids` 全覆盖守卫**：
+   - 审阅输出必须包含 `checked_ids` 列表，且必须 100% 覆盖输入章节的所有段落 ID；
+   - 若出现漏报，流水线自动发起针对性重试。
 
-### 2. 精简 GPT 输出（已实施）
+2. **客观缺陷修复守卫**：
+   - 仅对属于以下**客观类别**的问题执行自动写回：
+     - `mistranslation`（严重误译）
+     - `omission`（漏译）
+     - `hallucination`（增译幻觉）
+     - `subject_object`（主客体混淆）
+     - `reference`（代词指代错误）
+     - `terminology`（术语不一致）
+     - `fact_conflict`（事实矛盾）
+   - 纯主观润色（如 `style_enhancement`、`explicitness_intensity`）**不进行自动写回**，仅作为审阅建议记录在报告中。
 
-审阅结果增加 `checked_ids`，证明窗口中的所有段落都已检查；`issues` 只输出有问题的段落：
+3. **置信度与严重度门槛**：
+   - `confidence >= 0.9` 且 `severity` 为 `major` 或 `critical`。
 
-```json
-{
-  "checked_ids": ["c0001-p00001", "c0001-p00002"],
-  "issues": [
-    {
-      "id": "c0001-p00002",
-      "type": "mistranslation",
-      "severity": "medium",
-      "approved_translation": "修正后的译文",
-      "auto_apply": true,
-      "confidence": 0.97
-    }
-  ],
-  "term_updates": []
-}
-```
+4. **术语与记忆合并冲突守卫**：
+   - 术语和记忆条目新增/更新时，若发现与既有条目冲突，系统不会暴力覆盖，而是记录在 `conflicts` 列表中并保留历史记录。
 
-程序必须验证：
+---
 
-- `checked_ids` 覆盖输入窗口的所有段落；
-- `issues` 中的 ID 必须来自当前窗口；
-- 未列入 `issues` 的段落不修改；
-- 漏回 `checked_ids` 时自动重试，不直接视为已检查。
+## 4. 单章审阅独立命令
 
-### 3. 规则检查保持逐 batch 执行（已实施）
-
-这些检查不需要 GPT：
-
-- 日文残留；
-- HTML 标签和占位符；
-- 数字、单位和标点；
-- 重复句；
-- 译文为空或异常过短；
-- 术语表冲突。
-
-规则检查结果作为 GPT 的审阅提示，但不用于跳过段落。
-
-### 4. 章节级一致性检查（已实施）
-
-每章结束后额外进行一次 GPT 检查，重点关注：
-
-- 人物称谓和人称；
-- 术语统一；
-- 时间顺序；
-- 叙事视角；
-- 前后文指代；
-- 章节内重复或矛盾。
-
-章节检查只返回问题段落 ID，不重写整章。入口为 `scripts/chapter_review.py`。
-
-默认操作应先指定一个章节：
+除了随流水线自动执行，章节一致性审阅亦可单独运行：
 
 ```bash
 python scripts/chapter_review.py \
   --book 'BOOK_ID' \
   --name '正式中文书名' \
-  --chapter-id c0001 \
+  --chapter c0001 \
   --apply \
   --autonomous
 ```
 
-`--chapter-id` 是范围控制参数。指定后只生成并审阅该章节的输入、输出和修复文件；省略后会遍历 manifest 中的全部章节，因此全书审阅必须显式选择。`--export` 不属于单章验证的默认步骤，确认结果后再用于重新导出 EPUB。
-
-## 不采用的方案
-
-不采用“本地模型先筛选，GPT 只审阅本地模型标记段落”的方案。该方案虽然减少调用，但本地模型漏掉的问题也会被 GPT 跳过，不满足当前的自动质量目标。
-
-## 当前结论与可选优化
-
-规划中的流程改造已经完成，不存在必须继续执行的实施步骤。当前运行顺序为：
-
-1. 先用 `--chapter-id` 验证单章一致性；
-2. 确认结果后，再按需扩大到全书；
-3. 翻译完成后执行最终质量报告并导出 EPUB。
-
-以下属于可选的后续优化，不影响当前流程使用：
-
-- 统计窗口字符数、GPT 调用耗时和审阅输出大小；
-- 根据实际误报率调整章节审阅提示词；
-- 增加审阅覆盖率和跨章节术语一致性的汇总统计。
-
-## 已记录的下一阶段方案：分层上下文审阅
-
-这部分暂不改变当前流程，后续有时间再实现。目标是减少 GPT 重复审阅的正文数量，同时保留判断翻译所需的长期上下文。
-
-### 目标架构
-
-```text
-本地模型翻译
-        ↓
-4-batch 窗口审阅
-输入：Book Memory、Chapter State、当前窗口、滚动上下文
-        ↓
-高置信度修复 + memory_delta
-        ↓
-章节完成
-        ↓
-整章一致性审阅
-        ↓
-更新 Book Memory
-        ↓
-全书完成后的轻量全局一致性检查
-```
-
-### 新增状态文件
-
-```text
-output/正式中文书名/data/
-├── book_memory.json
-└── chapter_states/
-    ├── c0001.json
-    └── c0002.json
-```
-
-`book_memory.json` 只保存跨章节仍然有价值的信息：人物、别名、固定称呼、人物关系、固定术语、重要事实、叙事视角和文风规则。`chapter_states/` 保存当前章节的地点、在场人物、情绪关系、时间线和滚动摘要。
-
-### 审阅上下文
-
-GPT 的输入分为：
-
-```text
-Book Memory
-+ Chapter State
-+ 当前 4-batch 窗口
-+ 前后滚动段落
-+ 按需检索的相关历史片段
-```
-
-当前窗口仍然完整传给 GPT，不把 GPT 降级成只查看本地模型标记的孤立段落。
-
-### 审阅输出扩展
-
-在现有 `checked_ids`、`issues` 和 `term_updates` 外增加：
-
-```json
-{
-  "memory_delta": {
-    "add": [],
-    "update": [],
-    "conflicts": []
-  },
-  "chapter_state_delta": {}
-}
-```
-
-GPT 只提交增量，不直接重写整个 `book_memory.json`。程序负责 Schema 校验、合并、冲突记录和快照。译文修复继续使用 `auto_apply=true` 且置信度不低于 `0.9` 的门槛。
-
-### 实施顺序
-
-1. 增加 Book Memory、Chapter State 的 JSON Schema、存储和增量合并器；
-2. 增加上下文构建器，将长期记忆、章节状态和窗口上下文组合给 GPT；
-3. 让窗口审阅输出 `memory_delta` 和 `chapter_state_delta`；
-4. 在整章完成后执行章节主审阅，同时更新长期记忆；
-5. 全书完成后先审阅章节摘要、人物表、术语表和已知冲突；
-6. 发现潜在冲突时，再按需读取相关章节原文和译文；
-7. 用三种模式做对照测试：4-batch 窗口、整章、整章加 Book Memory。
-
-### 评估指标
-
-- 真实错误发现数；
-- 主客体错误发现率；
-- 人物称呼和术语一致性；
-- 误报数量；
-- GPT 调用次数、输入输出 token 和总耗时。
-
-## 当前默认实现
-
-章节级流程已经作为 `book_pipeline.py` 的默认模式：
-
-```text
---review-mode chapter
-```
-
-每章会完整推进翻译、生成一次整章审阅输入、严格验证 `checked_ids`，然后合并 `glossary_delta`、`memory_delta` 和 `chapter_state`。旧的 4-batch 流程仍可通过以下参数运行：
-
-```text
---review-mode window
-```
-
-章节级状态文件位于：
-
-```text
-data/book_memory.json
-data/chapter_states/{chapter_id}.json
-```
-
-自动修复仅接受客观错误类别、`major/critical`、置信度至少 `0.9` 且包含完整段落替换文本的项目。章节审阅输入同时携带翻译策略、Glossary、Book Memory 和上一章状态。
-
-当前 4-batch 窗口流程继续作为基线，完成 benchmark 后再决定是否将整章审阅提升为主审阅流程。
+参数说明：
+- `--chapter <ID>`：指定审阅单个章节；省略时将按顺序审阅整本书的所有章节；
+- `--global-consistency`：整书全部章节审阅完毕后，执行全书跨章节一致性终审；
+- `--apply`：自动将符合高置信度客观规则的修复写回 `manifest.json`；
+- `--autonomous`：全自动模式；
+- `--reviewer`：临时指定审阅后端（覆盖 `config.toml` 配置）。

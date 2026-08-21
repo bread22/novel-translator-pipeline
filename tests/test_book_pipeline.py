@@ -253,5 +253,64 @@ class PipelineFunctionTests(unittest.TestCase):
             self.assertEqual(Path(result["output"]).read_bytes(), Path(result["translated_output"]).read_bytes())
 
 
+    def test_max_provider_split_depth_limits_binary_splits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = {
+                "id": "book",
+                "title": "Book",
+                "source_type": "txt",
+                "source_file": "source.txt",
+                "chapters": [{
+                    "id": "c1",
+                    "paragraphs": [
+                        {"id": "p1", "source": "段落1", "translated": ""},
+                        {"id": "p2", "source": "段落2", "translated": ""},
+                        {"id": "p3", "source": "段落3", "translated": ""},
+                        {"id": "p4", "source": "段落4", "translated": ""},
+                    ],
+                }],
+            }
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            calls: list[tuple[str, tuple[str, ...]]] = []
+
+            def targeted(provider: str, _book: str, ids: list[str], **_kwargs: object) -> dict:
+                calls.append((provider, tuple(ids)))
+                if provider == "antigravity":
+                    return {"status": "error", "error": "provider_blocked: content_filter"}
+                if provider == "opencode":
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    for chapter in data["chapters"]:
+                        for item in chapter["paragraphs"]:
+                            if item["id"] in ids:
+                                item["translated"] = f"opencode-{item['id']}"
+                    manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                    return {"status": "ok", "summary": {"translated": len(ids)}}
+                return {"status": "error", "error": "unknown"}
+
+            # Test split depth = 1: depth 0 (4 items) -> split 1 -> depth 1 (2 items) -> fallback
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=lambda *_args: {"status": "ok"},
+                targeted_translator=targeted,
+                primary_translator="antigravity",
+                fallback_translators=["opencode"],
+                max_provider_split_depth=1,
+                primary_batch_max_chars=1000,
+            )
+            pipeline.initialize()
+            result = pipeline._translate_chapter("c1", 1)
+            self.assertEqual(result["translated"], 4)
+            self.assertEqual(calls, [
+                ("antigravity", ("p1", "p2", "p3", "p4")),
+                ("antigravity", ("p1", "p2")),
+                ("opencode", ("p1", "p2")),
+                ("antigravity", ("p3", "p4")),
+                ("opencode", ("p3", "p4")),
+            ])
+
+
 if __name__ == "__main__":
     unittest.main()

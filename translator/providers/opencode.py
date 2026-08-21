@@ -77,19 +77,27 @@ def _event_text(stdout: str) -> str:
     return "".join(chunks).strip()
 
 
-def run_prompt(prompt: str, *, role: str = "translator", timeout: int = 600) -> str:
+def run_prompt(
+    prompt: str,
+    *,
+    role: str = "translator",
+    timeout: int = 600,
+    model: str | None = None,
+    binary: str | None = None,
+    agent: str | None = None,
+) -> str:
     if timeout <= 0:
         raise ValueError("OpenCode timeout 必须大于 0")
-    command_executable = executable()
+    command_executable = binary or executable()
     if not command_executable:
         raise OpenCodeError("opencode executable not found in PATH", reason="executable")
     command = [command_executable, "run", "--format", "json", "--dir", str(ROOT)]
-    model = model_for(role)
-    if model:
-        command.extend(["--model", model])
-    agent = _agent_for(role)
-    if agent:
-        command.extend(["--agent", agent])
+    chosen_model = model if model is not None else model_for(role)
+    if chosen_model:
+        command.extend(["--model", chosen_model])
+    chosen_agent = agent if agent is not None else _agent_for(role)
+    if chosen_agent:
+        command.extend(["--agent", chosen_agent])
     try:
         result = subprocess.run(
             command,
@@ -191,9 +199,36 @@ class OpenCodeProvider(BaseProvider):
         self.timeout = int(config.get("timeout", 600))
 
     def health_check(self, timeout: int = 60) -> dict[str, Any]:
-        result = check(timeout=timeout, role="reviewer")
-        result["name"] = f"provider:{self.name}"
-        return result
+        eff_model = self.model or model_for("reviewer") or "(configured default)"
+        try:
+            raw = run_prompt(
+                'Return exactly {"ok":true}. Do not include Markdown, explanations, tools, or any other fields.',
+                role="reviewer",
+                timeout=timeout,
+                model=self.model or None,
+                binary=self.binary or None,
+                agent=self.agent or None,
+            )
+            payload = parse_json_object(raw)
+            if payload.get("ok") is not True or set(payload) != {"ok"}:
+                return {
+                    "name": f"provider:{self.name}",
+                    "status": "error",
+                    "model": eff_model,
+                    "error": f"unexpected health response: {payload!r}",
+                }
+            return {
+                "name": f"provider:{self.name}",
+                "status": "ok",
+                "model": eff_model,
+            }
+        except Exception as exc:
+            return {
+                "name": f"provider:{self.name}",
+                "status": "error",
+                "model": eff_model,
+                "error": str(exc)[:800],
+            }
 
     def translate(
         self,
@@ -213,7 +248,14 @@ class OpenCodeProvider(BaseProvider):
             f"最多输出约 {max_tokens} 个 token；必须覆盖 payload.items 中的全部 ID，保持顺序。"
         )
         try:
-            content = run_prompt(prompt, role="translator", timeout=timeout or self.timeout)
+            content = run_prompt(
+                prompt,
+                role="translator",
+                timeout=timeout or self.timeout,
+                model=self.model or None,
+                binary=self.binary or None,
+                agent=self.agent or None,
+            )
         except OpenCodeError as exc:
             return [], {
                 "status": "blocked" if exc.reason == "content_filter" else "error",
@@ -246,5 +288,12 @@ class OpenCodeProvider(BaseProvider):
         timeout: int | None = None,
     ) -> dict[str, Any]:
         prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
-        content = run_prompt(prompt, role="reviewer", timeout=timeout or self.timeout)
+        content = run_prompt(
+            prompt,
+            role="reviewer",
+            timeout=timeout or self.timeout,
+            model=self.model or None,
+            binary=self.binary or None,
+            agent=self.agent or None,
+        )
         return parse_json_object(content)

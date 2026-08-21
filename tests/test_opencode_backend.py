@@ -69,5 +69,18 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(payload["checked_ids"], ["p1"])
 
 
+    def test_opencode_provider_uses_configured_model(self) -> None:
+        from translator.providers.opencode import OpenCodeProvider
+        provider = OpenCodeProvider("opencode", {
+            "binary": "opencode",
+            "model": "opencode/x-preview-f-free",
+            "timeout": 60,
+        })
+        with patch("translator.providers.opencode.run_prompt", return_value=json.dumps({"items": [{"id": "p1", "text": "测试"}]})) as mock_run:
+            items, result = provider.translate({"items": [{"id": "p1", "text": "test"}]}, "system", 1000)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(mock_run.call_args.kwargs["model"], "opencode/x-preview-f-free")
+
+
 if __name__ == "__main__":
     unittest.main()

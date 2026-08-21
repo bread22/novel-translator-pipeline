@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-chapter-batches", type=int, default=pipeline.get("max_chapter_batches", 1000), help="单章最多推进多少个翻译 batch")
     parser.add_argument("--translation-policy", type=Path, default=ROOT / paths["translation_policy"])
     parser.add_argument("--primary-batch-max-chars", type=int, default=pipeline.get("primary_batch_max_chars", 4000), help="主译每个大窗口的原文字符上限")
-    parser.add_argument("--max-provider-split-depth", type=int, default=pipeline.get("max_provider_split_depth", 8), help="provider blocked 后最多二分深度")
+    parser.add_argument("--max-provider-split-depth", type=int, default=pipeline.get("max_provider_split_depth", 2), help="遇到审查/格式错误时最多二分拆分的深度上限，达到后直接转入 fallback 备用翻译器（默认 2）")
     parser.add_argument(
         "--primary-translator", dest="primary_translator",
         default=primary_translator_name(config),
@@ -139,7 +139,7 @@ class IterativePipeline:
         chapter_reviewer: Reviewer = run_chapter_review,
         primary_batch_max_chars: int = 4000,
         primary_translator: str = "antigravity",
-        max_provider_split_depth: int = 8,
+        max_provider_split_depth: int = 2,
         fallback_translators: list[str] | None = None,
         fallback_translator: str | None = None,
         secondary_fallback_translator: str | None = None,

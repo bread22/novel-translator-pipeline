@@ -317,7 +317,7 @@ def review_book(
         })
 
     if export:
-        call_novel_translator("export-epub", "--book", book, "--output", str(workspace.epub_path))
+        call_novel_translator("export", "--book", book, "--format", "epub", "--output", str(workspace.epub_path), "--monolingual")
     return {
         "status": "ok",
         "book": book,

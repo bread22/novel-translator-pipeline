@@ -506,11 +506,11 @@ class IterativePipeline:
         if untranslated:
             raise ValueError(f"全书尚有未翻译段落，无法导出：{', '.join(untranslated)}")
         output = self.workspace.epub_path
-        exported = self.tool_call("export-epub", "--book", self.book, "--output", str(output))
-        validation = self.tool_call("validate-epub", "--input", str(output))
+        exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
+        validation = self.tool_call("validate-epub", "--path", str(output))
         if self.layout == "horizontal":
             apply_horizontal_layout(output)
-            validation = self.tool_call("validate-epub", "--input", str(output))
+            validation = self.tool_call("validate-epub", "--path", str(output))
         self.translated_root.mkdir(parents=True, exist_ok=True)
         destination = self.translated_root / output.name
         shutil.copy2(output, destination)

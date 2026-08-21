@@ -235,7 +235,7 @@ class PipelineFunctionTests(unittest.TestCase):
 
             def tool_call(*args: str) -> dict:
                 calls.append(args)
-                if args[0] == "export-epub":
+                if args[0] == "export":
                     Path(args[args.index("--output") + 1]).write_bytes(b"epub")
                 return {"status": "ok", "summary": {"command": args[0]}}
 
@@ -247,7 +247,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline.initialize()
             result = pipeline.finalize()
             self.assertEqual(result["status"], "exported")
-            self.assertEqual([call[0] for call in calls], ["export-epub", "validate-epub"])
+            self.assertEqual([call[0] for call in calls], ["export", "validate-epub"])
             self.assertTrue(Path(result["output"]).exists())
             self.assertTrue(Path(result["translated_output"]).exists())
             self.assertEqual(Path(result["output"]).read_bytes(), Path(result["translated_output"]).read_bytes())

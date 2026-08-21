@@ -52,7 +52,7 @@ Automation 选择下一章并推进其全部翻译 batch
 ## 文件边界
 
 - `novel-translator`：EPUB 解析、翻译、manifest、快照、质量报告、修复写回和导出。
-- `erotic_novel_translator`：书籍目录、分片调度、Codex/OpenCode 审阅、provider 适配、术语表、审阅记录、流程日志和最终编排。
+- `novel-translator-pipeline`：书籍目录、分片调度、Codex/OpenCode 审阅、provider 适配、术语表、审阅记录、流程日志和最终编排。
 
 Automation 不直接改写原始 EPUB；它通过 Novel Translator 的命令接口完成存储、快照和导出，并由本项目 provider adapter 连接 Gemini bridge、LM Studio 或本地 OpenCode。
 

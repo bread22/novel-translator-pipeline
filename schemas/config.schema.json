@@ -63,16 +63,18 @@
     "pipeline": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["max_cycles", "review_chunk_size", "review_window_size", "review_char_limit", "review_mode", "max_chapter_batches", "translate_retries", "recovery_batch_max_chars", "primary_batch_max_chars", "max_provider_split_depth", "translation_max_tokens", "health_check_timeout", "layout"],
+      "required": [
+        "max_cycles",
+        "max_chapter_batches",
+        "primary_batch_max_chars",
+        "max_provider_split_depth",
+        "translation_max_tokens",
+        "health_check_timeout",
+        "layout"
+      ],
       "properties": {
         "max_cycles": {"type": "integer", "minimum": 0},
-        "review_chunk_size": {"type": "integer", "minimum": 1},
-        "review_window_size": {"type": "integer", "minimum": 1},
-        "review_char_limit": {"type": "integer", "minimum": 1},
-        "review_mode": {"enum": ["chapter", "window"]},
         "max_chapter_batches": {"type": "integer", "minimum": 1},
-        "translate_retries": {"type": "integer", "minimum": 1},
-        "recovery_batch_max_chars": {"type": "integer", "minimum": 1},
         "primary_batch_max_chars": {"type": "integer", "minimum": 1},
         "max_provider_split_depth": {"type": "integer", "minimum": 0},
         "translation_max_tokens": {"type": "integer", "minimum": 1},

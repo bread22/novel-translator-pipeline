@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import json
 import unittest
 
-from scripts.antigravity_backend import build_prompt, extract_json_object, provider_block_reason
+from translator.providers.antigravity_bridge import build_prompt, extract_json_object, provider_block_reason
 
 
 class AntigravityBackendTests(unittest.TestCase):
     def test_extracts_plain_and_fenced_json(self) -> None:
         payload = '{"items":[{"id":"p1","text":"译文"}]}'
         self.assertEqual(extract_json_object(payload)["items"][0]["id"], "p1")
-        self.assertEqual(extract_json_object(f"说明\\n```json\\n{payload}\\n```\n")["items"][0]["text"], "译文")
+        self.assertEqual(extract_json_object(f"说明\n```json\n{payload}\n```\n")["items"][0]["text"], "译文")
 
     def test_extracts_wrapped_json(self) -> None:
         payload = '{"items":[{"id":"p1","text":"译文"}]}'
@@ -27,7 +28,6 @@ class AntigravityBackendTests(unittest.TestCase):
 
 
 def json_quote(value: str) -> str:
-    import json
     return json.dumps(value, ensure_ascii=False)
 
 

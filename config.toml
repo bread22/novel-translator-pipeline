@@ -40,14 +40,8 @@ reasoning_effort = ""
 timeout = 600
 
 [pipeline]
-max_cycles = 1
-review_chunk_size = 30
-review_window_size = 4
-review_char_limit = 40000
-review_mode = "chapter"
+max_cycles = 1000
 max_chapter_batches = 1000
-translate_retries = 3
-recovery_batch_max_chars = 700
 primary_batch_max_chars = 4000
 max_provider_split_depth = 8
 translation_max_tokens = 8192

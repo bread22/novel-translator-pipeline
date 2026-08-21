@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.work_report import generate_work_report
+from translator.core.report import generate_work_report
 
 
 class WorkReportTests(unittest.TestCase):
@@ -39,13 +39,13 @@ class WorkReportTests(unittest.TestCase):
             )
             text = path.read_text(encoding="utf-8")
             self.assertIn("schema_version: 1", text)
-            self.assertIn('paragraphs: 1', text)
-            self.assertIn('fallback_reasons:', text)
-            self.assertIn('fixes_applied: 1', text)
-            self.assertIn('fix_categories_reported:', text)
-            self.assertIn('  primary:', text)
-            self.assertIn('  fallback:', text)
-            self.assertIn('    omission: 1', text)
+            self.assertIn("paragraphs: 1", text)
+            self.assertIn("fallback_reasons:", text)
+            self.assertIn("fixes_applied: 1", text)
+            self.assertIn("fix_categories_reported:", text)
+            self.assertIn("  primary:", text)
+            self.assertIn("  fallback:", text)
+            self.assertIn("    omission: 1", text)
 
 
 if __name__ == "__main__":

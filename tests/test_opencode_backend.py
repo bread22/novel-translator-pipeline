@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.codex_review import run_chapter_review
-from scripts.opencode_backend import check, parse_json_object, run_prompt
-from scripts.provider_translator import ProviderTranslator
+from translator.providers.opencode import check, parse_json_object, run_prompt
+from translator.providers.translator import ProviderTranslator
+from translator.review.reviewer import run_chapter_review
 
 
 class OpenCodeBackendTests(unittest.TestCase):
@@ -21,8 +21,8 @@ class OpenCodeBackendTests(unittest.TestCase):
                 json.dumps({"type": "step_finish"}),
             ]
         )
-        with patch("scripts.opencode_backend.executable", return_value="/usr/bin/opencode"), patch(
-            "scripts.opencode_backend.subprocess.run",
+        with patch("translator.providers.opencode.executable", return_value="/usr/bin/opencode"), patch(
+            "translator.providers.opencode.subprocess.run",
             return_value=Mock(returncode=0, stdout=stdout, stderr=""),
         ) as run:
             result = run_prompt("health", role="reviewer", timeout=3)
@@ -39,7 +39,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         )
 
     def test_health_check_requires_exact_json_response(self) -> None:
-        with patch("scripts.opencode_backend.run_json", return_value={"ok": True}):
+        with patch("translator.providers.opencode.run_json", return_value={"ok": True}):
             result = check(timeout=3, role="reviewer")
         self.assertEqual(result["status"], "ok")
 
@@ -47,7 +47,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             translator = ProviderTranslator(novel_root=Path(temporary), manifest=Path(temporary) / "manifest.json")
             with patch(
-                "scripts.provider_translator.run_prompt",
+                "translator.providers.translator.run_prompt",
                 return_value=json.dumps({"items": [{"id": "__healthcheck__", "text": "测试"}]}),
             ) as run:
                 result = translator.health_check("opencode", timeout=3)
@@ -61,7 +61,7 @@ class OpenCodeBackendTests(unittest.TestCase):
             output_path = root / "output.json"
             input_path.write_text(json.dumps({"items": [{"id": "p1", "source": "原文", "translated": "译文"}]}), encoding="utf-8")
             with patch(
-                "scripts.codex_review.run_prompt",
+                "translator.review.reviewer.run_prompt",
                 return_value=json.dumps({"checked_ids": ["p1"], "fixes": [], "glossary_delta": {"add": [], "update": []}, "memory_delta": {"add": [], "update": []}, "chapter_state": {}}),
             ):
                 run_chapter_review(input_path, output_path, backend="opencode")

@@ -1,17 +1,17 @@
-from __future__ import annotations
+"""Review runner and consistency checker for novel chapters."""
 
 from translator.review.reviewer import (
-    CHAPTER_SCHEMA,
-    GLOBAL_SCHEMA,
     check_reviewer,
+    cli_main,
+    review_book,
     run_chapter_review,
     run_global_consistency_review,
 )
 
 __all__ = [
-    "CHAPTER_SCHEMA",
-    "GLOBAL_SCHEMA",
     "check_reviewer",
+    "cli_main",
+    "review_book",
     "run_chapter_review",
     "run_global_consistency_review",
 ]

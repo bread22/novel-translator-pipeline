@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.provider_translator import ProviderTranslator
+from translator.providers.translator import ProviderTranslator
 
 
 class _Response:
@@ -61,7 +61,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                 requests.append(json.loads(request.data))
                 return _Response(response)
 
-            with patch("scripts.provider_translator.urlopen", side_effect=fake_urlopen):
+            with patch("translator.providers.translator.urlopen", side_effect=fake_urlopen):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
@@ -88,7 +88,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
@@ -114,7 +114,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
@@ -139,7 +139,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
@@ -163,7 +163,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch("scripts.provider_translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
@@ -192,7 +192,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                 ]
                 return _Response({"choices": [{"message": {"content": json.dumps({"items": response_items}, ensure_ascii=False)}, "finish_reason": "stop"}]})
 
-            with patch("scripts.provider_translator.urlopen", side_effect=fake_urlopen):
+            with patch("translator.providers.translator.urlopen", side_effect=fake_urlopen):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p1"], source_chars=len(source), max_tokens=8192
                 )

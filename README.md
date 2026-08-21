@@ -1,6 +1,6 @@
-# Erotic Novel Translator Automation
+# Novel Translator Pipeline
 
-本项目是 `novel-translator` 的流程自动化层，用于把一本 EPUB 按书籍目录管理，使用配置的本地/桥接模型翻译，再使用 Codex 或本地 OpenCode 对译文进行批量审阅，最后导出中文 EPUB。
+本项目是 `novel-translator` 的自动化流水线编排与审阅增强层，用于将 EPUB 小说按书籍生命周期管理，提供大模型翻译调度、敏感词/格式异常二分降级容灾、章节一致性审阅与事实记忆追踪、横排版式重构，并最终交付高质量中文 EPUB。
 
 导出 EPUB 时默认保留原书版式；对于日文竖排书，可在流水线命令中加入 `--layout horizontal`。该选项不会修改翻译源或 `novel-translator`，而是在其完成 EPUB 导出后追加横排 CSS、更新正文 CSS 引用、将 spine 翻页方向设为 `ltr`，并将语言元数据设为 `zh-CN`，最后再执行 EPUB 校验。校验完成的成品同时会复制到项目根目录的 `translated/`。
 
@@ -10,7 +10,7 @@
 
 ## 当前架构
 
-### Novel Translator
+### Novel Translator (底座工具)
 
 位于 `~/src/novel-translator`，负责：
 
@@ -20,17 +20,16 @@
 - 执行快照、质量报告和修复写回；
 - 导出和验证 EPUB。
 
-### Erotic Novel Translator Automation
+### Novel Translator Pipeline (本项目)
 
 本项目负责：
 
 - 为每本书建立独立的 `output/正式中文书名/` 工作目录；
-- 通过 provider adapter 调度 Gemini、OpenCode 主译和 LM Studio/OpenCode fallback；
-- 按大窗口调度翻译、审阅、术语表更新和修复应用；
-- 调用 `codex exec` 或 `opencode run --format json` 审阅译文；
+- 调度主译（Gemini / OpenCode）并在遇到敏感词或报错时自动二分拆解并降级（LM Studio / Murasaki）；
+- 推进章节流水线：整章翻译 -> 章节一致性审阅 -> 记忆与术语合并 -> 自动写回修复；
 - 校验审阅结果是否覆盖全部输入段落；
-- 保存快照、审阅 JSON、术语表和质量报告；
-- 在翻译完成后导出并验证中文 EPUB。
+- 导出时自动注入横排阅读样式并校正翻页方向；
+- 提供批量全自动翻译队列（Queue）。
 
 两者的边界是：Novel Translator 负责 manifest、快照、质量、修复和 EPUB 交付；Automation 负责 provider 调用、流程编排和审阅推进。
 
@@ -256,24 +255,11 @@ python scripts/chapter_review.py \
   --global-consistency
 ```
 
-## 旧有译文的批量审阅
-
-`auto_review.py` 保留用于已有译文的批量质量审阅：
-
-```bash
-python scripts/auto_review.py \
-  --book 'BOOK_ID' \
-  --mode all \
-  --apply
-```
-
-新书的完整翻译应使用 `book_pipeline.py`；`auto_review.py` 只处理已经存在的译文，不负责从头推进翻译窗口。
-
 ## 测试
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python -m py_compile scripts/*.py tests/*.py
+python3 -m unittest discover -s tests -v
+python3 -m py_compile scripts/*.py tests/*.py
 ```
 
 详细的审阅实现说明见 [`docs/review-plan.md`](docs/review-plan.md)。

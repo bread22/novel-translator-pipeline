@@ -11,6 +11,7 @@ from translator.providers.base import (
     BaseProvider,
     build_review_prompt,
     extract_json_object,
+    parse_json_object,
     parse_translation_items,
     provider_block_reason,
     validate_translation_items,
@@ -43,24 +44,29 @@ class AntigravityProvider(BaseProvider):
         concurrency = int(config.get("concurrency", 1))
         self.slots = BoundedSemaphore(max(1, concurrency))
 
-    def _run_agy(self, prompt: str, timeout: int | None = None) -> str:
+    def _run_agy(self, prompt: str, timeout: int | None = None, schema_path: Path | None = None) -> str:
         eff_timeout = timeout or self.timeout
         executable = shutil.which(self.agy)
         if not executable:
             raise RuntimeError(f"agy executable not found in PATH: {self.agy}")
+        output_format = "json" if (schema_path and schema_path.exists()) else "text"
         command = [
             executable,
             "--model",
             self.model,
             "--effort",
-            self.effort,
+            self.effort or "low",
             "--output-format",
-            "text",
+            output_format,
             "--print-timeout",
             f"{eff_timeout}s",
             "--input-format",
             "text",
+            "--dangerously-skip-permissions",
+            "--disable-slash-commands",
         ]
+        if schema_path and schema_path.exists():
+            command.extend(["--json-schema", str(schema_path)])
         acquired = self.slots.acquire(timeout=eff_timeout)
         if not acquired:
             raise TimeoutError("等待 Antigravity 槽位超时")
@@ -158,8 +164,8 @@ class AntigravityProvider(BaseProvider):
         timeout: int | None = None,
     ) -> dict[str, Any]:
         prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
-        raw = self._run_agy(prompt, timeout=timeout)
+        raw = self._run_agy(prompt, timeout=timeout, schema_path=schema_path)
         block = provider_block_reason(raw)
         if block:
             raise RuntimeError(f"Antigravity review blocked by content filter: {raw[:1000]}")
-        return extract_json_object(raw)
+        return parse_json_object(raw)

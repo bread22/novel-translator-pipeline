@@ -9,7 +9,7 @@ primary_translator = "antigravity"
 fallback_translators = ["opencode", "lmstudio"]
 fallback_translator = "opencode"
 secondary_fallback_translator = "lmstudio"
-reviewer = "antigravity"
+reviewer = "opencode"
 
 [providers.antigravity]
 type = "antigravity"

@@ -53,8 +53,10 @@ def extract_json_object(text: str) -> dict[str, Any]:
                 continue
     if found:
         # Prioritize candidate with expected top-level keys
-        protocol_keys = {"items", "checked_ids", "fixes", "checked_chapters", "ok", "response", "content", "output"}
+        protocol_keys = {"items", "checked_ids", "fixes", "checked_chapters", "ok", "structured_output", "response", "content", "output"}
         best = max(found, key=lambda item: (len(protocol_keys.intersection(item)), len(item)))
+        if isinstance(best.get("structured_output"), dict) and best["structured_output"]:
+            return best["structured_output"]
         # Check if items/payload is wrapped in a string or nested object
         for key in ("response", "text", "content", "output"):
             nested = best.get(key)
@@ -67,6 +69,9 @@ def extract_json_object(text: str) -> dict[str, Any]:
                 return nested
         return best
     raise ValueError("输出中没有找到有效的 JSON 对象")
+
+
+parse_json_object = extract_json_object
 
 
 def parse_translation_items(content: str) -> list[dict[str, str]]:
@@ -152,11 +157,12 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     if kind == "chapter":
         instructions = """
 这是章节级一致性审阅。
+- 顶层必须输出一个 JSON 对象，结构必须包含：{"checked_ids": [...], "fixes": [...], "glossary_delta": {"add":[], "update":[], "conflicts":[]}, "memory_delta": {"character_profiles":[], "world_rules":[], "relationship_graph":[], "chronology":[], "unresolved_clues":[]}, "chapter_state": {"summary": "...", "significant_changes": []}}。
 - 只报告会导致读者误解原文的实质错误，不做文学润色。
 - 不报告纯风格偏好、轻微措辞差异、可接受的自然化、标点偏好或普通敬称差异。
-- 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids。
+- 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids（必须覆盖 items 中的全部段落 ID）。
 - 重点检查人物身份和关系、主客体、代词指代、漏译、擅自添加、术语固定译法、事实冲突、时间顺序、跨段落动作关系和明显改变的强度。
-- 当无法确定问题是否改变原意时，不要输出 fix。
+- 当无法确定问题是否改变原意时，不要输出 fix（fixes 数组可为空 []）。
 - fixes 只输出确实存在且属于 critical 或 major 的问题；replacement 必须是完整段落译文。
 - glossary_delta 只收录后文仍有价值的人名、别名、组织、地点、特殊术语和固定称谓。
 - memory_delta 只收录会影响后续章节翻译的人物、关系、别名、重要事实和持续状态。
@@ -165,6 +171,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     elif kind == "global":
         instructions = """
 这是全书状态的一致性审阅。
+- 顶层必须输出一个 JSON 对象，结构必须包含：{"checked_chapters": [...], "conflicts": [...], "recommendations": [...]}。
 - 必须把输入中的每个 chapter_id 写入 checked_chapters，且不得重复或添加未知章节。
 - 只检查 glossary、book_memory、章节摘要之间的事实、人物关系、时间线和术语冲突。
 - 不重新审阅全文，不做文学润色，不因为不同章节的正常措辞差异而报告问题。
@@ -185,7 +192,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - {auto_rule}
 - glossary 是已有术语表；不得与已有术语冲突。
 
-严格只输出一个 JSON 对象，不要 Markdown、解释、推理或前后缀。
+严格只输出一个符合 JSON Schema 的顶层 JSON 对象，不要 Markdown、解释、推理或任何额外文字。
 JSON Schema：
 {schema}
 

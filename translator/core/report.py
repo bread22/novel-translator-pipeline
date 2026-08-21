@@ -142,7 +142,7 @@ def _review_summary(workspace: Path, origins: dict[str, str], providers: list[st
                 applied_by_origin[origins.get(str(fix.get("id", "")), "unknown")] += 1
 
     all_keys = list(providers)
-    if "unknown" not in all_keys:
+    if reported_by_origin.get("unknown", 0) > 0 or applied_by_origin.get("unknown", 0) > 0:
         all_keys.append("unknown")
 
     fallback_categories = Counter()
@@ -152,12 +152,16 @@ def _review_summary(workspace: Path, origins: dict[str, str], providers: list[st
     primary_name = providers[0] if providers else "primary"
     fix_categories: dict[str, Any] = {
         "total": {key: categories[key] for key in sorted(categories)},
-        "primary": {key: categories_by_origin[primary_name][key] for key in sorted(categories_by_origin[primary_name])},
-        "fallback": {key: fallback_categories[key] for key in sorted(fallback_categories)},
     }
+    if categories_by_origin.get(primary_name):
+        fix_categories["primary"] = {key: categories_by_origin[primary_name][key] for key in sorted(categories_by_origin[primary_name])}
+    if fallback_categories:
+        fix_categories["fallback"] = {key: fallback_categories[key] for key in sorted(fallback_categories)}
     for p in providers[1:]:
-        fix_categories[p] = {key: categories_by_origin[p][key] for key in sorted(categories_by_origin[p])}
-    fix_categories["unknown"] = {key: categories_by_origin["unknown"][key] for key in sorted(categories_by_origin["unknown"])}
+        if categories_by_origin.get(p):
+            fix_categories[p] = {key: categories_by_origin[p][key] for key in sorted(categories_by_origin[p])}
+    if categories_by_origin.get("unknown"):
+        fix_categories["unknown"] = {key: categories_by_origin["unknown"][key] for key in sorted(categories_by_origin["unknown"])}
 
     return {
         "reviewer_chapters": chapters,

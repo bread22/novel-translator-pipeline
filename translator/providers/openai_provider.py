@@ -76,13 +76,15 @@ class OpenAIProvider(BaseProvider):
 
     def health_check(self, timeout: int = 60) -> dict[str, Any]:
         payload = {
-            "source_language": "ja",
-            "target_language": "zh-Hans",
-            "quality_profile": {"requirements": ["只输出 JSON，不要解释。"]},
             "items": [{"id": "__healthcheck__", "text": "テスト"}],
         }
+        system_prompt = (
+            "你是专业日译中小说翻译。"
+            "只输出合规 JSON 对象，格式为 {\"items\":[{\"id\":\"__healthcheck__\",\"text\":\"译文\"}]}。"
+            "不要输出 Markdown、解释或 JSON 之外的文字。"
+        )
         try:
-            items, result = self.translate(payload, "你是专业翻译。只输出 JSON。", max_tokens=512, timeout=timeout)
+            items, result = self.translate(payload, system_prompt, max_tokens=512, timeout=timeout)
             if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
                 err = result.get("error") or result.get("reason") or "healthcheck response invalid"
                 return {

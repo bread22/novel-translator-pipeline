@@ -136,7 +136,7 @@ class PipelineFunctionTests(unittest.TestCase):
             state = json.loads((workspace.chapter_states_dir / "c1.json").read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "reviewed")
 
-    def test_provider_blocked_splits_then_uses_translator(self) -> None:
+    def test_two_level_fallback_recovers_when_primary_and_fb1_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = root / "manifest.json"
@@ -154,26 +154,44 @@ class PipelineFunctionTests(unittest.TestCase):
                 calls.append((provider, tuple(ids)))
                 if provider == "antigravity":
                     return {"status": "error", "error": "provider_blocked: content_filter"}
-                data = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for chapter in data["chapters"]:
-                    for item in chapter["paragraphs"]:
-                        if item["id"] in ids:
-                            item["translated"] = f"{provider}-{item['id']}"
-                manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-                return {"status": "ok", "summary": {"translated": len(ids)}}
+                if provider == "opencode":
+                    return {"status": "error", "error": "provider_blocked: content_filter"}
+                if provider == "lmstudio":
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    for chapter in data["chapters"]:
+                        for item in chapter["paragraphs"]:
+                            if item["id"] in ids:
+                                item["translated"] = f"{provider}-{item['id']}"
+                    manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                    return {"status": "ok", "summary": {"translated": len(ids)}}
+                return {"status": "error", "error": "unknown"}
 
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=lambda *_args: {"status": "ok"},
-                targeted_translator=targeted, primary_batch_max_chars=100,
+                targeted_translator=targeted,
+                primary_translator="antigravity",
+                fallback_translators=["opencode", "lmstudio"],
+                primary_batch_max_chars=100,
             )
             pipeline.initialize()
             result = pipeline._translate_chapter("c1", 1)
             self.assertEqual(result["translated"], 2)
             self.assertEqual(calls[0], ("antigravity", ("p1", "p2")))
-            self.assertEqual(calls[1:], [("antigravity", ("p1",)), ("lmstudio", ("p1",)), ("antigravity", ("p2",)), ("lmstudio", ("p2",))])
+            self.assertEqual(
+                calls[1:],
+                [
+                    ("antigravity", ("p1",)),
+                    ("opencode", ("p1",)),
+                    ("lmstudio", ("p1",)),
+                    ("antigravity", ("p2",)),
+                    ("opencode", ("p2",)),
+                    ("lmstudio", ("p2",)),
+                ],
+            )
             provenance = json.loads((workspace.data_dir / "translation-provenance.json").read_text(encoding="utf-8"))
             self.assertEqual(provenance["items"]["p1"]["provider"], "lmstudio")
+            self.assertIn("_fb2", provenance["items"]["p1"]["reason"])
 
     def test_opencode_can_be_selected_as_primary_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -198,7 +216,9 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=lambda *_args: {"status": "ok"}, targeted_translator=targeted,
-                primary_translator="opencode", primary_batch_max_chars=100,
+                primary_translator="opencode",
+                fallback_translators=["lmstudio"],
+                primary_batch_max_chars=100,
             )
             pipeline.initialize()
             result = pipeline._translate_chapter("c1", 1)
@@ -215,9 +235,7 @@ class PipelineFunctionTests(unittest.TestCase):
 
             def tool_call(*args: str) -> dict:
                 calls.append(args)
-                if args[0] == "translation-status":
-                    return {"status": "ok", "summary": {"pending": 0}}
-                if args[0] == "export":
+                if args[0] == "export-epub":
                     Path(args[args.index("--output") + 1]).write_bytes(b"epub")
                 return {"status": "ok", "summary": {"command": args[0]}}
 
@@ -229,7 +247,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline.initialize()
             result = pipeline.finalize()
             self.assertEqual(result["status"], "exported")
-            self.assertEqual([call[0] for call in calls], ["translation-status", "failed-batches", "validate-export", "export", "validate-epub"])
+            self.assertEqual([call[0] for call in calls], ["export-epub", "validate-epub"])
             self.assertTrue(Path(result["output"]).exists())
             self.assertTrue(Path(result["translated_output"]).exists())
             self.assertEqual(Path(result["output"]).read_bytes(), Path(result["translated_output"]).read_bytes())

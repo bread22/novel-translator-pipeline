@@ -1,6 +1,6 @@
 # 处理架构
 
-## 数据流
+## 数据流与两级降级容灾
 
 ```text
 原始 EPUB
@@ -9,9 +9,16 @@ Novel Translator 导入/解包
    ↓
 manifest + 当前译文
    ↓
-Automation 选择下一章并推进其全部翻译 batch
+Automation 推进章节翻译
+   ├── 主译 (Primary Translator, e.g. Antigravity / Gemini / Online API)
+   │     ↓ 遇到敏感词/格式/错误
+   │   递归二分拆解 (Binary Split)
+   │     ↓
+   ├── 一级备用 (Fallback #1, e.g. OpenCode / 指定模型)
+   │     ↓ 仍受阻/失败
+   └── 二级备用 (Fallback #2, e.g. LM Studio / 本地无审查模型)
    ↓
-整章审阅
+整章审阅 (Reviewer, e.g. OpenCode / Codex / Antigravity / Online API)
    ├── checked_ids / fixes
    ├── glossary_delta
    ├── memory_delta
@@ -25,6 +32,20 @@ Automation 选择下一章并推进其全部翻译 batch
    ↓
 最终质量报告与中文 EPUB
 ```
+
+## 通用后端适配层 (Universal Provider Adapters)
+
+本项目采用 **角色与后端解耦（Role-Agnostic）** 架构：
+
+- **角色（Roles）**：仅代表流水线工作岗位，支持在 `config.toml` 中自由指定：
+  - `primary_translator`：主力翻译器（可配置为 `antigravity`、`opencode`、`codex`、`online_api` 等）；
+  - `fallback_translators`：多级备用翻译器链（如 `["opencode", "lmstudio"]`）；
+  - `reviewer`：章节一致性与事实审阅器（可配置为 `opencode`、`codex`、`antigravity`、`online_api` 等）。
+- **Provider 类型**：
+  1. `openai` / `http`：标准 OpenAI 兼容在线/本地接口（LM Studio、DeepSeek、OpenRouter、SiliconFlow、OpenAI、Ollama、vLLM 等）；
+  2. `antigravity`：通过 `agy` CLI 调度 Gemini 系列模型；
+  3. `opencode`：通过 `opencode run --format json` 调度本地或远端多模型；
+  4. `codex`：通过 `codex exec` 约束 Schema 进行精准翻译与深度审阅。
 
 ## 章节审阅输入
 
@@ -52,9 +73,7 @@ Automation 选择下一章并推进其全部翻译 batch
 ## 文件边界
 
 - `novel-translator`：EPUB 解析、翻译、manifest、快照、质量报告、修复写回和导出。
-- `novel-translator-pipeline`：书籍目录、分片调度、Codex/OpenCode 审阅、provider 适配、术语表、审阅记录、流程日志和最终编排。
-
-Automation 不直接改写原始 EPUB；它通过 Novel Translator 的命令接口完成存储、快照和导出，并由本项目 provider adapter 连接 Gemini bridge、LM Studio 或本地 OpenCode。
+- `novel-translator-pipeline`：书籍目录、分片调度、多级 Fallback 容灾、统一 Provider 适配、Codex/OpenCode/AGY/API 审阅、术语表、审阅记录、流程日志和最终编排。
 
 ## 可靠性要求
 
@@ -65,6 +84,7 @@ Automation 不直接改写原始 EPUB；它通过 Novel Translator 的命令接�
 3. 原始章节审阅结果；
 4. 已应用修复清单；
 5. Book Memory 和 Chapter State；
-6. 质量报告。
+6. 翻译来源诊断 (`translation-provenance.json`)；
+7. 质量报告。
 
 最终 EPUB 应从解包后的工作副本重新打包，并验证 `mimetype`、OPF、目录、章节顺序、HTML 标签和资源路径。

@@ -4,15 +4,27 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from translator.core.config import load_config, setting
+from translator.core.config import (
+    fallback_translators_names,
+    load_config,
+    primary_translator_name,
+    reviewer_name,
+    setting,
+)
 
 
 class ConfigTests(unittest.TestCase):
     def test_roles_reference_named_providers(self) -> None:
         config = load_config()
-        self.assertIn(config["roles"]["primary_translator"], config["providers"])
-        self.assertIn(config["roles"]["fallback_translator"], config["providers"])
-        self.assertIn(config["roles"]["reviewer"], config["providers"])
+        self.assertIn(primary_translator_name(config), config["providers"])
+        for fb in fallback_translators_names(config):
+            self.assertIn(fb, config["providers"])
+        self.assertIn(reviewer_name(config), config["providers"])
+
+    def test_multi_level_fallback_translators(self) -> None:
+        config = load_config()
+        fallbacks = fallback_translators_names(config)
+        self.assertEqual(fallbacks, ["opencode", "lmstudio"])
 
     def test_reviewer_model_comes_from_opencode_provider(self) -> None:
         config = load_config()
@@ -22,7 +34,7 @@ class ConfigTests(unittest.TestCase):
             config["providers"]["opencode"]["model"],
         )
 
-    def test_schema_rejects_legacy_provider_role(self) -> None:
+    def test_schema_rejects_undefined_provider_role(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config_file = Path(temporary) / "invalid.toml"
             config_file.write_text(
@@ -32,38 +44,21 @@ output_root = "output"
 translation_policy = "docs/prompts/translation-policy.md"
 
 [roles]
-primary_translator = "gemini"
+primary_translator = "non_existent_provider"
 fallback_translator = "lmstudio"
 reviewer = "opencode"
 
 [providers.lmstudio]
+type = "openai"
 base_url = "http://127.0.0.1:1234/v1"
 model = "murasaki-14b-v0.2"
 api_key = "lm-studio"
 context_tokens = 8192
 
-[providers.antigravity]
-base_url = "http://127.0.0.1:1235/v1"
-api_key = "antigravity"
-host = "127.0.0.1"
-port = 1235
-agy = "agy"
-model = "gemini-3.7-flash"
-effort = "low"
-timeout = 600
-concurrency = 1
-context_tokens = 1048576
-
 [providers.opencode]
+type = "opencode"
 binary = "opencode"
 model = "opencode/muse-spark-1.2-contributor-free"
-agent = ""
-timeout = 600
-
-[providers.codex]
-binary = "codex"
-model = ""
-reasoning_effort = ""
 timeout = 600
 
 [pipeline]

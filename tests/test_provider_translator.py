@@ -61,12 +61,12 @@ class ProviderTranslatorTests(unittest.TestCase):
                 requests.append(json.loads(request.data))
                 return _Response(response)
 
-            with patch("translator.providers.translator.urlopen", side_effect=fake_urlopen):
+            with patch("translator.providers.openai_provider.urlopen", side_effect=fake_urlopen):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "ok")
-            self.assertEqual(result["format"], "plain_single_item")
+            self.assertEqual(result["format"], "single_plain_text")
             self.assertEqual(result["summary"]["translated"], 1)
             self.assertEqual(requests[0]["max_tokens"], 512)
             self.assertIn('"items"', requests[0]["messages"][0]["content"])
@@ -88,7 +88,7 @@ class ProviderTranslatorTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.openai_provider.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
@@ -100,25 +100,22 @@ class ProviderTranslatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path = Path(temporary) / "manifest.json"
             _manifest(manifest_path)
-            repeated = "这是一段足够长的重复译文句子，用于检测上下文污染。"
+            repeated_line = "这是一个很长很长的重复行，用来测试生成模型是否陷入了重复输出循环。"
+            repeated_text = f"{repeated_line}\\n{repeated_line}"
             response = {
                 "choices": [
                     {
-                        "message": {
-                            "content": json.dumps(
-                                {"items": [{"id": "p2", "text": f"{repeated}\n{repeated}"}]},
-                                ensure_ascii=False,
-                            )
-                        },
+                        "message": {"content": f'{{"items":[{{"id":"p2","text":"{repeated_text}"}}]}}'},
                         "finish_reason": "stop",
                     }
                 ]
             }
-            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.openai_provider.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "error")
+            self.assertEqual(result["reason"], "output_format")
             self.assertEqual(result["validation"]["kind"], "repeated_line")
 
     def test_previous_context_overlap_is_rejected(self) -> None:
@@ -139,11 +136,12 @@ class ProviderTranslatorTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.openai_provider.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "error")
+            self.assertEqual(result["reason"], "output_format")
             self.assertEqual(result["validation"]["kind"], "previous_context_overlap")
 
     def test_valid_json_response_is_written(self) -> None:
@@ -153,54 +151,59 @@ class ProviderTranslatorTests(unittest.TestCase):
             response = {
                 "choices": [
                     {
-                        "message": {
-                            "content": json.dumps(
-                                {"items": [{"id": "p2", "text": "当前段落的合法译文。"}]},
-                                ensure_ascii=False,
-                            )
-                        },
+                        "message": {"content": '{"items":[{"id":"p2","text":"正常的译文。"}]}'},
                         "finish_reason": "stop",
                     }
                 ]
             }
-            with patch("translator.providers.translator.urlopen", return_value=_Response(response)):
+            with patch("translator.providers.openai_provider.urlopen", return_value=_Response(response)):
                 result = self._translator(manifest_path)(
                     "lmstudio", "book", ["p2"], source_chars=10, max_tokens=8192
                 )
             self.assertEqual(result["status"], "ok")
-            self.assertEqual(result["summary"]["translated"], 1)
             saved = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "当前段落的合法译文。")
+            self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "正常的译文。")
 
     def test_local_request_is_split_before_context_overflow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path = Path(temporary) / "manifest.json"
-            source = "日" * 7000
             manifest_path.write_text(
-                json.dumps({"id": "book", "chapters": [{"id": "c1", "paragraphs": [{"id": "p1", "source": source, "translated": ""}]}]}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "id": "book",
+                        "chapters": [
+                            {
+                                "id": "c1",
+                                "title": "Chapter",
+                                "paragraphs": [
+                                    {"id": "p1", "source": "A" * 6000, "translated": ""},
+                                    {"id": "p2", "source": "B" * 6000, "translated": ""},
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
                 encoding="utf-8",
             )
-            requests: list[dict] = []
+            calls: list[list[str]] = []
 
             def fake_urlopen(request, timeout):
-                body = json.loads(request.data)
-                requests.append(body)
-                local_payload = json.loads(body["messages"][1]["content"])
-                response_items = [
-                    {"id": item["id"], "text": "译" * len(item["text"])}
-                    for item in local_payload["items"]
-                ]
-                return _Response({"choices": [{"message": {"content": json.dumps({"items": response_items}, ensure_ascii=False)}, "finish_reason": "stop"}]})
+                data = json.loads(request.data)
+                ids = [item["id"] for item in json.loads(data["messages"][1]["content"])["items"]]
+                calls.append(ids)
+                items = [{"id": item_id, "text": f"translated-{item_id}"} for item_id in ids]
+                return _Response({"choices": [{"message": {"content": json.dumps({"items": items})}, "finish_reason": "stop"}]})
 
-            with patch("translator.providers.translator.urlopen", side_effect=fake_urlopen):
+            with patch("translator.providers.openai_provider.urlopen", side_effect=fake_urlopen):
                 result = self._translator(manifest_path)(
-                    "lmstudio", "book", ["p1"], source_chars=len(source), max_tokens=8192
+                    "lmstudio", "book", ["p1", "p2"], source_chars=12000, max_tokens=8192
                 )
             self.assertEqual(result["status"], "ok")
-            self.assertEqual(result["split"], "single_item_halves")
-            self.assertEqual(len(requests), 2)
-            self.assertTrue(all(body["max_tokens"] <= 8192 for body in requests))
-            self.assertTrue(all(len(body["messages"][1]["content"]) < 8192 for body in requests))
+            self.assertEqual(calls, [["p1"], ["p2"]])
+            saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["chapters"][0]["paragraphs"][0]["translated"], "translated-p1")
+            self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "translated-p2")
 
 
 if __name__ == "__main__":

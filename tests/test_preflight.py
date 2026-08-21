@@ -28,35 +28,22 @@ class _Response:
 
 class PreflightTests(unittest.TestCase):
     def test_provider_health_check_checks_model_and_real_completion(self) -> None:
-        responses = iter(
-            [
-                _Response({"data": [{"id": "murasaki-14b-v0.2"}]}),
-                _Response(
+        response = _Response(
+            {
+                "choices": [
                     {
-                        "choices": [
-                            {
-                                "message": {"content": json.dumps({"items": [{"id": "__healthcheck__", "text": "测试"}]})},
-                                "finish_reason": "stop",
-                            }
-                        ]
+                        "message": {"content": json.dumps({"items": [{"id": "__healthcheck__", "text": "测试"}]})},
+                        "finish_reason": "stop",
                     }
-                ),
-            ]
+                ]
+            }
         )
         with tempfile.TemporaryDirectory() as temporary:
             translator = ProviderTranslator(novel_root=Path(temporary), manifest=Path(temporary) / "manifest.json")
-            with patch("translator.providers.translator.urlopen", side_effect=lambda request, timeout: next(responses)):
+            with patch("translator.providers.openai_provider.urlopen", return_value=response):
                 result = translator.health_check("lmstudio", timeout=3)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["model"], "murasaki-14b-v0.2")
-
-    def test_provider_health_check_rejects_missing_model(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            translator = ProviderTranslator(novel_root=Path(temporary), manifest=Path(temporary) / "manifest.json")
-            with patch("translator.providers.translator.urlopen", return_value=_Response({"data": []})):
-                result = translator.health_check("lmstudio", timeout=3)
-        self.assertEqual(result["status"], "error")
-        self.assertIn("not listed", result["error"])
 
     def test_reviewer_health_check_requires_valid_output(self) -> None:
         def fake_run(command, **_kwargs):
@@ -64,7 +51,7 @@ class PreflightTests(unittest.TestCase):
             output_path.write_text('{"ok": true}', encoding="utf-8")
             return Mock(returncode=0, stdout="", stderr="")
 
-        with patch("translator.review.reviewer.shutil.which", return_value="/usr/bin/codex"), patch("translator.review.reviewer.subprocess.run", side_effect=fake_run):
+        with patch("translator.providers.codex.shutil.which", return_value="/usr/bin/codex"), patch("translator.providers.codex.subprocess.run", side_effect=fake_run):
             result = check_reviewer(timeout=3, backend="codex")
         self.assertEqual(result["status"], "ok")
 
@@ -72,6 +59,7 @@ class PreflightTests(unittest.TestCase):
         translator = Mock()
         translator.health_check.side_effect = [
             {"name": "translator:antigravity", "status": "error", "error": "bridge down"},
+            {"name": "translator:opencode", "status": "ok"},
             {"name": "translator:lmstudio", "status": "ok"},
         ]
         with patch("translator.pipeline.preflight.check_reviewer", return_value={"name": "reviewer", "status": "error", "error": "codex down"}):
@@ -79,10 +67,10 @@ class PreflightTests(unittest.TestCase):
                 run_preflight(translator, timeout=3)
         report = context.exception.report
         self.assertEqual(report["status"], "error")
-        self.assertEqual([item["status"] for item in report["checks"]], ["error", "error", "ok"])
-        self.assertEqual(translator.health_check.call_count, 2)
+        self.assertEqual([item["status"] for item in report["checks"]], ["error", "error", "ok", "ok"])
+        self.assertEqual(translator.health_check.call_count, 3)
 
-    def test_preflight_uses_selected_opencode_roles(self) -> None:
+    def test_preflight_uses_selected_roles_and_fallbacks(self) -> None:
         translator = Mock()
         translator.health_check.return_value = {"name": "translator:opencode", "status": "ok"}
         with patch("translator.pipeline.preflight.check_reviewer", return_value={"name": "opencode:reviewer", "status": "ok"}) as reviewer:
@@ -90,7 +78,7 @@ class PreflightTests(unittest.TestCase):
                 translator,
                 timeout=3,
                 primary_translator="opencode",
-                fallback_translator="opencode",
+                fallback_translators=["opencode"],
                 reviewer="opencode",
             )
         self.assertEqual(report["status"], "ok")

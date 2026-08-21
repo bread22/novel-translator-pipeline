@@ -4,6 +4,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from threading import BoundedSemaphore
@@ -11,76 +12,14 @@ import time
 from typing import Any
 
 from translator.core.config import load_config, setting
-
-
-def provider_block_reason(text: str) -> str:
-    lowered = text.casefold()
-    if "sensitive words" in lowered or "prohibited use policy" in lowered or "content policy" in lowered:
-        return "content_filter"
-    return ""
-
-
-def extract_json_object(text: str) -> dict[str, Any]:
-    """Extract the translation JSON from plain, fenced, or agy-wrapped output."""
-    candidates = [text.strip()]
-    if "```" in text:
-        for block in text.split("```")[1::2]:
-            candidates.append(block.removeprefix("json").strip())
-    for candidate in candidates:
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            for key in ("items", "response", "text", "content", "output"):
-                nested = value.get(key)
-                if key == "items" and isinstance(nested, list):
-                    return value
-                if isinstance(nested, str):
-                    try:
-                        parsed = json.loads(nested)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(parsed, dict):
-                        return parsed
-                if isinstance(nested, dict) and "items" in nested:
-                    return nested
-    start = text.find("{")
-    while start >= 0:
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        value = json.loads(text[start:index + 1])
-                    except json.JSONDecodeError:
-                        break
-                    if isinstance(value, dict):
-                        if isinstance(value.get("items"), list):
-                            return value
-                        for key in ("response", "text", "content", "output"):
-                            nested = value.get(key)
-                            if isinstance(nested, str):
-                                return extract_json_object(nested)
-                    break
-        start = text.find("{", start + 1)
-    raise ValueError("agy 输出中没有找到包含 items 的翻译 JSON")
+from translator.providers.base import (
+    BaseProvider,
+    build_review_prompt,
+    extract_json_object,
+    parse_translation_items,
+    provider_block_reason,
+    validate_translation_items,
+)
 
 
 def build_prompt(messages: list[dict[str, Any]]) -> str:
@@ -139,6 +78,133 @@ class AntigravityBridge:
         return payload
 
 
+class AntigravityProvider(BaseProvider):
+    """Antigravity (AGY CLI / Gemini) universal provider for translation and review."""
+
+    def __init__(self, name: str, config: dict[str, Any]) -> None:
+        super().__init__(name, config)
+        self.agy = str(config.get("agy", "agy"))
+        self.model = str(config.get("model", "gemini-3.7-flash"))
+        self.effort = str(config.get("effort", "low"))
+        self.timeout = int(config.get("timeout", 600))
+        concurrency = int(config.get("concurrency", 1))
+        self.slots = BoundedSemaphore(max(1, concurrency))
+
+    def _run_agy(self, prompt: str, timeout: int | None = None) -> str:
+        eff_timeout = timeout or self.timeout
+        executable = shutil.which(self.agy)
+        if not executable:
+            raise RuntimeError(f"agy executable not found in PATH: {self.agy}")
+        command = [
+            executable,
+            "--model",
+            self.model,
+            "--effort",
+            self.effort,
+            "--output-format",
+            "text",
+            "--print-timeout",
+            f"{eff_timeout}s",
+            "--print",
+            prompt,
+        ]
+        acquired = self.slots.acquire(timeout=eff_timeout)
+        if not acquired:
+            raise TimeoutError("等待 Antigravity 槽位超时")
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, timeout=eff_timeout, check=False)
+        finally:
+            self.slots.release()
+        if result.returncode != 0:
+            raise RuntimeError(f"agy execution failed ({result.returncode}): {result.stderr[-2000:]}")
+        return result.stdout
+
+    def health_check(self, timeout: int = 60) -> dict[str, Any]:
+        executable = shutil.which(self.agy)
+        if not executable:
+            return {"name": f"provider:{self.name}", "status": "error", "error": f"agy '{self.agy}' not found in PATH"}
+        try:
+            output = self._run_agy('只输出严格的 JSON: {"ok": true}', timeout=timeout)
+            block = provider_block_reason(output)
+            if block:
+                return {"name": f"provider:{self.name}", "status": "error", "error": f"blocked: {block}"}
+            obj = extract_json_object(output)
+            if obj.get("ok") is not True:
+                return {"name": f"provider:{self.name}", "status": "error", "error": f"unexpected ping output: {output[:200]}"}
+            return {
+                "name": f"provider:{self.name}",
+                "status": "ok",
+                "model": self.model,
+            }
+        except Exception as exc:
+            return {
+                "name": f"provider:{self.name}",
+                "status": "error",
+                "model": self.model,
+                "error": str(exc)[:800],
+            }
+
+    def translate(
+        self,
+        payload: dict[str, Any],
+        system_prompt: str,
+        max_tokens: int,
+        timeout: int | None = None,
+    ) -> tuple[list[dict[str, str]], dict[str, Any]]:
+        prompt = (
+            "你是 Novel Translator 的日译中翻译后端。\n"
+            "严格遵守下面的翻译系统要求和 JSON payload。\n"
+            "只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。\n"
+            "不要输出 Markdown、解释、推理、标题、编号或 JSON 之外的文字。\n"
+            f"翻译系统要求：\n{system_prompt}\n\n"
+            "JSON payload：\n"
+            f"{json.dumps(payload, ensure_ascii=False)}\n\n"
+            f"最多输出约 {max_tokens} 个 token；必须覆盖 payload.items 中的全部 ID，保持顺序。"
+        )
+        try:
+            raw = self._run_agy(prompt, timeout=timeout)
+        except Exception as exc:
+            reason = "content_filter" if "content_filter" in str(exc) else "process"
+            return [], {"status": "error", "provider": self.name, "reason": reason, "error": str(exc)}
+
+        block = provider_block_reason(raw)
+        if block:
+            return [], {"status": "blocked", "provider": self.name, "reason": "content_filter", "raw_response": raw[:2000]}
+
+        common = {"provider": self.name, "raw_response": raw[:4000]}
+        try:
+            items = parse_translation_items(raw)
+        except Exception as exc:
+            return [], {**common, "status": "error", "reason": "output_format", "error": str(exc)}
+
+        validation = validate_translation_items(items, payload)
+        if validation:
+            return [], {
+                **common,
+                "status": "error",
+                "reason": "output_format",
+                "error": "翻译响应未通过完整性校验",
+                "validation": validation,
+            }
+
+        return items, {**common, "status": "ok"}
+
+    def review(
+        self,
+        kind: str,
+        input_payload: dict[str, Any],
+        schema_path: Path,
+        autonomous: bool = False,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
+        raw = self._run_agy(prompt, timeout=timeout)
+        block = provider_block_reason(raw)
+        if block:
+            raise RuntimeError(f"Antigravity review blocked by content filter: {raw[:1000]}")
+        return extract_json_object(raw)
+
+
 def make_handler(bridge: AntigravityBridge):
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status: int, payload: dict[str, Any]) -> None:
@@ -171,7 +237,7 @@ def make_handler(bridge: AntigravityBridge):
                     "model": request.get("model", bridge.model),
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
                 })
-            except Exception as exc:  # bridge must return an OpenAI-shaped error
+            except Exception as exc:
                 self._send(502, {"error": {"message": str(exc), "type": type(exc).__name__}})
 
         def log_message(self, _format: str, *_args: Any) -> None:
@@ -184,13 +250,13 @@ def main() -> int:
     config = load_config()
     agy_cfg = config["providers"]["antigravity"]
     parser = argparse.ArgumentParser(description="Expose agy Gemini as an OpenAI-compatible Novel Translator backend")
-    parser.add_argument("--host", default=agy_cfg["host"])
-    parser.add_argument("--port", type=int, default=agy_cfg["port"])
+    parser.add_argument("--host", default=agy_cfg.get("host", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=agy_cfg.get("port", 1235))
     parser.add_argument("--agy", default=setting(config, "providers.antigravity.agy", "AGY_BIN"))
     parser.add_argument("--model", default=setting(config, "providers.antigravity.model", "ANTIGRAVITY_MODEL"))
     parser.add_argument("--effort", choices=("low", "medium", "high"), default=setting(config, "providers.antigravity.effort", "ANTIGRAVITY_EFFORT"))
     parser.add_argument("--timeout", type=int, default=int(setting(config, "providers.antigravity.timeout", "ANTIGRAVITY_TIMEOUT")))
-    parser.add_argument("--concurrency", type=int, default=agy_cfg["concurrency"])
+    parser.add_argument("--concurrency", type=int, default=agy_cfg.get("concurrency", 1))
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(AntigravityBridge(agy=args.agy, model=args.model, effort=args.effort, timeout=args.timeout, concurrency=args.concurrency)))
     print(f"Antigravity bridge listening on http://{args.host}:{args.port}/v1", flush=True)

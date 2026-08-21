@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from translator.core.config import load_config
+from translator.core.config import (
+    fallback_translators_names,
+    load_config,
+    primary_translator_name,
+    reviewer_name,
+)
 from translator.providers.translator import ProviderTranslator
 from translator.review.reviewer import check_reviewer
 
@@ -23,16 +28,36 @@ def run_preflight(
     timeout: int = 60,
     *,
     primary_translator: str | None = None,
+    fallback_translators: list[str] | str | None = None,
     fallback_translator: str | None = None,
+    secondary_fallback_translator: str | None = None,
     reviewer: str | None = None,
 ) -> dict[str, Any]:
-    roles = load_config()["roles"]
-    primary_translator = primary_translator or str(roles["primary_translator"])
-    fallback_translator = fallback_translator or str(roles["fallback_translator"])
-    reviewer = reviewer or str(roles["reviewer"])
-    checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=reviewer)]
-    for provider in dict.fromkeys((primary_translator, fallback_translator)):
-        checks.append(translator.health_check(provider, timeout=timeout))
+    config = load_config()
+    primary = primary_translator or primary_translator_name(config)
+    rev = reviewer or reviewer_name(config)
+
+    fbs: list[str] = []
+    if fallback_translators:
+        if isinstance(fallback_translators, str):
+            fbs = [item.strip() for item in fallback_translators.split(",") if item.strip()]
+        else:
+            fbs = list(fallback_translators)
+    elif fallback_translator:
+        fbs = [fallback_translator]
+        if secondary_fallback_translator:
+            fbs.append(secondary_fallback_translator)
+    else:
+        fbs = fallback_translators_names(config)
+
+    checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=rev)]
+    checked_providers: set[str] = set()
+
+    for provider in [primary] + fbs:
+        if provider and provider not in checked_providers:
+            checked_providers.add(provider)
+            checks.append(translator.health_check(provider, timeout=timeout))
+
     report = {
         "status": "ok" if all(item.get("status") == "ok" for item in checks) else "error",
         "checks": checks,

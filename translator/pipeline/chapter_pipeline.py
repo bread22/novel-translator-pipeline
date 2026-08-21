@@ -7,7 +7,13 @@ import shutil
 import sys
 from typing import Any, Callable
 
-from translator.core.config import load_config, setting
+from translator.core.config import (
+    fallback_translators_names,
+    load_config,
+    primary_translator_name,
+    reviewer_name,
+    setting,
+)
 from translator.core.layout import apply_horizontal_layout
 from translator.core.novel_tool import (
     NOVEL_TRANSLATOR_ROOT,
@@ -57,15 +63,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-provider-split-depth", type=int, default=pipeline.get("max_provider_split_depth", 8), help="provider blocked 后最多二分深度")
     parser.add_argument(
         "--primary-translator", dest="primary_translator",
-        default=setting(config, "roles.primary_translator", "PRIMARY_TRANSLATOR"),
-        choices=["antigravity", "opencode"],
+        default=primary_translator_name(config),
         help="primary_translator 使用的 provider",
     )
     parser.add_argument(
+        "--fallback-translators", dest="fallback_translators", nargs="+",
+        default=None,
+        help="fallback_translators 备用翻译器列表（按先后顺序）",
+    )
+    parser.add_argument(
         "--fallback-translator", dest="fallback_translator",
-        default=setting(config, "roles.fallback_translator", "FALLBACK_TRANSLATOR"),
-        choices=["lmstudio", "opencode"],
-        help="fallback_translator 使用的 provider",
+        default=None,
+        help="第一级备用翻译器",
+    )
+    parser.add_argument(
+        "--secondary-fallback-translator", dest="secondary_fallback_translator",
+        default=None,
+        help="第二级备用翻译器",
     )
     parser.add_argument("--translation-max-tokens", type=int, default=pipeline.get("translation_max_tokens", 8192), help="单个翻译窗口的最大输出 token")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
@@ -75,8 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--health-check-timeout", type=int, default=pipeline.get("health_check_timeout", 60), help="启动前健康检查超时秒数")
     parser.add_argument(
         "--reviewer", dest="reviewer",
-        default=setting(config, "roles.reviewer", "REVIEWER"),
-        choices=["codex", "opencode"],
+        default=reviewer_name(config),
         help="审阅后端",
     )
     return parser.parse_args()
@@ -127,7 +140,9 @@ class IterativePipeline:
         primary_batch_max_chars: int = 4000,
         primary_translator: str = "antigravity",
         max_provider_split_depth: int = 8,
-        fallback_translator: str = "lmstudio",
+        fallback_translators: list[str] | None = None,
+        fallback_translator: str | None = None,
+        secondary_fallback_translator: str | None = None,
         translation_max_tokens: int = 8192,
         max_chapter_batches: int = 1000,
         translation_policy: Path | None = None,
@@ -146,57 +161,38 @@ class IterativePipeline:
         if primary_batch_max_chars < 1:
             raise ValueError("primary_batch_max_chars 必须大于 0")
         self.primary_batch_max_chars = primary_batch_max_chars
-        if primary_translator not in {"antigravity", "opencode"}:
-            raise ValueError(f"未知 primary_translator provider：{primary_translator}")
         self.primary_translator = primary_translator
-        if max_provider_split_depth < 0:
-            raise ValueError("max_provider_split_depth 必须大于等于 0")
-        self.max_provider_split_depth = max_provider_split_depth
-        if fallback_translator not in {"lmstudio", "opencode"}:
-            raise ValueError(f"未知 fallback_translator provider：{fallback_translator}")
-        self.fallback_translator = fallback_translator
-        if translation_max_tokens < 1:
-            raise ValueError("translation_max_tokens 必须大于 0")
-        self.translation_max_tokens = translation_max_tokens
-        if max_chapter_batches < 1:
-            raise ValueError("max_chapter_batches 必须大于 0")
-        self.max_chapter_batches = max_chapter_batches
+        self.max_provider_split_depth = max(0, max_provider_split_depth)
+
+        # Configure fallback chain
+        if fallback_translators:
+            self.fallback_translators = list(fallback_translators)
+        elif fallback_translator:
+            self.fallback_translators = [fallback_translator]
+            if secondary_fallback_translator and secondary_fallback_translator not in self.fallback_translators:
+                self.fallback_translators.append(secondary_fallback_translator)
+        else:
+            self.fallback_translators = fallback_translators_names(load_config())
+
+        self.fallback_translator = self.fallback_translators[0] if self.fallback_translators else "lmstudio"
+        self.translation_max_tokens = max(512, translation_max_tokens)
+        self.max_chapter_batches = max(1, max_chapter_batches)
         self.translation_policy = translation_policy
         self.apply = apply
         self.autonomous = autonomous
-        if reviewer not in {"opencode", "codex"}:
-            raise ValueError(f"未知 reviewer provider：{reviewer}")
-        self.reviewer_provider = reviewer
-        if layout not in {"preserve", "horizontal"}:
-            raise ValueError(f"未知 EPUB layout：{layout}")
+        self.reviewer = reviewer
         self.layout = layout
-        self.translated_root = (translated_root or ROOT / "translated").expanduser().resolve()
+        self.translated_root = translated_root or ROOT / "translated"
 
     def initialize(self) -> None:
-        raw = read_json(self.manifest)
-        if not isinstance(raw, dict):
-            raise FileNotFoundError(f"Novel Translator manifest not found: {self.manifest}")
-        source = Path(str(raw.get("source_file", ""))).expanduser()
-        self.workspace.initialize(source if source.suffix.casefold() == ".epub" else None, book_id=self.book)
+        self.workspace.initialize(book_id=self.book)
 
     def _chapter(self, chapter_id: str) -> dict[str, Any]:
         manifest = read_json(self.manifest)
         for chapter in manifest.get("chapters", []):
             if str(chapter.get("id", "")) == chapter_id:
                 return chapter
-        raise ValueError(f"没有匹配的章节：{chapter_id}")
-
-    @staticmethod
-    def _chapter_items(chapter: dict[str, Any]) -> list[dict[str, str]]:
-        return [
-            {
-                "id": str(paragraph["id"]),
-                "source": str(paragraph.get("source", "")),
-                "translated": str(paragraph.get("translated", "")),
-            }
-            for paragraph in chapter.get("paragraphs", [])
-            if isinstance(paragraph, dict) and paragraph.get("id") and str(paragraph.get("translated", "")).strip()
-        ]
+        raise ValueError(f"章节未在 manifest 中找到：{chapter_id}")
 
     @staticmethod
     def _chapter_pending_ids(chapter: dict[str, Any]) -> set[str]:
@@ -287,7 +283,7 @@ class IterativePipeline:
             primary_translator = self.primary_translator
             result = self._translate_target(primary_translator, ids, source_chars)
             reason = provider_failure_reason(result)
-        except Exception as exc:  # noqa: BLE001 - provider diagnostics are part of the run record
+        except Exception as exc:  # noqa: BLE001
             result = {"status": "error", "error": str(exc)}
             reason = provider_failure_reason(result)
         remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
@@ -308,7 +304,7 @@ class IterativePipeline:
         if not (set(ids) & remaining):
             self._record_translation_provenance(ids, primary_translator)
             return
-        if reason in {"content_filter", "output_format"}:
+        if reason in {"content_filter", "output_format", "provider_blocked", "http_error", "network", "process"}:
             if len(ids) > 1 and depth < self.max_provider_split_depth:
                 midpoint = max(1, len(ids) // 2)
                 left = [item for item in paragraphs[:midpoint] if str(item["id"]) in remaining]
@@ -318,24 +314,32 @@ class IterativePipeline:
                 if right:
                     self._translate_segment_with_recovery(chapter_id, right, attempts, depth + 1)
                 return
+
             fallback_ids = sorted(set(ids) & remaining, key=ids.index)
-            fallback_result = self._translate_target(self.fallback_translator, fallback_ids, source_chars)
-            fallback_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
-            fallback_reason = f"{self.primary_translator}_{reason}"
-            fallback_attempt = {
-                "provider": self.fallback_translator,
-                "depth": depth,
-                "ids": ids,
-                "source_chars": source_chars,
-                "result": fallback_result,
-                "reason": fallback_reason,
-                "remaining": sorted(fallback_remaining),
-            }
-            attempts.append(fallback_attempt)
-            self._record_provider_attempt(fallback_attempt)
-            if set(ids) & fallback_remaining:
-                raise RuntimeError(f"fallback 未完成章节 {chapter_id}：{', '.join(sorted(set(ids) & fallback_remaining))}")
-            self._record_translation_provenance(ids, self.fallback_translator, fallback_reason)
+            recovered = False
+            for fb_idx, fb_provider in enumerate(self.fallback_translators):
+                fb_result = self._translate_target(fb_provider, fallback_ids, source_chars)
+                fb_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+                fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
+                fb_attempt = {
+                    "provider": fb_provider,
+                    "depth": depth,
+                    "ids": ids,
+                    "source_chars": source_chars,
+                    "result": fb_result,
+                    "reason": fb_reason,
+                    "remaining": sorted(fb_remaining),
+                }
+                attempts.append(fb_attempt)
+                self._record_provider_attempt(fb_attempt)
+                if not (set(ids) & fb_remaining):
+                    self._record_translation_provenance(ids, fb_provider, fb_reason)
+                    recovered = True
+                    break
+
+            if not recovered:
+                unresolved = sorted(set(ids) & {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)})
+                raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")
             return
         raise RuntimeError(f"{self.primary_translator} provider error in {chapter_id}: {reason}; ids={','.join(ids)}")
 
@@ -348,45 +352,43 @@ class IterativePipeline:
         attempts: list[dict[str, Any]] = []
         initial_pending = self._chapter_pending_ids(chapter)
         batches = 0
-        while True:
-            pending = self._chapter_pending_paragraphs(chapter_id)
-            if not pending:
+        while batches < self.max_chapter_batches:
+            pending_paragraphs = self._chapter_pending_paragraphs(chapter_id)
+            if not pending_paragraphs:
                 break
-            if batches >= self.max_chapter_batches:
-                error = f"章节 {chapter_id} 超过 max_chapter_batches，仍有未译段落"
-                raise RuntimeError(error)
-            window = self._window(pending, self.primary_batch_max_chars)
-            self._translate_segment_with_recovery(chapter_id, window, attempts)
+            batch_window = self._window(pending_paragraphs, self.primary_batch_max_chars)
+            self._translate_segment_with_recovery(chapter_id, batch_window, attempts)
             batches += 1
-        final_chapter = self._chapter(chapter_id)
-        items = self._chapter_items(final_chapter)
-        return {"chapter_id": chapter_id, "items": items, "translated": len(items), "initial_pending": len(initial_pending), "attempts": attempts}
 
-    def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
-        translated = self._translate_chapter(chapter_id, cycle)
-        items = translated["items"]
-        if not items:
-            return {"chapter_id": chapter_id, "translated": 0, "reviewed": 0, "done": True}
+        untranslated = self._chapter_pending_ids(self._chapter(chapter_id))
+        if untranslated:
+            raise RuntimeError(f"章节 {chapter_id} 在 {batches} 个批次后仍有未翻译段落：{', '.join(sorted(untranslated))}")
+        after_path = self.workspace.snapshots_dir / f"{chapter_id}-after.json"
+        snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"after-{chapter_id}")
+        write_json(after_path, snapshot)
+        return {
+            "chapter_id": chapter_id,
+            "batches": batches,
+            "translated": len(initial_pending),
+            "translated_paragraphs": len(initial_pending),
+            "attempts": len(attempts),
+        }
+
+    def _review_chapter(self, chapter_id: str) -> dict[str, Any]:
         chapter = self._chapter(chapter_id)
+        paragraphs = [p for p in chapter.get("paragraphs", []) if isinstance(p, dict) and p.get("id")]
+        items = [{"id": str(p["id"]), "source": str(p.get("source", "")), "translated": str(p.get("translated", ""))} for p in paragraphs if str(p.get("translated", "")).strip()]
         glossary = read_json(self.workspace.glossary_path, {"book": self.book, "terms": [], "conflicts": []})
         memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
-        previous_state = self._previous_chapter_state(chapter_id)
-        provenance = read_json(self.workspace.data_dir / "translation-provenance.json", {"book": self.book, "items": {}})
-        expected = {item["id"] for item in items}
         input_path = self.workspace.reviews_dir / f"{chapter_id}-input.json"
         output_path = self.workspace.reviews_dir / f"{chapter_id}-output.json"
         write_json(input_path, {
             "book": self.book,
             "chapter_id": chapter_id,
-            "chapter_title": chapter.get("title", ""),
+            "chapter_title": str(chapter.get("title", "")),
             "translation_policy": self._read_translation_policy(),
             "book_memory": memory,
-            "previous_chapter_state": previous_state,
-            "translation_provenance": {
-                item_id: provenance.get("items", {}).get(item_id, {})
-                for item_id in expected
-                if item_id in provenance.get("items", {})
-            },
+            "previous_chapter_state": self._previous_chapter_state(chapter_id),
             "items": items,
             "glossary": glossary.get("terms", []),
         })
@@ -394,109 +396,133 @@ class IterativePipeline:
         review = read_json(output_path)
         if not isinstance(review, dict):
             raise ValueError(f"章节审阅结果不是 JSON 对象：{output_path}")
+        expected_ids = {str(item["id"]) for item in items}
         for retry in range(1, 3):
-            if not missing_checked_ids(review, expected):
+            if not missing_checked_ids(review, expected_ids):
                 break
             retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
             self.chapter_reviewer(input_path, retry_path)
             review = read_json(retry_path)
-            if not isinstance(review, dict):
-                raise ValueError(f"章节重审结果不是 JSON 对象：{retry_path}")
-        review = validate_chapter_review_payload(review, expected)
+        validate_chapter_review_payload(review, expected_ids)
         fixes = approved_fixes(review["fixes"], autonomous=self.autonomous)
         fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
-        write_json(fixes_path, {"book": self.book, "chapter_id": chapter_id, "items": fixes})
-        applied: dict[str, Any] | bool = False
+        write_json(fixes_path, {"book": self.book, "items": fixes})
+        applied_fixes = False
         if self.apply and fixes:
-            applied = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
-            verify_applied_fixes(read_json(self.manifest), fixes)
-        glossary, term_summary = merge_term_updates(glossary, review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []), chunk_id=f"chapter-{chapter_id}")
-        write_json(self.workspace.glossary_path, glossary)
-        terms_path = self.workspace.data_dir / "novel-translator-terms.json"
-        write_json(terms_path, novel_translator_terms(glossary))
-        terminology = self.tool_call("import-terminology", "--book", self.book, "--input", str(terms_path))
-        memory, memory_summary = merge_memory_delta(memory, review["memory_delta"], chapter_id=chapter_id)
-        write_json(self.workspace.book_memory_path, memory)
-        chapter_state = merge_chapter_state(
-            read_json(self.workspace.chapter_states_dir / f"{chapter_id}.json", {"chapter_id": chapter_id}),
-            review["chapter_state"],
-            chapter_id=chapter_id,
+            applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+            manifest_after_fixes = read_json(self.manifest)
+            verify_applied_fixes(manifest_after_fixes, fixes)
+        merged_terms, term_summary = merge_term_updates(
+            glossary,
+            review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []),
+            chapter_id,
         )
-        chapter_state.update({"status": "reviewed", "checked": len(expected), "fixes": len(fixes)})
+        merged_memory, mem_summary = merge_memory_delta(memory, review["memory_delta"], chapter_id)
+        write_json(self.workspace.glossary_path, merged_terms)
+        write_json(self.workspace.book_memory_path, merged_memory)
+        write_json(self.workspace.novel_translator_terms_path, novel_translator_terms(merged_terms))
+        chapter_state = merge_chapter_state(chapter_id, str(chapter.get("title", "")), review["chapter_state"])
         write_json(self.workspace.chapter_states_dir / f"{chapter_id}.json", chapter_state)
-        after_snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"after-{chapter_id}")
-        write_json(self.workspace.snapshots_dir / f"{chapter_id}-after.json", after_snapshot)
-        quality = self.tool_call("quality-report", "--book", self.book)
-        report = {
+        report_path = self.workspace.reports_dir / f"{chapter_id}.json"
+        write_json(report_path, {
             "book": self.book,
             "chapter_id": chapter_id,
-            "translated": len(items),
-            "reviewed": len(expected),
+            "reviewed_at": utc_now(),
+            "checked_paragraphs": len(expected_ids),
+            "reported_issues": len(review["fixes"]),
+            "applied_fixes": len(fixes) if self.apply else 0,
+            "approved_fixes": fixes,
+            "term_summary": term_summary,
+            "memory_summary": mem_summary,
+            "applied": applied_fixes,
+        })
+        return {
+            "chapter_id": chapter_id,
+            "reviewed": len(expected_ids),
+            "checked_paragraphs": len(expected_ids),
+            "issues": len(review["fixes"]),
             "fixes": len(fixes),
-            "applied": applied,
-            "term_updates": term_summary,
-            "memory_delta": memory_summary,
-            "terminology": terminology.get("summary", terminology),
-            "quality": quality.get("summary", quality),
-            "updated_at": utc_now(),
+            "applied": applied_fixes,
         }
-        write_json(self.workspace.reports_dir / f"{chapter_id}.json", report)
-        progress = read_json(self.workspace.progress_path, {})
-        progress.update({
+
+    def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
+        progress = read_json(self.workspace.progress_path, {
             "book": self.book,
+            "state": "running",
+            "completed_cycles": 0,
+            "last_chunk": "",
+            "updated_at": utc_now(),
+        })
+        translated_summary = self._translate_chapter(chapter_id, cycle)
+        progress.update({
+            "state": "running",
+            "last_chapter": chapter_id,
+            "chapter_status": "translated",
+            "last_translated": translated_summary["translated_paragraphs"],
+            "updated_at": utc_now(),
+        })
+        write_json(self.workspace.progress_path, progress)
+        reviewed_summary = self._review_chapter(chapter_id)
+        progress.update({
             "state": "running",
             "completed_cycles": cycle,
             "last_chapter": chapter_id,
             "chapter_status": "reviewed",
-            "last_translated": len(items),
-            "last_reviewed": len(expected),
+            "last_reviewed": reviewed_summary["checked_paragraphs"],
             "updated_at": utc_now(),
         })
         write_json(self.workspace.progress_path, progress)
-        return report
+        return {
+            "chapter_id": chapter_id,
+            "translated": translated_summary["translated_paragraphs"],
+            "reviewed": reviewed_summary["checked_paragraphs"],
+            "translation": translated_summary,
+            "review": reviewed_summary,
+        }
 
     def finalize(self) -> dict[str, Any]:
-        status = self.tool_call("translation-status", "--book", self.book)
-        if int(status.get("summary", {}).get("pending", 1)) != 0:
-            return {"status": "pending", "translation": status.get("summary", status)}
-        failed = self.tool_call("failed-batches", "--book", self.book)
-        if failed_batch_count(failed) > 0:
-            report = {"book": self.book, "status": "paused", "error": "仍存在失败翻译批次", "failed_batches": failed, "updated_at": utc_now()}
-            write_json(self.workspace.reports_dir / "finalize-blocked.json", report)
-            return report
-        output = self.workspace.root / f"{self.workspace.root.name}-中文.epub"
-        validation = self.tool_call("validate-export", "--book", self.book, "--format", "epub")
-        exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
-        layout_result = {"status": "preserved", "layout": "preserve"}
+        manifest = read_json(self.manifest)
+        untranslated = [
+            str(paragraph["id"])
+            for chapter in manifest.get("chapters", [])
+            for paragraph in chapter.get("paragraphs", [])
+            if isinstance(paragraph, dict) and paragraph.get("id") and not str(paragraph.get("translated", "")).strip()
+        ]
+        if untranslated:
+            raise ValueError(f"全书尚有未翻译段落，无法导出：{', '.join(untranslated)}")
+        output = self.workspace.epub_path
+        exported = self.tool_call("export-epub", "--book", self.book, "--output", str(output))
+        validation = self.tool_call("validate-epub", "--input", str(output))
         if self.layout == "horizontal":
-            layout_result = apply_horizontal_layout(output)
-        epub_validation = self.tool_call("validate-epub", "--path", str(output))
-        translated_output = self.translated_root / output.name
+            apply_horizontal_layout(output)
+            validation = self.tool_call("validate-epub", "--input", str(output))
         self.translated_root.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(output, translated_output)
-        manifest = read_json(self.manifest, {})
+        destination = self.translated_root / output.name
+        shutil.copy2(output, destination)
         report_path = generate_work_report(
             workspace=self.workspace.root,
             book=self.book,
             primary_translator=self.primary_translator,
             fallback_translator=self.fallback_translator,
-            reviewer=self.reviewer_provider,
-            layout=self.layout,
+            reviewer=self.reviewer,
             novel_root=NOVEL_TRANSLATOR_ROOT,
             manifest=manifest,
+            layout=self.layout,
         )
         result = {
             "status": "exported",
+            "book": self.book,
             "output": str(output),
-            "translated_output": str(translated_output),
+            "epub": str(output),
+            "translated_output": str(destination),
+            "translated_copy": str(destination),
+            "layout": self.layout,
+            "exported": exported,
             "validation": validation,
-            "export": exported,
-            "layout": layout_result,
-            "epub_validation": epub_validation,
-            "work_report": str(report_path),
+            "work_report": str(self.workspace.data_dir / "work-report.yaml"),
         }
-        write_json(self.workspace.reports_dir / "final-export.json", result)
-        progress = read_json(self.workspace.progress_path, {})
+        write_json(self.workspace.reports_dir / "final-delivery.json", result)
+        progress = read_json(self.workspace.progress_path, {"book": self.book})
         progress.update({"state": "completed", "output": str(output), "updated_at": utc_now()})
         write_json(self.workspace.progress_path, progress)
         return result
@@ -515,7 +541,9 @@ def main() -> int:
             targeted_translator,
             timeout=args.health_check_timeout,
             primary_translator=args.primary_translator,
+            fallback_translators=args.fallback_translators,
             fallback_translator=args.fallback_translator,
+            secondary_fallback_translator=args.secondary_fallback_translator,
             reviewer=args.reviewer,
         )
     except PreflightError as exc:
@@ -530,7 +558,9 @@ def main() -> int:
         primary_batch_max_chars=args.primary_batch_max_chars,
         primary_translator=args.primary_translator,
         max_provider_split_depth=args.max_provider_split_depth,
+        fallback_translators=args.fallback_translators,
         fallback_translator=args.fallback_translator,
+        secondary_fallback_translator=args.secondary_fallback_translator,
         translation_max_tokens=args.translation_max_tokens,
         max_chapter_batches=args.max_chapter_batches,
         translation_policy=args.translation_policy,

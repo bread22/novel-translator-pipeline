@@ -22,7 +22,7 @@ from translator.core.workspace import (
     utc_now,
     write_json,
 )
-from translator.providers.opencode import check as check_opencode, parse_json_object, run_prompt
+from translator.providers.registry import get_provider
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,226 +148,40 @@ def verify_applied_fixes(manifest: dict[str, Any], fixes: list[dict[str, Any]]) 
 
 def _selected_backend(backend: str | None = None) -> str:
     config = load_config()
-    return (backend or setting(config, "roles.reviewer", "REVIEWER")).strip().casefold()
-
-
-def _codex_model_effort() -> tuple[str, str]:
-    config = load_config()
-    return (
-        setting(config, "providers.codex.model", "CODEX_MODEL"),
-        setting(config, "providers.codex.reasoning_effort", "CODEX_REASONING_EFFORT"),
-    )
-
-
-def _codex_binary() -> str:
-    return str(setting(load_config(), "providers.codex.binary", "CODEX_BIN"))
+    return (backend or setting(config, "roles.reviewer", "REVIEWER")).strip()
 
 
 def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str, Any]:
     selected = _selected_backend(backend)
-    if selected == "opencode":
-        return check_opencode(timeout=timeout, role="reviewer")
-    if selected != "codex":
-        return {"name": "reviewer", "status": "error", "error": f"unknown reviewer backend: {selected}"}
-    return _check_codex_reviewer(timeout=timeout)
-
-
-def _check_codex_reviewer(timeout: int = 60) -> dict[str, Any]:
-    executable = shutil.which(_codex_binary())
-    if not executable:
-        return {"name": "reviewer", "status": "error", "error": "codex executable not found in PATH"}
-    model, effort = _codex_model_effort()
-    schema = {
-        "type": "object",
-        "properties": {"ok": {"type": "boolean"}},
-        "required": ["ok"],
-        "additionalProperties": False,
-    }
     try:
-        with tempfile.TemporaryDirectory(prefix="reviewer-health-") as temporary:
-            root = Path(temporary)
-            schema_path = root / "schema.json"
-            output_path = root / "result.json"
-            schema_path.write_text(json.dumps(schema), encoding="utf-8")
-            command = [
-                executable,
-                "exec",
-                "--ephemeral",
-                "--skip-git-repo-check",
-                "--sandbox",
-                "read-only",
-                "--model",
-                model,
-                "-c",
-                f'model_reasoning_effort="{effort}"',
-                "--output-schema",
-                str(schema_path),
-                "-o",
-                str(output_path),
-                "-C",
-                str(ROOT),
-                'Return exactly {"ok":true}. Do not include any other fields or text.',
-            ]
-            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=timeout, check=False)
-            if result.returncode != 0:
-                return {
-                    "name": "reviewer",
-                    "status": "error",
-                    "error": f"codex exited {result.returncode}: {(result.stderr or result.stdout)[-600:]}",
-                }
-            try:
-                payload = json.loads(output_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError) as exc:
-                return {"name": "reviewer", "status": "error", "error": f"invalid health response: {exc}"}
-            if not isinstance(payload, dict) or payload.get("ok") is not True:
-                return {"name": "reviewer", "status": "error", "error": f"unexpected health response: {payload!r}"}
-    except subprocess.TimeoutExpired:
-        return {"name": "reviewer", "status": "error", "error": f"codex health check timed out after {timeout}s"}
-    except OSError as exc:
-        return {"name": "reviewer", "status": "error", "error": str(exc)}
-    return {"name": "reviewer", "status": "ok", "model": model}
-
-
-def _run_codex_chapter_review(input_path: Path, output_path: Path, autonomous: bool = False) -> None:
-    model, effort = _codex_model_effort()
-    prompt = f"""
-你是日译中小说审阅者。对输入 JSON 中的整章译文做章节级一致性审阅。
-输入 JSON：{input_path}
-
-- 只报告会导致读者误解原文的实质错误，不做文学润色。
-- 不报告纯风格偏好、轻微措辞差异、可接受的自然化、标点偏好或普通敬称差异。
-- 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids。
-- 重点检查人物身份和关系、主客体、代词指代、漏译、擅自添加、术语固定译法、事实冲突、时间顺序、跨段落动作关系和明显改变的强度。
-- 当无法确定问题是否改变原意时，不要输出 fix。
-
-- fixes 只输出确实存在且属于 critical 或 major 的问题，category 只能使用 Schema 中的枚举。
-- replacement 必须是完整段落译文，而不是局部片段；不确定时为空字符串且 auto_apply=false。
-- {"全自动模式下，客观问题且置信度 >= 0.9 的 fix 设置 auto_apply=true。" if autonomous else "语义取舍或不确定改写设置 auto_apply=false。"}
-- glossary_delta 只收录后文仍有价值的人名、别名、组织、地点、特殊术语和固定称谓，不收录普通词或一次性短语。
-- memory_delta 只收录会影响后续章节翻译的人物、关系、别名、重要事实和持续状态。
-- chapter_state 只保存本章摘要和会影响后续理解的重要变化。
-- 如果没有问题，fixes、glossary_delta 和 memory_delta 都返回空数组。
-严格输出符合 {CHAPTER_SCHEMA} 的 JSON，不要 Markdown。
-""".strip()
-    command = [
-        _codex_binary(), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
-        "--model", model, "-c", f'model_reasoning_effort="{effort}"',
-        "--output-schema", str(CHAPTER_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
-    ]
-    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"Codex chapter review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")
-
-
-def _run_codex_global_consistency_review(input_path: Path, output_path: Path) -> None:
-    model, effort = _codex_model_effort()
-    prompt = f"""
-对输入 JSON 中的全书状态做一次轻量一致性审阅。
-输入 JSON：{input_path}
-
-- 必须把输入中的每个 chapter_id 写入 checked_chapters，且不得重复或添加未知章节。
-- 只检查 glossary、book_memory、章节摘要之间的事实、人物关系、时间线和术语冲突。
-- 不重新审阅全文，不做文学润色，不因为不同章节的正常措辞差异而报告问题。
-- conflicts 只输出有证据的冲突；recommendations 只给出后续人工或定向章节复核建议。
-严格输出符合 {GLOBAL_SCHEMA} 的 JSON，不要 Markdown。
-""".strip()
-    command = [
-        _codex_binary(), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
-        "--model", model, "-c", f'model_reasoning_effort="{effort}"',
-        "--output-schema", str(GLOBAL_SCHEMA), "-o", str(output_path), "-C", str(ROOT), prompt,
-    ]
-    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"Codex global consistency review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")
-
-
-def _opencode_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: Path, autonomous: bool) -> str:
-    if kind == "chapter":
-        instructions = """
-这是章节级一致性审阅。
-- 只报告会导致读者误解原文的实质错误，不做文学润色。
-- 不报告纯风格偏好、轻微措辞差异、可接受的自然化、标点偏好或普通敬称差异。
-- 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids。
-- 重点检查人物身份和关系、主客体、代词指代、漏译、擅自添加、术语固定译法、事实冲突、时间顺序、跨段落动作关系和明显改变的强度。
-- 当无法确定问题是否改变原意时，不要输出 fix。
-- fixes 只输出确实存在且属于 critical 或 major 的问题；replacement 必须是完整段落译文。
-- glossary_delta 只收录后文仍有价值的人名、别名、组织、地点、特殊术语和固定称谓。
-- memory_delta 只收录会影响后续章节翻译的人物、关系、别名、重要事实和持续状态。
-- chapter_state 只保存本章摘要和会影响后续理解的重要变化。
-""".strip()
-    elif kind == "global":
-        instructions = """
-这是全书状态的一致性审阅。
-- 必须把输入中的每个 chapter_id 写入 checked_chapters，且不得重复或添加未知章节。
-- 只检查 glossary、book_memory、章节摘要之间的事实、人物关系、时间线和术语冲突。
-- 不重新审阅全文，不做文学润色，不因为不同章节的正常措辞差异而报告问题。
-- conflicts 只输出有证据的冲突；recommendations 只给出后续人工或定向章节复核建议。
-""".strip()
-    else:
-        raise ValueError(f"未知 OpenCode reviewer 类型：{kind}")
-    auto_rule = (
-        "全自动模式下，所有置信度 >= 0.9 且有明确修复的项目设置 auto_apply=true。"
-        if autonomous
-        else "涉及语义取舍、风格偏好或不确定改写时，auto_apply=false 且 replacement 为空。"
-    )
-    schema = schema_path.read_text(encoding="utf-8")
-    return f"""
-你是日译中小说译文审阅者。只分析输入 JSON，不修改文件，不调用外部工具。
-{instructions}
-- {auto_rule}
-- glossary 是已有术语表；不得与已有术语冲突。
-
-严格只输出一个 JSON 对象，不要 Markdown、解释、推理或前后缀。
-JSON Schema：
-{schema}
-
-输入 JSON：
-{json.dumps(input_payload, ensure_ascii=False)}
-""".strip()
-
-
-def _run_opencode_review(kind: str, input_path: Path, output_path: Path, autonomous: bool = False) -> None:
-    try:
-        input_payload = json.loads(input_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"OpenCode reviewer input is invalid: {input_path}: {exc}") from exc
-    schema_path = {
-        "chapter": CHAPTER_SCHEMA,
-        "global": GLOBAL_SCHEMA,
-    }[kind]
-    try:
-        output = run_prompt(
-            _opencode_review_prompt(kind, input_payload, schema_path, autonomous),
-            role="reviewer",
-            timeout=int(setting(load_config(), "providers.opencode.timeout", "OPENCODE_REVIEW_TIMEOUT")),
-        )
-        payload = parse_json_object(output)
-    except (ValueError, RuntimeError) as exc:
-        raise RuntimeError(f"OpenCode {kind} review failed: {exc}") from exc
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        provider = get_provider(selected)
+        return provider.health_check(timeout=timeout)
+    except Exception as exc:
+        return {"name": f"reviewer:{selected}", "status": "error", "error": str(exc)}
 
 
 def run_chapter_review(input_path: Path, output_path: Path, autonomous: bool = False, *, backend: str | None = None) -> None:
     selected = _selected_backend(backend)
-    if selected == "opencode":
-        _run_opencode_review("chapter", input_path, output_path, autonomous)
-        return
-    if selected == "codex":
-        _run_codex_chapter_review(input_path, output_path, autonomous)
-        return
-    raise ValueError(f"未知 reviewer backend：{selected}")
+    try:
+        input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
+    provider = get_provider(selected)
+    payload = provider.review("chapter", input_payload, CHAPTER_SCHEMA, autonomous=autonomous)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def run_global_consistency_review(input_path: Path, output_path: Path, *, backend: str | None = None) -> None:
     selected = _selected_backend(backend)
-    if selected == "opencode":
-        _run_opencode_review("global", input_path, output_path)
-        return
-    if selected == "codex":
-        _run_codex_global_consistency_review(input_path, output_path)
-        return
-    raise ValueError(f"未知 reviewer backend：{selected}")
+    try:
+        input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
+    provider = get_provider(selected)
+    payload = provider.review("global", input_payload, GLOBAL_SCHEMA, autonomous=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def review_book(
@@ -448,90 +262,94 @@ def review_book(
         glossary, term_summary = merge_term_updates(
             glossary,
             review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []),
-            chunk_id=f"chapter-{c_id}",
+            c_id,
         )
-        memory, memory_summary = merge_memory_delta(memory, review["memory_delta"], chapter_id=c_id)
-        chapter_state = merge_chapter_state(
-            read_json(workspace.chapter_states_dir / f"{c_id}.json", {"chapter_id": c_id}),
-            review["chapter_state"],
-            chapter_id=c_id,
-        )
-        chapter_state.update({"status": "reviewed", "checked": len(expected), "fixes": len(fixes)})
+        memory, mem_summary = merge_memory_delta(memory, review["memory_delta"], c_id)
+        write_json(workspace.glossary_path, glossary)
+        write_json(workspace.book_memory_path, memory)
+        write_json(workspace.novel_translator_terms_path, novel_translator_terms(glossary))
+        chapter_state = merge_chapter_state(c_id, str(chapter.get("title", "")), review["chapter_state"])
         write_json(workspace.chapter_states_dir / f"{c_id}.json", chapter_state)
+        report_path = workspace.reports_dir / f"{c_id}.json"
+        write_json(report_path, {
+            "book": book,
+            "chapter_id": c_id,
+            "reviewed_at": utc_now(),
+            "checked_paragraphs": len(expected),
+            "reported_issues": len(review["fixes"]),
+            "applied_fixes": len(fixes) if apply else 0,
+            "approved_fixes": fixes,
+            "term_summary": term_summary,
+            "memory_summary": mem_summary,
+            "applied": applied_fixes,
+        })
         results.append({
             "chapter_id": c_id,
-            "checked": len(expected),
             "issues": len(review["fixes"]),
             "fixes": len(fixes),
             "applied": applied_fixes,
-            "term_updates": term_summary,
-            "memory_delta": memory_summary,
         })
 
-    write_json(workspace.glossary_path, glossary)
-    write_json(workspace.book_memory_path, memory)
-    terms_path = workspace.data_dir / "novel-translator-terms.json"
-    write_json(terms_path, novel_translator_terms(glossary))
-    terminology = call_novel_translator("import-terminology", "--book", book, "--input", str(terms_path))
-    quality = call_novel_translator("quality-report", "--book", book)
-    report = {"book": book, "chapters": results, "terminology": terminology, "quality": quality, "updated_at": utc_now()}
+    global_report = None
     if global_consistency:
-        chapter_states = []
-        for chapter in chapters:
-            c_id = str(chapter.get("id", ""))
-            state = read_json(workspace.chapter_states_dir / f"{c_id}.json", None)
-            if state:
-                chapter_states.append(state)
         global_input = workspace.reviews_dir / "global-consistency-input.json"
         global_output = workspace.reviews_dir / "global-consistency-output.json"
+        states = {
+            c["id"]: read_json(workspace.chapter_states_dir / f"{c['id']}.json", {})
+            for c in all_chapters
+            if (workspace.chapter_states_dir / f"{c['id']}.json").exists()
+        }
         write_json(global_input, {
             "book": book,
-            "chapter_ids": [str(c.get("id", "")) for c in chapters],
-            "glossary": glossary,
+            "chapters": [{"id": c["id"], "title": c.get("title", ""), "state": states.get(c["id"], {})} for c in all_chapters],
             "book_memory": memory,
-            "chapter_states": chapter_states,
+            "glossary": glossary.get("terms", []),
         })
         run_global_consistency_review(global_input, global_output, backend=reviewer)
-        global_review = read_json(global_output)
-        expected_chapters = {str(c.get("id", "")) for c in chapters}
-        global_review = validate_global_consistency_payload(global_review, expected_chapters)
-        report["global_consistency"] = global_review
-    write_json(workspace.reports_dir / "chapter-consistency.json", report)
+        global_payload = read_json(global_output)
+        validate_global_consistency_payload(global_payload, {str(c["id"]) for c in all_chapters})
+        global_report = workspace.reports_dir / "global-consistency.json"
+        write_json(global_report, {
+            "book": book,
+            "reviewed_at": utc_now(),
+            "conflicts": global_payload.get("conflicts", []),
+            "recommendations": global_payload.get("recommendations", []),
+        })
+
     if export:
-        output = workspace.root / f"{workspace.root.name}-中文.epub"
-        validation = call_novel_translator("validate-export", "--book", book, "--format", "epub")
-        exported = call_novel_translator("export", "--book", book, "--format", "epub", "--output", str(output), "--monolingual")
-        epub_validation = call_novel_translator("validate-epub", "--path", str(output))
-        report["export"] = {"output": str(output), "validation": validation, "exported": exported, "epub_validation": epub_validation}
-        write_json(workspace.reports_dir / "chapter-consistency.json", report)
-    return report
+        call_novel_translator("export-epub", "--book", book, "--output", str(workspace.epub_path))
+    return {
+        "status": "ok",
+        "book": book,
+        "name": name,
+        "reviewed_chapters": len(results),
+        "results": results,
+        "global_consistency": str(global_report) if global_report else None,
+    }
 
 
-def cli_main() -> None:
-    config = load_config()
-    parser = argparse.ArgumentParser(description="Run chapter-level consistency review")
-    parser.add_argument("--book", required=True)
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--output-root", type=Path, default=ROOT / config["paths"]["output_root"])
-    parser.add_argument("--chapter-id")
-    parser.add_argument("--all", action="store_true", help="审阅 manifest 中的全部已翻译章节")
-    parser.add_argument("--global-consistency", action="store_true", help="章节审阅后检查全书状态之间的一致性")
-    parser.add_argument("--translation-policy", type=Path, default=ROOT / config["paths"]["translation_policy"])
-    parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--autonomous", action="store_true")
-    parser.add_argument("--export", action="store_true")
-    parser.add_argument(
-        "--reviewer",
-        default=setting(config, "roles.reviewer", "REVIEWER"),
-        choices=["codex", "opencode"],
-        help="审阅后端",
-    )
-    args = parser.parse_args()
-    report = review_book(
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chapter consistency reviewer")
+    parser.add_argument("--book", required=True, help="Novel Translator book id")
+    parser.add_argument("--name", required=True, help="output/ 下的书籍目录名和中文书名")
+    parser.add_argument("--output-root", type=Path, default=ROOT / "output")
+    parser.add_argument("--chapter", default=None, help="只审阅特定章节 ID")
+    parser.add_argument("--global-consistency", action="store_true", help="整书全部章节审阅完成后执行全书一致性检查")
+    parser.add_argument("--translation-policy", type=Path, default=None)
+    parser.add_argument("--apply", action="store_true", help="应用高置信度客观修复")
+    parser.add_argument("--autonomous", action="store_true", help="全自动模式，仅对客观高置信度修复置 auto_apply=true")
+    parser.add_argument("--export", action="store_true", help="审阅完成后导出 EPUB")
+    parser.add_argument("--reviewer", default=None, help="审阅 backend 名称")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    review_book(
         book=args.book,
         name=args.name,
         output_root=args.output_root,
-        chapter_id=args.chapter_id,
+        chapter_id=args.chapter,
         global_consistency=args.global_consistency,
         translation_policy=args.translation_policy,
         apply=args.apply,
@@ -539,8 +357,12 @@ def cli_main() -> None:
         export=args.export,
         reviewer=args.reviewer,
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+cli_main = main
 
 
 if __name__ == "__main__":
-    cli_main()
+    sys.exit(main())
+

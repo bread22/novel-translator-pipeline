@@ -47,12 +47,12 @@ class OpenCodeBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             translator = ProviderTranslator(novel_root=Path(temporary), manifest=Path(temporary) / "manifest.json")
             with patch(
-                "translator.providers.translator.run_prompt",
-                return_value=json.dumps({"items": [{"id": "__healthcheck__", "text": "测试"}]}),
+                "translator.providers.opencode.run_prompt",
+                return_value=json.dumps({"ok": True}),
             ) as run:
                 result = translator.health_check("opencode", timeout=3)
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(run.call_args.kwargs["role"], "translator")
+        self.assertEqual(run.call_args.kwargs["role"], "reviewer")
 
     def test_chapter_review_writes_opencode_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -61,7 +61,7 @@ class OpenCodeBackendTests(unittest.TestCase):
             output_path = root / "output.json"
             input_path.write_text(json.dumps({"items": [{"id": "p1", "source": "原文", "translated": "译文"}]}), encoding="utf-8")
             with patch(
-                "translator.review.reviewer.run_prompt",
+                "translator.providers.opencode.run_prompt",
                 return_value=json.dumps({"checked_ids": ["p1"], "fixes": [], "glossary_delta": {"add": [], "update": []}, "memory_delta": {"add": [], "update": []}, "chapter_state": {}}),
             ):
                 run_chapter_review(input_path, output_path, backend="opencode")

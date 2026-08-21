@@ -6,12 +6,18 @@ from pathlib import Path
 import re
 import tempfile
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from translator.core.config import load_config, setting
-from translator.providers.antigravity_bridge import extract_json_object
-from translator.providers.opencode import OpenCodeError, model_for, run_prompt
+from translator.providers.base import (
+    extract_json_object,
+    normalized_text,
+    parse_translation_items,
+    previous_context_overlap,
+    provider_block_reason,
+    repeated_content,
+    validate_translation_items,
+)
+from translator.providers.registry import get_provider
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -31,109 +37,8 @@ def _terms(root: Path, book: str) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _parse_translation(content: str) -> list[dict[str, str]]:
-    payload = extract_json_object(content)
-    items = payload.get("items")
-    if not isinstance(items, list):
-        raise ValueError("翻译响应缺少 items 数组")
-    result: list[dict[str, str]] = []
-    for item in items:
-        if not isinstance(item, dict) or not str(item.get("id", "")).strip():
-            raise ValueError("翻译响应包含无效 items 项")
-        result.append({"id": str(item["id"]).strip(), "text": str(item.get("text", ""))})
-    return result
-
-
-def _normalized_text(text: str) -> str:
-    """Normalize line wrapping while keeping content and punctuation intact."""
-    return re.sub(r"\s+", "", text.replace("\\n", "\n"))
-
-
-def _repeated_content(text: str) -> dict[str, Any] | None:
-    """Return a diagnostic when a response repeats a substantial line."""
-    lines = [
-        re.sub(r"\s+", " ", line).strip()
-        for line in text.replace("\\n", "\n").splitlines()
-        if line.strip()
-    ]
-    counts = Counter(line for line in lines if len(line) >= 24)
-    for line, count in counts.items():
-        if count >= 2:
-            return {"kind": "repeated_line", "count": count, "sample": line[:160]}
-    return None
-
-
-def _previous_context_overlap(text: str, payload: dict[str, Any], item_id: str) -> dict[str, Any] | None:
-    """Reject a single-item response that copies a whole previous translation."""
-    haystack = _normalized_text(text)
-    context = payload.get("context", {}) if isinstance(payload, dict) else {}
-    previous = context.get("previous", []) if isinstance(context, dict) else []
-    for item in previous:
-        if not isinstance(item, dict) or str(item.get("id", "")) == item_id:
-            continue
-        translated = str(item.get("translated", ""))
-        candidate = _normalized_text(translated)
-        if len(candidate) >= 48 and candidate in haystack:
-            return {
-                "kind": "previous_context_overlap",
-                "source_id": str(item.get("id", "")),
-                "sample": translated[:160],
-            }
-    return None
-
-
-def _validate_translation_items(items: list[dict[str, str]], payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Guard the manifest against truncation, repetition, and context feedback."""
-    requested = payload.get("items", []) if isinstance(payload, dict) else []
-    sources = {
-        str(item.get("id", "")): str(item.get("text", ""))
-        for item in requested
-        if isinstance(item, dict) and str(item.get("id", "")).strip()
-    }
-    for item in items:
-        item_id = str(item.get("id", "")).strip()
-        text = str(item.get("text", "")).strip()
-        if not text:
-            return {"kind": "empty_translation", "id": item_id}
-        source = sources.get(item_id, "")
-        max_chars = max(512, len(source) * 6 + 256)
-        if len(text) > max_chars:
-            return {
-                "kind": "output_too_long",
-                "id": item_id,
-                "text_chars": len(text),
-                "source_chars": len(source),
-                "max_chars": max_chars,
-            }
-        repeated = _repeated_content(text)
-        if repeated:
-            return {"id": item_id, **repeated}
-        overlap = _previous_context_overlap(text, payload, item_id)
-        if overlap:
-            return {"id": item_id, **overlap}
-    return None
-
-
-def _plain_single_translation(content: str, requested: list[dict[str, Any]]) -> list[dict[str, str]] | None:
-    """Accept a bounded plain-text answer from LM Studio for one fallback item."""
-    if len(requested) != 1:
-        return None
-    text = str(content).strip()
-    if not text or text.startswith("{") or text.startswith("["):
-        return None
-    source = str(requested[0].get("text", ""))
-    if len(text) > max(512, len(source) * 6 + 256):
-        return None
-    return [{"id": str(requested[0].get("id", "")), "text": text}]
-
-
-def _estimate_local_input_tokens(system_prompt: str, payload: dict[str, Any]) -> int:
-    user_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return len(system_prompt) + len(user_json) + 256
-
-
 class ProviderTranslator:
-    """Direct provider adapter; Novel Translator remains a storage/export tool."""
+    """Direct provider adapter orchestrator; Novel Translator remains a storage/export tool."""
 
     def __init__(self, *, novel_root: Path, manifest: Path, timeout: int = 600) -> None:
         self.novel_root = novel_root
@@ -141,94 +46,17 @@ class ProviderTranslator:
         self.timeout = timeout
         self.config = load_config()
 
-    def _provider_config(self, provider: str) -> tuple[str, str, str]:
-        if provider == "antigravity":
-            base_url = setting(self.config, "providers.antigravity.base_url", "ANTIGRAVITY_BASE_URL")
-            model = setting(self.config, "providers.antigravity.model", "ANTIGRAVITY_MODEL")
-            api_key = setting(self.config, "providers.antigravity.api_key", "ANTIGRAVITY_API_KEY")
-        elif provider == "lmstudio":
-            base_url = setting(self.config, "providers.lmstudio.base_url", "LMSTUDIO_BASE_URL")
-            model = setting(self.config, "providers.lmstudio.model", "LMSTUDIO_MODEL")
-            api_key = setting(self.config, "providers.lmstudio.api_key", "LMSTUDIO_API_KEY")
-        else:
-            raise ValueError(f"未知翻译 provider：{provider}")
-        return base_url.rstrip("/"), model, api_key
-
-    @staticmethod
-    def _health_error(result: dict[str, Any]) -> str:
-        parts = [str(result.get(key, "")) for key in ("reason", "error", "validation") if result.get(key)]
-        return "; ".join(parts)[:800] or "provider returned an unusable response"
-
     def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
-        """Verify endpoint, configured model, and one real translation-shaped request."""
-        if provider == "opencode":
-            payload = {
-                "source_language": "ja",
-                "target_language": "zh-Hans",
-                "quality_profile": {"requirements": ["只输出 JSON，不要解释。"]},
-                "items": [{"id": "__healthcheck__", "text": "テスト"}],
-            }
-            items, result = self._request(provider, payload, max_tokens=512, timeout=timeout)
-            if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
-                return {
-                    "name": "translator:opencode",
-                    "status": "error",
-                    "model": model_for("translator") or "(configured default)",
-                    "error": self._health_error(result),
-                }
-            return {
-                "name": "translator:opencode",
-                "status": "ok",
-                "model": model_for("translator") or "(configured default)",
-            }
         try:
-            base_url, model, api_key = self._provider_config(provider)
-            request = Request(
-                f"{base_url}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                method="GET",
-            )
-            with urlopen(request, timeout=timeout) as response:
-                models_payload = _load_json_from_text(response.read().decode("utf-8", errors="replace"))
-            model_ids = {
-                str(item.get("id"))
-                for item in models_payload.get("data", [])
-                if isinstance(item, dict) and item.get("id")
-            }
-            if model not in model_ids:
-                return {
-                    "name": f"translator:{provider}",
-                    "status": "error",
-                    "base_url": base_url,
-                    "model": model,
-                    "error": f"configured model not listed; available={sorted(model_ids)}",
-                }
-            payload = {
-                "source_language": "ja",
-                "target_language": "zh-Hans",
-                "quality_profile": {"requirements": ["只输出 JSON，不要解释。"]},
-                "items": [{"id": "__healthcheck__", "text": "テスト"}],
-            }
-            items, result = self._request(provider, payload, max_tokens=512, timeout=timeout)
-            if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
-                return {
-                    "name": f"translator:{provider}",
-                    "status": "error",
-                    "base_url": base_url,
-                    "model": model,
-                    "error": self._health_error(result),
-                }
-            return {
-                "name": f"translator:{provider}",
-                "status": "ok",
-                "base_url": base_url,
-                "model": model,
-            }
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError, KeyError) as exc:
-            return {"name": f"translator:{provider}", "status": "error", "error": str(exc)[:800]}
+            adapter = get_provider(provider, self.config)
+            return adapter.health_check(timeout=timeout)
+        except Exception as exc:
+            return {"name": f"provider:{provider}", "status": "error", "error": str(exc)[:800]}
 
     def _system_prompt(self, provider: str) -> str:
-        if provider == "lmstudio":
+        p_cfg = self.config.get("providers", {}).get(provider, {})
+        p_type = p_cfg.get("type", provider)
+        if provider == "lmstudio" or p_type == "openai" and int(p_cfg.get("context_tokens", 65536)) < 16384:
             return (
                 "你是备用日中小说翻译器。把用户 payload 中每个 source 翻译成自然、忠实的简体中文。"
                 "严格只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。"
@@ -280,159 +108,30 @@ class ProviderTranslator:
         }
         return payload, {str(item["id"]): str(item.get("source", "")) for item in selected}
 
-    def _request_opencode(
-        self,
-        payload: dict[str, Any],
-        max_tokens: int,
-        timeout: int | None = None,
-    ) -> tuple[list[dict[str, str]], dict[str, Any]]:
-        prompt = (
-            "你是 Novel Translator 的日译中翻译后端。\n"
-            "严格遵守下面的翻译系统要求和 JSON payload。\n"
-            "只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。\n"
-            "不要输出 Markdown、解释、推理、标题、编号或 JSON 之外的文字。\n"
-            f"翻译系统要求：\n{self._system_prompt('opencode')}\n\n"
-            "JSON payload：\n"
-            f"{json.dumps(payload, ensure_ascii=False)}\n\n"
-            f"最多输出约 {max_tokens} 个 token；必须覆盖 payload.items 中的全部 ID，保持顺序。"
-        )
-        try:
-            content = run_prompt(prompt, role="translator", timeout=timeout or self.timeout)
-        except OpenCodeError as exc:
-            return [], {
-                "status": "blocked" if exc.reason == "content_filter" else "error",
-                "provider": "opencode",
-                "reason": exc.reason,
-                "error": str(exc),
-            }
-        common = {"provider": "opencode", "raw_response": content[:4000]}
-        try:
-            items = _parse_translation(content)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return [], {**common, "status": "error", "reason": "output_format", "error": str(exc)}
-        validation = _validate_translation_items(items, payload)
-        if validation:
-            return [], {
-                **common,
-                "status": "error",
-                "reason": "output_format",
-                "error": "翻译响应未通过完整性校验",
-                "validation": validation,
-            }
-        return items, {**common, "status": "ok"}
-
     def _request(self, provider: str, payload: dict[str, Any], max_tokens: int, timeout: int | None = None) -> tuple[list[dict[str, str]], dict[str, Any]]:
-        if provider == "opencode":
-            return self._request_opencode(payload, max_tokens, timeout)
-        base_url, model, api_key = self._provider_config(provider)
-        requested = payload.get("items", []) if isinstance(payload, dict) else []
-        source_chars = sum(
-            len(str(item.get("text", "")))
-            for item in requested
-            if isinstance(item, dict)
-        )
-        effective_max_tokens = max_tokens
-        if provider == "lmstudio":
-            effective_max_tokens = min(max_tokens, max(512, source_chars * 4 + 256))
-        request_payload: dict[str, Any] = payload
-        if provider == "lmstudio" and len(requested) == 1:
-            request_payload = {
-                "source_language": "auto",
-                "target_language": "zh-Hans",
-                "instructions": ["只翻译下面这一项 source；不要翻译上下文，不要添加标题、注释或说明。"],
-                "items": requested,
-            }
-        if provider == "lmstudio":
-            context_limit = int(setting(self.config, "providers.lmstudio.context_tokens", "LMSTUDIO_CONTEXT_TOKENS"))
-            estimated_input = _estimate_local_input_tokens(self._system_prompt(provider), request_payload)
-            available_output = context_limit - estimated_input - 128
-            if available_output < 512:
-                return self._request_local_split(payload, max_tokens, timeout)
-            effective_max_tokens = min(effective_max_tokens, available_output)
-        body_data: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": self._system_prompt(provider)},
-                {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
-            ],
-            "temperature": 0.3,
-            "max_tokens": effective_max_tokens,
-        }
-        body = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
-        request = Request(
-            f"{base_url}/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=timeout or self.timeout) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-                status = int(response.status)
-        except HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            text = raw.casefold()
-            reason = "content_filter" if any(marker in text for marker in ("provider_blocked", "sensitive words", "content policy", "prohibited use policy")) else "http_error"
-            return [], {"status": "blocked" if reason == "content_filter" else "error", "provider": provider, "reason": reason, "http_status": exc.code, "raw_response": raw[:4000]}
-        except (URLError, TimeoutError, OSError) as exc:
-            return [], {"status": "error", "provider": provider, "reason": "network", "error": str(exc)}
-        response = _load_json_from_text(raw)
-        choices = response.get("choices", []) if isinstance(response, dict) else []
-        choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
-        finish_reason = str(choice.get("finish_reason", "")).casefold() or None
-        content = choice.get("message", {}).get("content", "") if isinstance(choice.get("message"), dict) else ""
-        if isinstance(content, dict):
-            content = json.dumps(content, ensure_ascii=False)
-        common = {
-            "provider": provider,
-            "http_status": status,
-            "finish_reason": finish_reason,
-            "raw_response": raw[:4000],
-        }
-        if finish_reason == "length":
-            return [], {
-                **common,
-                "status": "error",
-                "reason": "output_format",
-                "error": "翻译响应达到 max_tokens，未接受截断结果",
-            }
-        if finish_reason == "content_filter":
-            return [], {**common, "status": "blocked", "reason": "content_filter"}
-        try:
-            items = _parse_translation(str(content))
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            plain_items = _plain_single_translation(str(content), requested)
-            if plain_items:
-                validation = _validate_translation_items(plain_items, payload)
-                if validation is None:
-                    return plain_items, {**common, "status": "ok", "raw_response": str(content)[:1000], "format": "plain_single_item"}
-            return [], {**common, "status": "error", "reason": "output_format", "error": str(exc)}
-        validation = _validate_translation_items(items, payload)
-        if validation:
-            return [], {
-                **common,
-                "status": "error",
-                "reason": "output_format",
-                "error": "翻译响应未通过完整性校验",
-                "validation": validation,
-            }
-        return items, {**common, "status": "ok", "raw_response": str(content)[:1000]}
+        adapter = get_provider(provider, self.config)
+        system_prompt = self._system_prompt(provider)
+        items, result = adapter.translate(payload, system_prompt, max_tokens, timeout=timeout or self.timeout)
+        if result.get("status") == "error" and result.get("reason") == "context_overflow":
+            return self._request_local_split(provider, payload, max_tokens, timeout)
+        return items, result
 
     def _request_local_split(
         self,
+        provider: str,
         payload: dict[str, Any],
         max_tokens: int,
         timeout: int | None,
     ) -> tuple[list[dict[str, str]], dict[str, Any]]:
         items = payload.get("items", []) if isinstance(payload, dict) else []
         if not isinstance(items, list) or not items:
-            return [], {"status": "error", "provider": "lmstudio", "reason": "input_too_long", "error": "请求内容超过上下文限制且没有可分割项目"}
+            return [], {"status": "error", "provider": provider, "reason": "input_too_long", "error": "请求内容超过限制且没有可分割项目"}
 
         if len(items) == 1:
             item = items[0]
             source = str(item.get("text", "")) if isinstance(item, dict) else ""
             if len(source) < 2:
-                return [], {"status": "error", "provider": "lmstudio", "reason": "input_too_long", "error": "单个段落无法继续切分"}
+                return [], {"status": "error", "provider": provider, "reason": "input_too_long", "error": "单个段落无法继续切分"}
             midpoint = len(source) // 2
             left, right = source[:midpoint], source[midpoint:]
             item_id = str(item.get("id", "item"))
@@ -444,10 +143,10 @@ class ProviderTranslator:
                 parts.append(part)
             first = dict(payload, items=[parts[0]])
             second = dict(payload, items=[parts[1]])
-            first_items, first_result = self._request("lmstudio", first, max_tokens, timeout)
+            first_items, first_result = self._request(provider, first, max_tokens, timeout)
             if first_result.get("status") != "ok":
                 return [], {**first_result, "split": "first_half"}
-            second_items, second_result = self._request("lmstudio", second, max_tokens, timeout)
+            second_items, second_result = self._request(provider, second, max_tokens, timeout)
             if second_result.get("status") != "ok":
                 return [], {**second_result, "split": "second_half"}
             combined = {
@@ -455,17 +154,17 @@ class ProviderTranslator:
                 "text": "".join([str(first_items[0]["text"]), str(second_items[0]["text"])])
                 if first_items and second_items else "",
             }
-            return [combined], {"status": "ok", "provider": "lmstudio", "split": "single_item_halves"}
+            return [combined], {"status": "ok", "provider": provider, "split": "single_item_halves"}
 
         midpoint = max(1, len(items) // 2)
         results: list[dict[str, str]] = []
         for label, subset in (("first_half", items[:midpoint]), ("second_half", items[midpoint:])):
             part_payload = dict(payload, items=subset)
-            part_items, part_result = self._request("lmstudio", part_payload, max_tokens, timeout)
+            part_items, part_result = self._request(provider, part_payload, max_tokens, timeout)
             if part_result.get("status") != "ok":
                 return [], {**part_result, "split": label}
             results.extend(part_items)
-        return results, {"status": "ok", "provider": "lmstudio", "split": "item_halves", "parts": 2}
+        return results, {"status": "ok", "provider": provider, "split": "item_halves", "parts": 2}
 
     def __call__(self, provider: str, book: str, ids: list[str], *, source_chars: int, max_tokens: int) -> dict[str, Any]:
         if not ids:
@@ -509,11 +208,3 @@ class ProviderTranslator:
             Path(temporary.name).replace(self.manifest)
         finally:
             Path(temporary.name).unlink(missing_ok=True)
-
-
-def _load_json_from_text(text: str) -> dict[str, Any]:
-    try:
-        value = json.loads(text)
-        return value if isinstance(value, dict) else {}
-    except json.JSONDecodeError:
-        return {}

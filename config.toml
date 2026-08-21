@@ -6,16 +6,13 @@ translation_policy = "docs/prompts/translation-policy.md"
 
 [roles]
 primary_translator = "antigravity"
-fallback_translator = "lmstudio"
+fallback_translators = ["opencode", "lmstudio"]
+fallback_translator = "opencode"
+secondary_fallback_translator = "lmstudio"
 reviewer = "opencode"
 
-[providers.lmstudio]
-base_url = "http://127.0.0.1:1234/v1"
-model = "murasaki-14b-v0.2"
-api_key = "lm-studio"
-context_tokens = 8192
-
 [providers.antigravity]
+type = "antigravity"
 base_url = "http://127.0.0.1:1235/v1"
 api_key = "antigravity"
 host = "127.0.0.1"
@@ -28,15 +25,33 @@ concurrency = 1
 context_tokens = 1048576
 
 [providers.opencode]
+type = "opencode"
 binary = "opencode"
 model = "opencode/muse-spark-1.2-contributor-free"
 agent = ""
 timeout = 600
 
+[providers.lmstudio]
+type = "openai"
+base_url = "http://127.0.0.1:1234/v1"
+model = "murasaki-14b-v0.2"
+api_key = "lm-studio"
+context_tokens = 8192
+timeout = 600
+
 [providers.codex]
+type = "codex"
 binary = "codex"
 model = ""
 reasoning_effort = ""
+timeout = 600
+
+[providers.online_api]
+type = "openai"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key = "sk-..."
+context_tokens = 65536
 timeout = 600
 
 [pipeline]

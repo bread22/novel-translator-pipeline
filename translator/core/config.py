@@ -38,6 +38,7 @@ def _schema_errors(value: Any, schema: dict[str, Any], root: dict[str, Any], pat
         "string": isinstance(value, str),
         "integer": isinstance(value, int) and not isinstance(value, bool),
         "boolean": isinstance(value, bool),
+        "array": isinstance(value, list),
     }.get(expected, True)
     if not type_ok:
         return errors + [f"{path}: 类型应为 {expected}"]
@@ -51,9 +52,21 @@ def _schema_errors(value: Any, schema: dict[str, Any], root: dict[str, Any], pat
             for key in value:
                 if key not in properties:
                     errors.append(f"{path}.{key}: schema 未定义此字段")
+        elif isinstance(schema.get("additionalProperties"), dict):
+            for key, child_val in value.items():
+                if key not in properties:
+                    errors.extend(_schema_errors(child_val, schema["additionalProperties"], root, f"{path}.{key}"))
         for key, child in properties.items():
             if key in value:
                 errors.extend(_schema_errors(value[key], child, root, f"{path}.{key}"))
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            errors.append(f"{path}: 元素数量小于最小值 {schema['minItems']}")
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            errors.append(f"{path}: 元素数量大于最大值 {schema['maxItems']}")
+        if "items" in schema:
+            for index, item in enumerate(value):
+                errors.extend(_schema_errors(item, schema["items"], root, f"{path}[{index}]"))
     if isinstance(value, str):
         if len(value) < int(schema.get("minLength", 0)):
             errors.append(f"{path}: 字符串过短")
@@ -77,9 +90,29 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     if errors:
         raise ValueError(f"参数文件未通过 {CONFIG_SCHEMA_PATH.name}：{'; '.join(errors)}")
     providers = value["providers"]
-    for role, provider in value["roles"].items():
-        if provider not in providers:
-            raise ValueError(f"roles.{role} 引用了未定义 provider：{provider}")
+    roles = value["roles"]
+    
+    # Validate primary translator
+    primary = roles.get("primary_translator")
+    if primary and primary not in providers:
+        raise ValueError(f"roles.primary_translator 引用了未定义 provider：{primary}")
+        
+    # Validate reviewer
+    reviewer = roles.get("reviewer")
+    if reviewer and reviewer not in providers:
+        raise ValueError(f"roles.reviewer 引用了未定义 provider：{reviewer}")
+        
+    # Validate fallbacks
+    fallbacks = roles.get("fallback_translators")
+    if isinstance(fallbacks, list):
+        for fb in fallbacks:
+            if fb not in providers:
+                raise ValueError(f"roles.fallback_translators 引用了未定义 provider：{fb}")
+    if "fallback_translator" in roles and roles["fallback_translator"] not in providers:
+        raise ValueError(f"roles.fallback_translator 引用了未定义 provider：{roles['fallback_translator']}")
+    if "secondary_fallback_translator" in roles and roles["secondary_fallback_translator"] not in providers:
+        raise ValueError(f"roles.secondary_fallback_translator 引用了未定义 provider：{roles['secondary_fallback_translator']}")
+        
     return value
 
 
@@ -97,3 +130,28 @@ def setting(config: dict[str, Any], dotted: str, env_name: str | None = None) ->
     if env_name and env_name in os.environ:
         return os.environ[env_name]
     return config_value(config, dotted)
+
+
+def primary_translator_name(config: dict[str, Any]) -> str:
+    return str(setting(config, "roles.primary_translator", "PRIMARY_TRANSLATOR")).strip()
+
+
+def fallback_translators_names(config: dict[str, Any]) -> list[str]:
+    env_override = os.environ.get("FALLBACK_TRANSLATORS") or os.environ.get("FALLBACK_TRANSLATOR")
+    if env_override:
+        return [item.strip() for item in env_override.split(",") if item.strip()]
+    roles = config.get("roles", {})
+    if "fallback_translators" in roles and isinstance(roles["fallback_translators"], list):
+        return [str(item).strip() for item in roles["fallback_translators"] if str(item).strip()]
+    result: list[str] = []
+    if "fallback_translator" in roles:
+        result.append(str(roles["fallback_translator"]).strip())
+    if "secondary_fallback_translator" in roles:
+        sec = str(roles["secondary_fallback_translator"]).strip()
+        if sec and sec not in result:
+            result.append(sec)
+    return result or ["lmstudio"]
+
+
+def reviewer_name(config: dict[str, Any]) -> str:
+    return str(setting(config, "roles.reviewer", "REVIEWER")).strip()

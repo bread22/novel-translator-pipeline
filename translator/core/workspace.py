@@ -78,6 +78,10 @@ class BookWorkspace:
         return self.data_dir / "glossary.json"
 
     @property
+    def novel_translator_terms_path(self) -> Path:
+        return self.data_dir / "novel-translator-terms.json"
+
+    @property
     def progress_path(self) -> Path:
         return self.data_dir / "progress.json"
 
@@ -100,6 +104,14 @@ class BookWorkspace:
     @property
     def reports_dir(self) -> Path:
         return self.root / "reports"
+
+    @property
+    def epub_path(self) -> Path:
+        return self.root / f"{self.root.name}-中文.epub"
+
+    @property
+    def output_epub(self) -> Path:
+        return self.epub_path
 
     def initialize(self, source_epub: Path | None = None, *, book_id: str = "") -> None:
         for directory in (
@@ -133,8 +145,8 @@ class BookWorkspace:
 def merge_term_updates(
     glossary: dict[str, Any],
     updates: Iterable[dict[str, Any]],
+    chunk_id: str = "",
     *,
-    chunk_id: str,
     threshold: float = 0.9,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     terms = [dict(item) for item in glossary.get("terms", []) if isinstance(item, dict)]
@@ -217,8 +229,8 @@ def empty_book_memory(book: str = "") -> dict[str, Any]:
 def merge_memory_delta(
     memory: dict[str, Any],
     delta: dict[str, Any],
+    chapter_id: str = "",
     *,
-    chapter_id: str,
     threshold: float = 0.9,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Merge structured long-term memory without allowing a model to replace it wholesale."""
@@ -282,16 +294,33 @@ def merge_memory_delta(
 
 
 def merge_chapter_state(
-    state: dict[str, Any] | None,
-    delta: dict[str, Any],
+    chapter_id: str | dict[str, Any],
+    title: str | dict[str, Any] = "",
+    delta: dict[str, Any] | None = None,
     *,
-    chapter_id: str,
+    chapter_id_kw: str = "",
 ) -> dict[str, Any]:
-    current = dict(state or {"chapter_id": chapter_id})
+    if isinstance(chapter_id, dict):
+        current = dict(chapter_id)
+        delta_dict = title if isinstance(title, dict) else {}
+        for key, value in delta_dict.items():
+            if key not in {"chapter_id", "updated_at"}:
+                current[key] = value
+        if chapter_id_kw:
+            current["chapter_id"] = chapter_id_kw
+        current["status"] = "reviewed"
+        current["updated_at"] = utc_now()
+        return current
+
+    cid = str(chapter_id)
+    current = {
+        "chapter_id": cid,
+        "title": str(title),
+        "status": "reviewed",
+        "updated_at": utc_now(),
+    }
     if isinstance(delta, dict):
         for key, value in delta.items():
             if key not in {"chapter_id", "updated_at"}:
                 current[key] = value
-    current["chapter_id"] = chapter_id
-    current["updated_at"] = utc_now()
     return current

@@ -72,14 +72,18 @@ def _model(provider: str, _role: str, _novel_root: Path | None = None) -> str:
     return "(configured default)"
 
 
-def _provider_counts(provenance: dict[str, Any], primary: str, fallback: str) -> tuple[dict[str, int], dict[str, str]]:
+def _provider_counts(provenance: dict[str, Any], providers: list[str]) -> tuple[dict[str, int], dict[str, str]]:
     counts = Counter()
     origins: dict[str, str] = {}
     for item_id, item in provenance.get("items", {}).items():
         provider = str(item.get("provider", "unknown"))
         counts[provider] += 1
         origins[str(item_id)] = provider
-    return {primary: counts[primary], fallback: counts[fallback]}, origins
+    result = {p: counts[p] for p in providers}
+    for p, c in counts.items():
+        if p not in result:
+            result[p] = c
+    return result, origins
 
 
 def _diagnostic_summary(diagnostics: dict[str, Any], primary: str, _fallback: str) -> dict[str, Any]:
@@ -101,17 +105,14 @@ def _diagnostic_summary(diagnostics: dict[str, Any], primary: str, _fallback: st
     return {key: reasons[key] for key in sorted(reasons)}
 
 
-def _review_summary(workspace: Path, origins: dict[str, str], primary: str, fallback: str) -> dict[str, Any]:
+def _review_summary(workspace: Path, origins: dict[str, str], providers: list[str]) -> dict[str, Any]:
     reported = 0
     applied = 0
     reported_by_origin = Counter()
     applied_by_origin = Counter()
     categories = Counter()
-    categories_by_origin = {
-        primary: Counter(),
-        fallback: Counter(),
-        "unknown": Counter(),
-    }
+    categories_by_origin: dict[str, Counter] = {p: Counter() for p in providers}
+    categories_by_origin["unknown"] = Counter()
     chapters = 0
     paragraphs = 0
     for output in sorted(workspace.glob("reviews/c????-output.json")):
@@ -139,19 +140,33 @@ def _review_summary(workspace: Path, origins: dict[str, str], primary: str, fall
             applied += len(items)
             for fix in items:
                 applied_by_origin[origins.get(str(fix.get("id", "")), "unknown")] += 1
+
+    all_keys = list(providers)
+    if "unknown" not in all_keys:
+        all_keys.append("unknown")
+
+    fallback_categories = Counter()
+    for p in providers[1:]:
+        fallback_categories.update(categories_by_origin[p])
+
+    primary_name = providers[0] if providers else "primary"
+    fix_categories: dict[str, Any] = {
+        "total": {key: categories[key] for key in sorted(categories)},
+        "primary": {key: categories_by_origin[primary_name][key] for key in sorted(categories_by_origin[primary_name])},
+        "fallback": {key: fallback_categories[key] for key in sorted(fallback_categories)},
+    }
+    for p in providers[1:]:
+        fix_categories[p] = {key: categories_by_origin[p][key] for key in sorted(categories_by_origin[p])}
+    fix_categories["unknown"] = {key: categories_by_origin["unknown"][key] for key in sorted(categories_by_origin["unknown"])}
+
     return {
         "reviewer_chapters": chapters,
         "reviewed_paragraphs": paragraphs,
         "fixes_reported": reported,
         "fixes_applied": applied,
-        "fixes_reported_by_translation_provider": {key: reported_by_origin[key] for key in (primary, fallback, "unknown")},
-        "fixes_applied_by_translation_provider": {key: applied_by_origin[key] for key in (primary, fallback, "unknown")},
-        "fix_categories_reported": {
-            "total": {key: categories[key] for key in sorted(categories)},
-            "primary": {key: categories_by_origin[primary][key] for key in sorted(categories_by_origin[primary])},
-            "fallback": {key: categories_by_origin[fallback][key] for key in sorted(categories_by_origin[fallback])},
-            "unknown": {key: categories_by_origin["unknown"][key] for key in sorted(categories_by_origin["unknown"])},
-        },
+        "fixes_reported_by_translation_provider": {key: reported_by_origin[key] for key in all_keys},
+        "fixes_applied_by_translation_provider": {key: applied_by_origin[key] for key in all_keys},
+        "fix_categories_reported": fix_categories,
     }
 
 
@@ -160,17 +175,40 @@ def generate_work_report(
     workspace: Path,
     book: str,
     primary_translator: str,
-    fallback_translator: str,
+    fallback_translator: str = "",
+    fallback_translators: list[str] | None = None,
     reviewer: str,
     novel_root: Path,
     manifest: dict[str, Any],
     layout: str = "preserve",
 ) -> Path:
+    fb_list: list[str] = []
+    if fallback_translators:
+        fb_list = list(fallback_translators)
+    elif fallback_translator:
+        fb_list = [fallback_translator]
+    else:
+        fb_list = ["opencode", "lmstudio"]
+
+    all_providers = [primary_translator] + [p for p in fb_list if p != primary_translator]
+
     provenance = _read_json(workspace / "data" / "translation-provenance.json", {"items": {}})
     diagnostics = _read_json(workspace / "data" / "provider-diagnostics.json", {"attempts": []})
-    counts, _origins = _provider_counts(provenance, primary_translator, fallback_translator)
+    counts, _origins = _provider_counts(provenance, all_providers)
     total = sum(counts.values())
-    review = _review_summary(workspace, _origins, primary_translator, fallback_translator)
+    review = _review_summary(workspace, _origins, all_providers)
+
+    fallbacks_payload = []
+    for fb in fb_list:
+        fb_count = counts.get(fb, 0)
+        fallbacks_payload.append({
+            "provider": fb,
+            "model": _model(fb, "translator", novel_root),
+            "paragraphs": fb_count,
+            "percentage": round(fb_count * 100 / total, 2) if total else 0,
+        })
+
+    first_fb = fb_list[0] if fb_list else "opencode"
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "report_type": "translation_work_report",
@@ -186,16 +224,17 @@ def generate_work_report(
             "primary": {
                 "provider": primary_translator,
                 "model": _model(primary_translator, "translator", novel_root),
-                "paragraphs": counts[primary_translator],
-                "percentage": round(counts[primary_translator] * 100 / total, 2) if total else 0,
+                "paragraphs": counts.get(primary_translator, 0),
+                "percentage": round(counts.get(primary_translator, 0) * 100 / total, 2) if total else 0,
             },
+            "fallbacks": fallbacks_payload,
             "fallback": {
-                "provider": fallback_translator,
-                "model": _model(fallback_translator, "translator", novel_root),
-                "paragraphs": counts[fallback_translator],
-                "percentage": round(counts[fallback_translator] * 100 / total, 2) if total else 0,
+                "provider": first_fb,
+                "model": _model(first_fb, "translator", novel_root),
+                "paragraphs": counts.get(first_fb, 0),
+                "percentage": round(counts.get(first_fb, 0) * 100 / total, 2) if total else 0,
             },
-            "fallback_reasons": _diagnostic_summary(diagnostics, primary_translator, fallback_translator),
+            "fallback_reasons": _diagnostic_summary(diagnostics, primary_translator, first_fb),
         },
         "review": {
             "provider": reviewer,

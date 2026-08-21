@@ -518,6 +518,7 @@ class IterativePipeline:
             workspace=self.workspace.root,
             book=self.book,
             primary_translator=self.primary_translator,
+            fallback_translators=self.fallback_translators,
             fallback_translator=self.fallback_translator,
             reviewer=self.reviewer,
             novel_root=NOVEL_TRANSLATOR_ROOT,

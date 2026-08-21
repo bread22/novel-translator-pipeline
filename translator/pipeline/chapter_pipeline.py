@@ -336,6 +336,14 @@ class IterativePipeline:
                 recovered = True
                 break
 
+        if not recovered and len(fallback_ids) > 1:
+            for item in paragraphs:
+                if str(item["id"]) in {str(p["id"]) for p in self._chapter_pending_paragraphs(chapter_id)}:
+                    self._translate_segment_with_recovery(chapter_id, [item], attempts, depth + 1)
+            remaining_after = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+            if not (set(ids) & remaining_after):
+                return
+
         if not recovered:
             unresolved = sorted(set(ids) & {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)})
             raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 from typing import Any
 
 from translator.core.config import load_config, setting
@@ -85,6 +86,7 @@ def run_prompt(
     model: str | None = None,
     binary: str | None = None,
     agent: str | None = None,
+    max_retries: int = 3,
 ) -> str:
     if timeout <= 0:
         raise ValueError("OpenCode timeout 必须大于 0")
@@ -98,32 +100,51 @@ def run_prompt(
     chosen_agent = agent if agent is not None else _agent_for(role)
     if chosen_agent:
         command.extend(["--agent", chosen_agent])
-    try:
-        result = subprocess.run(
-            command,
-            cwd=ROOT,
-            input=prompt,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise OpenCodeError(f"opencode timed out after {timeout}s", reason="timeout") from exc
-    except OSError as exc:
-        raise OpenCodeError(str(exc), reason="network") from exc
-    combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    lowered = combined.casefold()
-    if any(marker in lowered for marker in ("content policy", "sensitive words", "prohibited use policy", "content_filter", "provider_blocked")):
-        reason = "content_filter"
-    else:
-        reason = "process"
-    if result.returncode != 0:
-        raise OpenCodeError(f"opencode exited {result.returncode}: {combined[-2000:]}", reason=reason)
-    output = _event_text(result.stdout)
-    if not output:
-        raise OpenCodeError(f"opencode returned no assistant text: {combined[-1000:]}", reason="output_format")
-    return output
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                input=prompt,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_error = OpenCodeError(f"opencode timed out after {timeout}s", reason="timeout")
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise last_error from exc
+        except OSError as exc:
+            last_error = OpenCodeError(str(exc), reason="network")
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise last_error from exc
+        combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        lowered = combined.casefold()
+        if any(marker in lowered for marker in ("content policy", "sensitive words", "prohibited use policy", "content_filter", "provider_blocked")):
+            raise OpenCodeError(f"opencode blocked: {combined[-2000:]}", reason="content_filter")
+        if result.returncode != 0:
+            last_error = OpenCodeError(f"opencode exited {result.returncode}: {combined[-2000:]}", reason="process")
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise last_error
+        output = _event_text(result.stdout)
+        if not output:
+            last_error = OpenCodeError(f"opencode returned no assistant text: {combined[-1000:]}", reason="output_format")
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise last_error
+        return output
+    if last_error:
+        raise last_error
+    raise OpenCodeError("opencode failed", reason="process")
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -286,12 +307,22 @@ class OpenCodeProvider(BaseProvider):
         timeout: int | None = None,
     ) -> dict[str, Any]:
         prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
-        content = run_prompt(
-            prompt,
-            role="reviewer",
-            timeout=timeout or self.timeout,
-            model=self.model or None,
-            binary=self.binary or None,
-            agent=self.agent or None,
-        )
-        return parse_json_object(content)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                content = run_prompt(
+                    prompt,
+                    role="reviewer",
+                    timeout=timeout or self.timeout,
+                    model=self.model or None,
+                    binary=self.binary or None,
+                    agent=self.agent or None,
+                )
+                return parse_json_object(content)
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(3)
+        if last_error:
+            raise last_error
+        raise RuntimeError("OpenCode review failed")

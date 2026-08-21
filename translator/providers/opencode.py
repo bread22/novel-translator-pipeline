@@ -122,9 +122,7 @@ def run_prompt(
         raise OpenCodeError(f"opencode exited {result.returncode}: {combined[-2000:]}", reason=reason)
     output = _event_text(result.stdout)
     if not output:
-        output = result.stdout.strip()
-    if not output:
-        raise OpenCodeError("opencode returned no assistant text", reason="output_format")
+        raise OpenCodeError(f"opencode returned no assistant text: {combined[-1000:]}", reason="output_format")
     return output
 
 

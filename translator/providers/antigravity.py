@@ -58,14 +58,21 @@ class AntigravityProvider(BaseProvider):
             "text",
             "--print-timeout",
             f"{eff_timeout}s",
-            "--print",
-            prompt,
+            "--input-format",
+            "text",
         ]
         acquired = self.slots.acquire(timeout=eff_timeout)
         if not acquired:
             raise TimeoutError("等待 Antigravity 槽位超时")
         try:
-            result = subprocess.run(command, text=True, capture_output=True, timeout=eff_timeout, check=False)
+            result = subprocess.run(
+                command,
+                input=prompt,
+                text=True,
+                capture_output=True,
+                timeout=eff_timeout,
+                check=False,
+            )
         finally:
             self.slots.release()
         if result.returncode != 0:

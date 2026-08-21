@@ -26,13 +26,10 @@ class ConfigTests(unittest.TestCase):
         fallbacks = fallback_translators_names(config)
         self.assertEqual(fallbacks, ["opencode", "lmstudio"])
 
-    def test_reviewer_model_comes_from_opencode_provider(self) -> None:
+    def test_reviewer_configured_in_providers(self) -> None:
         config = load_config()
-        self.assertEqual(config["roles"]["reviewer"], "opencode")
-        self.assertEqual(
-            setting(config, "providers.opencode.model", "OPENCODE_MODEL"),
-            config["providers"]["opencode"]["model"],
-        )
+        self.assertIn(reviewer_name(config), config["providers"])
+        self.assertIn("model", config["providers"][reviewer_name(config)])
 
     def test_schema_rejects_undefined_provider_role(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -172,6 +172,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 targeted_translator=targeted,
                 primary_translator="antigravity",
                 fallback_translators=["opencode", "lmstudio"],
+                split_on_content_filter=True,
                 primary_batch_max_chars=100,
             )
             pipeline.initialize()
@@ -242,7 +243,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=tool_call, chapter_reviewer=lambda _input, _output: None,
-                translated_root=root / "translated",
+                translated_root=root / "translated", layout="preserve",
             )
             pipeline.initialize()
             result = pipeline.finalize()
@@ -297,6 +298,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 targeted_translator=targeted,
                 primary_translator="antigravity",
                 fallback_translators=["opencode"],
+                split_on_content_filter=True,
                 max_provider_split_depth=1,
                 primary_batch_max_chars=1000,
             )
@@ -309,6 +311,59 @@ class PipelineFunctionTests(unittest.TestCase):
                 ("opencode", ("p1", "p2")),
                 ("antigravity", ("p3", "p4")),
                 ("opencode", ("p3", "p4")),
+            ])
+
+    def test_immediate_fallback_on_content_filter_without_split(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = {
+                "title": "测试",
+                "chapters": [{
+                    "id": "c1",
+                    "title": "第1章",
+                    "paragraphs": [
+                        {"id": "p1", "source": "源1", "translated": ""},
+                        {"id": "p2", "source": "源2", "translated": ""},
+                        {"id": "p3", "source": "源3", "translated": ""},
+                        {"id": "p4", "source": "源4", "translated": ""},
+                    ],
+                }],
+            }
+            manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "测试")
+            calls: list[tuple[str, tuple[str, ...]]] = []
+
+            def targeted(provider: str, _book: str, ids: list[str], **_kwargs: Any) -> dict:
+                calls.append((provider, tuple(ids)))
+                if provider == "opencode":
+                    return {"status": "blocked", "reason": "content_filter", "error": "explicit sexual content"}
+                if provider == "gemini":
+                    # gemini translates all
+                    current = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    for p in current["chapters"][0]["paragraphs"]:
+                        if p["id"] in ids:
+                            p["translated"] = f"译-{p['id']}"
+                    manifest_path.write_text(json.dumps(current), encoding="utf-8")
+                    return {"status": "ok", "summary": {"translated": len(ids)}}
+                return {"status": "error", "error": "unknown"}
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                tool_call=lambda *_args: {"status": "ok"},
+                targeted_translator=targeted,
+                primary_translator="opencode",
+                fallback_translators=["gemini", "muse"],
+                split_on_content_filter=False,
+                primary_batch_max_chars=1000,
+            )
+            pipeline.initialize()
+            result = pipeline._translate_chapter("c1", 1)
+            self.assertEqual(result["translated"], 4)
+            # opencode blocked -> immediately fallback to gemini with all 4 items, NO binary split!
+            self.assertEqual(calls, [
+                ("opencode", ("p1", "p2", "p3", "p4")),
+                ("gemini", ("p1", "p2", "p3", "p4")),
             ])
 
 

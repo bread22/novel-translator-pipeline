@@ -5,15 +5,16 @@ output_root = "output"
 translation_policy = "docs/prompts/translation-policy.md"
 
 [roles]
-primary_translator = "opencode"
-fallback_translators = ["antigravity"]
-fallback_translator = "antigravity"
+primary_translator = "gemini"
+fallback_translators = ["muse", "mimo", "hy3"]
+fallback_translator = "muse"
+secondary_fallback_translator = "mimo"
 reviewer = "opencode_reviewer"
 
 [providers.opencode]
 type = "opencode"
 binary = "opencode"
-model = "opencode/x-preview-f-free"
+model = "opencode/muse-spark-1.2-contributor-free"
 agent = ""
 timeout = 600
 
@@ -21,6 +22,36 @@ timeout = 600
 type = "opencode"
 binary = "opencode"
 model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
+
+[providers.gemini]
+type = "antigravity"
+agy = "agy"
+model = "gemini-3.7-flash"
+effort = "low"
+timeout = 600
+concurrency = 1
+context_tokens = 1048576
+
+[providers.muse]
+type = "opencode"
+binary = "opencode"
+model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
+
+[providers.mimo]
+type = "opencode"
+binary = "opencode"
+model = "opencode/mimo-v2.5-free"
+agent = ""
+timeout = 600
+
+[providers.hy3]
+type = "opencode"
+binary = "opencode"
+model = "opencode/hy3-free"
 agent = ""
 timeout = 600
 
@@ -67,8 +98,9 @@ timeout = 600
 [pipeline]
 max_cycles = 1000
 max_chapter_batches = 1000
-primary_batch_max_chars = 4000
+primary_batch_max_chars = 1500 # 适中批次大小（约 15~20 段），保证最高文学润色与上下文质量
 max_provider_split_depth = 2 # 遇到审查/格式错误时最多允许二分拆分深度；设为 2 表示最多二分 2 次即直接转入 fallback
+split_on_content_filter = false # 遇到审查/模型内部拒答时是否二分；设为 false 时立即触发 fallback 不进行二分
 translation_max_tokens = 8192
 health_check_timeout = 60
 layout = "preserve"

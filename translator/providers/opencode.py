@@ -13,6 +13,7 @@ from translator.providers.base import (
     BaseProvider,
     build_review_prompt,
     parse_translation_items,
+    provider_block_reason,
     validate_translation_items,
 )
 
@@ -283,6 +284,9 @@ class OpenCodeProvider(BaseProvider):
                 "error": str(exc),
             }
         common = {"provider": self.name, "raw_response": content[:4000]}
+        block = provider_block_reason(content)
+        if block:
+            return [], {**common, "status": "blocked", "reason": "content_filter"}
         try:
             items = parse_translation_items(content)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:

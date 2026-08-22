@@ -81,6 +81,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="第二级备用翻译器",
     )
+    parser.add_argument("--split-on-content-filter", action=argparse.BooleanOptionalAction, default=pipeline.get("split_on_content_filter", False), help="遇到审查/模型内部拒答时是否二分；默认 False（立即 fallback）")
     parser.add_argument("--translation-max-tokens", type=int, default=pipeline.get("translation_max_tokens", 8192), help="单个翻译窗口的最大输出 token")
     parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
     parser.add_argument("--autonomous", action="store_true", help="全自动应用置信度 >= 0.9 的有效修复")
@@ -140,6 +141,7 @@ class IterativePipeline:
         primary_batch_max_chars: int | None = None,
         primary_translator: str | None = None,
         max_provider_split_depth: int | None = None,
+        split_on_content_filter: bool | None = None,
         fallback_translators: list[str] | None = None,
         fallback_translator: str | None = None,
         secondary_fallback_translator: str | None = None,
@@ -170,6 +172,11 @@ class IterativePipeline:
         self.primary_translator = primary_translator or primary_translator_name(config)
         eff_split_depth = max_provider_split_depth if max_provider_split_depth is not None else int(pipeline_cfg.get("max_provider_split_depth", 2))
         self.max_provider_split_depth = max(0, eff_split_depth)
+        self.split_on_content_filter = (
+            split_on_content_filter
+            if split_on_content_filter is not None
+            else bool(pipeline_cfg.get("split_on_content_filter", False))
+        )
 
         # Configure fallback chain
         if fallback_translators:
@@ -313,7 +320,13 @@ class IterativePipeline:
         if not (set(ids) & remaining):
             self._record_translation_provenance(ids, primary_translator)
             return
-        if len(ids) > 1 and depth < self.max_provider_split_depth and reason in {"content_filter", "output_format", "provider_blocked"}:
+        should_split = (
+            len(ids) > 1
+            and depth < self.max_provider_split_depth
+            and reason in {"content_filter", "output_format", "provider_blocked"}
+            and (reason not in {"content_filter", "provider_blocked"} or self.split_on_content_filter)
+        )
+        if should_split:
             midpoint = max(1, len(ids) // 2)
             left = [item for item in paragraphs[:midpoint] if str(item["id"]) in remaining]
             right = [item for item in paragraphs[midpoint:] if str(item["id"]) in remaining]
@@ -574,6 +587,7 @@ def main() -> int:
         primary_batch_max_chars=args.primary_batch_max_chars,
         primary_translator=args.primary_translator,
         max_provider_split_depth=args.max_provider_split_depth,
+        split_on_content_filter=args.split_on_content_filter,
         fallback_translators=args.fallback_translators,
         fallback_translator=args.fallback_translator,
         secondary_fallback_translator=args.secondary_fallback_translator,

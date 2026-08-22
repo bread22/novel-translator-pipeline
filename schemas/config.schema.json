@@ -55,6 +55,7 @@
         "max_provider_split_depth": {"type": "integer", "minimum": 0},
         "translation_max_tokens": {"type": "integer", "minimum": 1},
         "health_check_timeout": {"type": "integer", "minimum": 1},
+        "split_on_content_filter": {"type": "boolean"},
         "layout": {"enum": ["preserve", "horizontal"]}
       }
     },

@@ -75,7 +75,8 @@
         "apply": {"type": "boolean"},
         "autonomous": {"type": "boolean"},
         "finalize": {"type": "boolean"},
-        "stop_on_error": {"type": "boolean"}
+        "stop_on_error": {"type": "boolean"},
+        "layout": {"enum": ["preserve", "horizontal"]}
       }
     }
   },

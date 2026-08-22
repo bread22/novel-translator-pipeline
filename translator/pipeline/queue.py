@@ -68,7 +68,7 @@ def ensure_book(source: Path, registered: dict[str, str]) -> str:
     if digest in registered:
         return registered[digest]
     name = display_name(source)
-    status, payload, raw = novel_call(["add-book", "--path", str(source), "--title", name, "--id", requested_book_id(name)])
+    status, payload, raw = novel_call(["add-book", "--path", str(source.resolve()), "--title", name, "--id", requested_book_id(name)])
     if status or not isinstance(payload, dict):
         raise RuntimeError(f"add-book failed: {raw[-1000:]}")
     book = str(payload.get("summary", {}).get("book", "")).strip()

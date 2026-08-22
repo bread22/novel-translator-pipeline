@@ -27,7 +27,7 @@ class PreflightError(RuntimeError):
 
 def run_preflight(
     translator: ProviderTranslator,
-    timeout: int = 60,
+    timeout: int | None = None,
     *,
     primary_translator: str | None = None,
     fallback_translators: list[str] | str | None = None,
@@ -38,6 +38,7 @@ def run_preflight(
     dual_review: bool | None = None,
 ) -> dict[str, Any]:
     config = load_config()
+    eff_timeout = timeout or int(config.get("pipeline", {}).get("health_check_timeout", 120))
     primary = primary_translator or primary_translator_name(config)
     rev = reviewer or reviewer_name(config)
     sec_rev = secondary_reviewer or secondary_reviewer_name(config)
@@ -61,15 +62,15 @@ def run_preflight(
     else:
         fbs = fallback_translators_names(config)
 
-    checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=rev)]
+    checks: list[dict[str, Any]] = [check_reviewer(timeout=eff_timeout, backend=rev)]
     if is_dual and sec_rev and sec_rev != rev:
-        checks.append(check_reviewer(timeout=timeout, backend=sec_rev))
+        checks.append(check_reviewer(timeout=eff_timeout, backend=sec_rev))
     checked_providers: set[str] = set()
 
     for provider in [primary] + fbs:
         if provider and provider not in checked_providers:
             checked_providers.add(provider)
-            checks.append(translator.health_check(provider, timeout=timeout))
+            checks.append(translator.health_check(provider, timeout=eff_timeout))
 
     report = {
         "status": "ok" if all(item.get("status") == "ok" for item in checks) else "error",

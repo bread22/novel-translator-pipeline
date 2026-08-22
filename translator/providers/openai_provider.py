@@ -53,12 +53,20 @@ class OpenAIProvider(BaseProvider):
         if raw_key.startswith("$"):
             env_var = raw_key[1:]
             self.api_key = os.environ.get(env_var, "")
+            if not self.api_key:
+                from translator.core.config import _load_dotenv
+                _load_dotenv()
+                self.api_key = os.environ.get(env_var, "")
         elif raw_key and raw_key not in {"sk-...", "lm-studio"}:
             self.api_key = raw_key
         else:
             provider_env = f"{name.upper()}_API_KEY"
             if provider_env in os.environ:
                 self.api_key = os.environ[provider_env]
+            elif "gemini" in name.lower() or "googleapis.com" in self.base_url:
+                self.api_key = os.environ.get("GEMINI_API_KEY", raw_key or "lm-studio")
+            elif "nvidia" in name.lower() or "nvidia.com" in self.base_url:
+                self.api_key = os.environ.get("NVIDIA_API_KEY", raw_key or "lm-studio")
             elif "deepseek" in name.lower() or "deepseek.com" in self.base_url:
                 self.api_key = os.environ.get("DEEPSEEK_API_KEY", raw_key or "lm-studio")
             else:
@@ -66,6 +74,10 @@ class OpenAIProvider(BaseProvider):
         self.context_tokens = int(config.get("context_tokens", 8192))
         self.timeout = int(config.get("timeout", 600))
         self.headers = dict(config.get("headers", {}))
+        self.chat_template_kwargs = dict(config.get("chat_template_kwargs", {}))
+        self.extra_body = dict(config.get("extra_body", {}))
+        if "thinking" in config:
+            self.chat_template_kwargs["thinking"] = bool(config["thinking"])
 
     def _make_headers(self) -> dict[str, str]:
         headers = {
@@ -178,6 +190,10 @@ class OpenAIProvider(BaseProvider):
             "max_tokens": effective_max_tokens,
             "response_format": {"type": "json_object"},
         }
+        if self.chat_template_kwargs:
+            body_data["chat_template_kwargs"] = self.chat_template_kwargs
+        if self.extra_body:
+            body_data.update(self.extra_body)
 
         try:
             raw, status, _ = self._post_chat(body_data, effective_timeout)
@@ -259,6 +275,10 @@ class OpenAIProvider(BaseProvider):
             ],
             "temperature": 0.2,
         }
+        if self.chat_template_kwargs:
+            body_data["chat_template_kwargs"] = self.chat_template_kwargs
+        if self.extra_body:
+            body_data.update(self.extra_body)
         try:
             raw, status, _ = self._post_chat(body_data, effective_timeout)
         except HTTPError as exc:

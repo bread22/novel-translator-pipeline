@@ -83,6 +83,10 @@ def extract_json_object(text: str) -> dict[str, Any]:
     candidates = [text.strip()]
     if "```" in text:
         candidates.extend(block.removeprefix("json").strip() for block in text.split("```")[1::2])
+    # Also add candidates with auto-closed braces for slight trailing truncations
+    for base_c in list(candidates):
+        for suffix in ("]}", "}", "\"]}", "\"}"):
+            candidates.append(base_c + suffix)
     decoder = json.JSONDecoder()
     found: list[dict[str, Any]] = []
     for candidate in candidates:

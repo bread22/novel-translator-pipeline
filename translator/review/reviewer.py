@@ -93,24 +93,22 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
         raise ValueError("章节审阅结果必须包含 checked_ids 和 fixes 数组")
     if not isinstance(glossary_delta, dict) or not isinstance(memory_delta, dict) or not isinstance(chapter_state, dict):
         raise ValueError("章节审阅结果必须包含 glossary_delta、memory_delta 和 chapter_state 对象")
-    checked_ids = [str(item) for item in checked]
+    raw_checked_ids = [str(item) for item in checked]
+    # Filter checked_ids to expected IDs and deduplicate preserving order
+    seen = set()
+    checked_ids = []
+    for cid in raw_checked_ids:
+        if cid in expected_ids and cid not in seen:
+            seen.add(cid)
+            checked_ids.append(cid)
+    payload["checked_ids"] = checked_ids
+    # Filter fixes to only valid expected IDs
+    payload["fixes"] = [item for item in fixes if isinstance(item, dict) and str(item.get("id", "")) in expected_ids]
+
     received = set(checked_ids)
-    unknown = sorted(received - expected_ids)
     missing = sorted(expected_ids - received)
-    duplicate_ids = sorted({item for item in checked_ids if checked_ids.count(item) > 1})
-    fix_ids = {str(item.get("id", "")) for item in fixes if isinstance(item, dict)}
-    unknown_fixes = sorted(fix_ids - expected_ids)
-    details: list[str] = []
-    if unknown:
-        details.append(f"checked_ids 未知 ID：{', '.join(unknown)}")
     if missing:
-        details.append(f"checked_ids 缺少 ID：{', '.join(missing)}")
-    if duplicate_ids:
-        details.append(f"checked_ids 重复 ID：{', '.join(duplicate_ids)}")
-    if unknown_fixes:
-        details.append(f"fixes 未知 ID：{', '.join(unknown_fixes)}")
-    if details:
-        raise ValueError("章节审阅结果段落不匹配；" + "；".join(details))
+        raise ValueError(f"章节审阅结果段落不匹配；checked_ids 缺少 ID：{', '.join(missing)}")
     return payload
 
 

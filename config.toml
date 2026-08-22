@@ -5,14 +5,14 @@ output_root = "output"
 translation_policy = "docs/prompts/erotic-novel-policy.md"
 
 [roles]
-primary_translator = "muse"
-fallback_translators = ["gemini", "mimo", "hy3"]
-fallback_translator = "gemini"
-secondary_fallback_translator = "mimo"
-reviewer = "gemini"
-secondary_reviewer = "muse"
+primary_translator = "nemotron"
+fallback_translators = ["gemini_lite", "deepseek"]
+fallback_translator = "gemini_lite"
+secondary_fallback_translator = "deepseek"
+reviewer = "nemotron"
+secondary_reviewer = "gemini_lite"
 dual_review = true
-fallback_reviewers = ["hy3", "mimo"]
+fallback_reviewers = ["deepseek"]
 
 [providers.opencode]
 type = "opencode"
@@ -82,20 +82,38 @@ model = ""
 reasoning_effort = ""
 timeout = 600
 
+[providers.nemotron]
+type = "openai"
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "nvidia/nemotron-3-ultra-550b-a55b"
+api_key = "$NVIDIA_API_KEY"
+context_tokens = 131072
+timeout = 600
+thinking = false
+chat_template_kwargs = { thinking = false }
+
+[providers.gemini_lite]
+type = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-3.5-flash-lite"
+api_key = "$GEMINI_API_KEY"
+context_tokens = 1048576
+timeout = 600
+
 [providers.deepseek]
 type = "openai"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key = ""
-context_tokens = 1048576
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "deepseek-ai/deepseek-v4-flash-0731"
+api_key = "$NVIDIA_API_KEY"
+context_tokens = 131072
 timeout = 600
 
 [providers.online_api]
 type = "openai"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key = ""
-context_tokens = 1048576
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "deepseek-ai/deepseek-v4-flash-0731"
+api_key = "$NVIDIA_API_KEY"
+context_tokens = 131072
 timeout = 600
 
 [pipeline]
@@ -105,8 +123,8 @@ primary_batch_max_chars = 1500 # 适中批次大小（约 15~20 段），保证�
 max_provider_split_depth = 2 # 遇到审查/格式错误时最多允许二分拆分深度；设为 2 表示最多二分 2 次即直接转入 fallback
 split_on_content_filter = false # 遇到审查/模型内部拒答时是否二分；设为 false 时立即触发 fallback 不进行二分
 translation_max_tokens = 8192
-health_check_timeout = 60
-layout = "preserve"
+health_check_timeout = 120
+layout = "horizontal"
 
 [queue]
 source_root = "source"
@@ -114,4 +132,5 @@ max_cycles = 1000
 apply = true
 autonomous = true
 finalize = true
-stop_on_error = true
+stop_on_error = false
+layout = "horizontal"

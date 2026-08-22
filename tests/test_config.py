@@ -24,7 +24,7 @@ class ConfigTests(unittest.TestCase):
     def test_multi_level_fallback_translators(self) -> None:
         config = load_config()
         fallbacks = fallback_translators_names(config)
-        self.assertEqual(fallbacks, ["opencode", "lmstudio"])
+        self.assertEqual(fallbacks, ["antigravity"])
 
     def test_reviewer_configured_in_providers(self) -> None:
         config = load_config()

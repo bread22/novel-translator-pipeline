@@ -5,11 +5,24 @@ output_root = "output"
 translation_policy = "docs/prompts/translation-policy.md"
 
 [roles]
-primary_translator = "antigravity"
-fallback_translators = ["opencode", "lmstudio"]
-fallback_translator = "opencode"
-secondary_fallback_translator = "lmstudio"
-reviewer = "opencode"
+primary_translator = "opencode"
+fallback_translators = ["antigravity"]
+fallback_translator = "antigravity"
+reviewer = "opencode_reviewer"
+
+[providers.opencode]
+type = "opencode"
+binary = "opencode"
+model = "opencode/x-preview-f-free"
+agent = ""
+timeout = 600
+
+[providers.opencode_reviewer]
+type = "opencode"
+binary = "opencode"
+model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
 
 [providers.antigravity]
 type = "antigravity"
@@ -19,13 +32,6 @@ effort = "low"
 timeout = 600
 concurrency = 1
 context_tokens = 1048576
-
-[providers.opencode]
-type = "opencode"
-binary = "opencode"
-model = "opencode/muse-spark-1.2-contributor-free"
-agent = ""
-timeout = 600
 
 [providers.lmstudio]
 type = "openai"

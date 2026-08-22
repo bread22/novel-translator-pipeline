@@ -262,7 +262,7 @@ class IterativePipeline:
 
     def _translate_target(self, provider: str, ids: list[str], source_chars: int) -> dict[str, Any]:
         if self.targeted_translator is None:
-            if provider != "antigravity":
+            if provider != self.primary_translator:
                 raise RuntimeError("测试/兼容模式未配置 fallback translator")
             return self.tool_call(
                 "translate",

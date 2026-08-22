@@ -58,13 +58,19 @@ class PreflightTests(unittest.TestCase):
     def test_preflight_reports_all_provider_failures(self) -> None:
         translator = Mock()
         translator.health_check.side_effect = [
-            {"name": "translator:antigravity", "status": "error", "error": "bridge down"},
-            {"name": "translator:opencode", "status": "ok"},
+            {"name": "translator:opencode", "status": "error", "error": "opencode down"},
+            {"name": "translator:antigravity", "status": "ok"},
             {"name": "translator:lmstudio", "status": "ok"},
         ]
         with patch("translator.pipeline.preflight.check_reviewer", return_value={"name": "reviewer", "status": "error", "error": "codex down"}):
             with self.assertRaises(PreflightError) as context:
-                run_preflight(translator, timeout=3)
+                run_preflight(
+                    translator,
+                    timeout=3,
+                    primary_translator="opencode",
+                    fallback_translators=["antigravity", "lmstudio"],
+                    reviewer="codex",
+                )
         report = context.exception.report
         self.assertEqual(report["status"], "error")
         self.assertEqual([item["status"] for item in report["checks"]], ["error", "error", "ok", "ok"])

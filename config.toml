@@ -2,7 +2,7 @@
 
 [paths]
 output_root = "output"
-translation_policy = "docs/prompts/translation-policy.md"
+translation_policy = "docs/prompts/erotic-novel-policy.md"
 
 [roles]
 primary_translator = "muse"

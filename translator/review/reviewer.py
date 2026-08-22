@@ -151,6 +151,28 @@ def _selected_backend(backend: str | None = None) -> str:
     return (backend or setting(config, "roles.reviewer", "REVIEWER")).strip()
 
 
+def _review_backends(backend: str | None = None) -> list[str]:
+    config = load_config()
+    primary = (backend or setting(config, "roles.reviewer", "REVIEWER")).strip()
+    fallbacks = [
+        str(item).strip()
+        for item in config.get("roles", {}).get("fallback_reviewers", [])
+        if str(item).strip() and str(item).strip() != primary
+    ]
+    if not fallbacks:
+        fallbacks = [
+            str(item).strip()
+            for item in config.get("roles", {}).get("fallback_translators", [])
+            if str(item).strip() and str(item).strip() != primary
+        ]
+        primary_trans = str(config.get("roles", {}).get("primary_translator", "")).strip()
+        if primary_trans and primary_trans != primary and primary_trans not in fallbacks:
+            fallbacks.append(primary_trans)
+        if "muse" not in fallbacks and primary != "muse":
+            fallbacks.append("muse")
+    return [primary] + fallbacks
+
+
 def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str, Any]:
     selected = _selected_backend(backend)
     try:
@@ -161,27 +183,43 @@ def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str
 
 
 def run_chapter_review(input_path: Path, output_path: Path, autonomous: bool = False, *, backend: str | None = None) -> None:
-    selected = _selected_backend(backend)
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
-    provider = get_provider(selected)
-    payload = provider.review("chapter", input_payload, CHAPTER_SCHEMA, autonomous=autonomous)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    backends = _review_backends(backend)
+    last_exc = None
+    for candidate in backends:
+        try:
+            provider = get_provider(candidate)
+            payload = provider.review("chapter", input_payload, CHAPTER_SCHEMA, autonomous=autonomous)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            return
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise RuntimeError(f"所有审阅端均失败: {input_path.name}: {last_exc}") from last_exc
 
 
 def run_global_consistency_review(input_path: Path, output_path: Path, *, backend: str | None = None) -> None:
-    selected = _selected_backend(backend)
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
-    provider = get_provider(selected)
-    payload = provider.review("global", input_payload, GLOBAL_SCHEMA, autonomous=False)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    backends = _review_backends(backend)
+    last_exc = None
+    for candidate in backends:
+        try:
+            provider = get_provider(candidate)
+            payload = provider.review("global", input_payload, GLOBAL_SCHEMA, autonomous=False)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            return
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise RuntimeError(f"所有一致性审阅端均失败: {input_path.name}: {last_exc}") from last_exc
 
 
 def review_book(

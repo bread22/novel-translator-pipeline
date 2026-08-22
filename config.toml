@@ -5,11 +5,11 @@ output_root = "output"
 translation_policy = "docs/prompts/translation-policy.md"
 
 [roles]
-primary_translator = "gemini"
-fallback_translators = ["muse", "mimo", "hy3"]
-fallback_translator = "muse"
+primary_translator = "muse"
+fallback_translators = ["gemini", "mimo", "hy3"]
+fallback_translator = "gemini"
 secondary_fallback_translator = "mimo"
-reviewer = "opencode_reviewer"
+reviewer = "muse"
 
 [providers.opencode]
 type = "opencode"

@@ -157,14 +157,23 @@ class OpenAIProvider(BaseProvider):
                 "items": requested,
             }
 
+        system_instruction = (
+            "你是 Novel Translator 的专业日译中翻译后端。\n"
+            "只输出合规的单个 JSON 对象，格式严格为：{\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。\n"
+            "不要输出任何 Markdown、解释、说明、标题或 JSON 之外的文字。\n"
+            f"翻译系统规范：\n{system_prompt}\n\n"
+            "必须覆盖输入 payload items 中的全部 ID，并严格保持对应顺序。"
+        )
+
         body_data: dict[str, Any] = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": system_instruction},
                 {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
             ],
             "temperature": 0.3,
             "max_tokens": effective_max_tokens,
+            "response_format": {"type": "json_object"},
         }
 
         try:

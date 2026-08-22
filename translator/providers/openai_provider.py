@@ -133,7 +133,10 @@ class OpenAIProvider(BaseProvider):
         effective_timeout = timeout or self.timeout
         requested = payload.get("items", []) if isinstance(payload, dict) else []
         source_chars = sum(len(str(item.get("source", "") or item.get("text", ""))) for item in requested if isinstance(item, dict))
-        effective_max_tokens = min(max_tokens, max(2048, source_chars * 6 + 1024))
+        if self.context_tokens < 16384:
+            effective_max_tokens = min(max_tokens, max(512, source_chars * 4 + 256))
+        else:
+            effective_max_tokens = min(max_tokens, max(2048, source_chars * 6 + 1024))
 
         # Check local context window limit if bounded
         if self.context_tokens < 65536:

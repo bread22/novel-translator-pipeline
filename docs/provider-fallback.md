@@ -72,12 +72,20 @@ api_key = "lm-studio"
 context_tokens = 8192
 timeout = 600
 
+[providers.deepseek]
+type = "openai"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key = ""
+context_tokens = 1048576
+timeout = 600
+
 [providers.online_api]
 type = "openai"
 base_url = "https://api.deepseek.com/v1"
 model = "deepseek-chat"
-api_key = "sk-..."
-context_tokens = 65536
+api_key = ""
+context_tokens = 1048576
 timeout = 600
 ```
 

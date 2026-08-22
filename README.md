@@ -127,13 +127,22 @@ model = "gpt-5.6"
 reasoning_effort = "low"
 timeout = 600
 
-# --- 通用在线 API (DeepSeek / OpenRouter / SiliconFlow / OpenAI 等) ---
-[providers.online_api]
+# --- DeepSeek 官方 API (OpenAI 协议) ---
+[providers.deepseek]
 type = "openai"
 base_url = "https://api.deepseek.com/v1"                # API Base URL
-model = "deepseek-chat"                                 # 模型名称
-api_key = "sk-..."                                      # API Key (或设置 DEEPSEEK_API_KEY)
-context_tokens = 65536                                  # 上下文窗口
+model = "deepseek-chat"                                 # 默认模型 (V4 Flash)
+api_key = ""                                            # 留空时自动读取 .env 中的 DEEPSEEK_API_KEY
+context_tokens = 1048576                                # 1M 上下文窗口
+timeout = 600
+
+# --- 通用在线 API (OpenRouter / SiliconFlow / OpenAI 等) ---
+[providers.online_api]
+type = "openai"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key = ""
+context_tokens = 1048576
 timeout = 600
 
 # ==========================================
@@ -143,7 +152,7 @@ timeout = 600
 max_cycles = 1000                                       # 单次运行最大处理章节数
 max_chapter_batches = 1000                              # 单章推进最大批次数
 primary_batch_max_chars = 4000                          # 主译大窗口原文字符上限
-max_provider_split_depth = 8                            # 遇到审查时最大二分递归深度
+max_provider_split_depth = 2                            # 遇到审查时最大二分递归深度
 translation_max_tokens = 8192                           # 单次翻译最大输出 token
 health_check_timeout = 60                               # 启动预检超时秒数
 layout = "preserve"                                     # 默认导出版式: preserve (保持) 或 horizontal (横排)
@@ -163,8 +172,8 @@ stop_on_error = true
 ### 常见配置场景
 
 1. **接入 DeepSeek 作为主译**：
-   - 在 `[providers.online_api]` 填入 `api_key = "sk-..."`；
-   - 将 `[roles]` 的 `primary_translator` 设为 `"online_api"` 即可。
+   - 在 `.env` 中设置 `DEEPSEEK_API_KEY=sk-...`（或在 `config.toml` 中填入 `api_key`）；
+   - 将 `[roles]` 的 `primary_translator` 设为 `"deepseek"` 即可。
 2. **将 Codex 作为审阅者**：
    - 将 `[roles]` 的 `reviewer` 设为 `"codex"`。
 3. **临时指定配置文件**：

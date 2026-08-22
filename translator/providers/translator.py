@@ -63,9 +63,13 @@ class ProviderTranslator:
                 "严格只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。"
                 "不要输出分析、推理、解释、编号或 JSON 之外的文字；保留段落顺序。"
             )
-        path = self.novel_root / "prompts" / "novel_translation_system.md"
+        policy_rel = self.config.get("paths", {}).get("translation_policy", "docs/prompts/translation-policy.md")
+        path = self.novel_root / policy_rel
         if path.exists():
             return path.read_text(encoding="utf-8")
+        fallback_path = self.novel_root / "prompts" / "novel_translation_system.md"
+        if fallback_path.exists():
+            return fallback_path.read_text(encoding="utf-8")
         return "你是专业小说译者。严格忠实翻译输入内容，只输出 JSON。"
 
     def _payload(self, book: str, ids: list[str]) -> tuple[dict[str, Any], dict[str, str]]:

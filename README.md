@@ -9,6 +9,7 @@
 ## 核心特性
 
 - **通用 Provider 架构**：通过统一的 `BaseProvider` 适配器解耦角色与模型，支持 `antigravity` (Gemini)、`opencode`、`codex`、`openai` 兼容协议（本地 LM Studio / Ollama / 在线 DeepSeek、OpenRouter、SiliconFlow 等）；
+- **跨平台原生兼容 (Cross-Platform)**：基于纯 Python 3.11+ 标准库架构，无 C 编译扩展依赖，全量原生支持 Linux、macOS (Apple Silicon / Intel) 及 Windows 10/11；
 - **两级降级容灾回路 (Two-Level Fallback)**：主译遇敏感词安全审查拦截（`content_filter`）时，自动触发二分递归拆解；单段落仍受阻时，顺序降级至**一级备用**（如 OpenCode 指定模型），若仍受阻则无缝降级至**二级备用**（如 LM Studio 本地无审查模型），全程自动记录 Provenance 溯源；
 - **章节级长上下文一致性审阅**：每章全量翻译完成后，执行一次通用审阅，校验 100% `checked_ids` 覆盖率，自动提取并合并 Glossary 增量、Book Memory 事实记忆和 Chapter State 状态演进；
 - **高置信度客观缺陷自动写回**：仅对 `confidence >= 0.9`、`major/critical` 的客观错误（误译、漏译、主客体错位、事实冲突等）自动安全替换；
@@ -185,24 +186,42 @@ stop_on_error = true
 
 ### 1. 安装与环境准备
 
+本项目采用纯 Python 3.11+ 标准库构建，支持在 Linux、macOS 及 Windows 上直接运行。
+
+#### Linux / macOS (Bash / Zsh)
 ```bash
 # 1. 克隆本项目与底层 novel-translator
 git clone https://github.com/bread22/novel-translator-pipeline.git
 git clone https://github.com/OYcedar/novel-translator.git
 
-# 2. 初始化环境并配置路径
+# 2. 创建虚拟环境并配置
 cd novel-translator-pipeline
 python3 -m venv .venv
 source .venv/bin/activate
 cp .env.example .env
-# 编辑 .env 将 NOVEL_TRANSLATOR_ROOT 指向 novel-translator 本地目录
+# 编辑 .env 将 NOVEL_TRANSLATOR_ROOT 指向 novel-translator 本地目录（若不在默认 ~/src/novel-translator）
 ```
 
-本项目核心编排逻辑仅依赖 Python 标准库（需配合底层 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础 EPUB 处理能力）。请根据使用的 Provider 确保对应后端可用：
-- **Antigravity**：系统 `PATH` 中包含 `agy` CLI；
-- **OpenCode**：系统 `PATH` 中包含 `opencode` CLI；
-- **LM Studio**：本地启动 HTTP 服务（默认 `http://127.0.0.1:1234/v1`）；
-- **在线 API**：在 `config.toml` 或 `.env` 中配置 `api_key`（如 `DEEPSEEK_API_KEY`）与 `base_url`。
+#### Windows (PowerShell)
+```powershell
+# 1. 克隆本项目与底层 novel-translator
+git clone https://github.com/bread22/novel-translator-pipeline.git
+git clone https://github.com/OYcedar/novel-translator.git
+
+# 2. 创建虚拟环境并配置
+cd novel-translator-pipeline
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+Copy-Item .env.example .env
+# 编辑 .env 配置 NOVEL_TRANSLATOR_ROOT 或 API Key
+```
+
+> [!TIP]
+> 本项目核心编排逻辑仅依赖 Python 标准库（需配合底层 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础 EPUB 处理能力）。请根据配置的 Provider 确保对应后端可用：
+> - **Antigravity**：系统 `PATH` 中包含 `agy` CLI；
+> - **OpenCode**：系统 `PATH` 中包含 `opencode` CLI；
+> - **LM Studio / Ollama**：本地启动 HTTP 服务（默认 `http://127.0.0.1:1234/v1`）；
+> - **在线 API (DeepSeek / OpenAI 等)**：在 `config.toml` 或 `.env` 中配置 `api_key` 与 `base_url`。
 
 ### 2. 运行连通性预检
 
@@ -212,9 +231,19 @@ cp .env.example .env
 python scripts/preflight.py
 ```
 
-### 3. 启动章节翻译流水线
+### 3. 一键批量翻译队列 (推荐)
 
-从断点继续翻译并自动推进整本书：
+将所有待翻译的原始 EPUB 文件直接放入 `source/` 目录，执行批量队列脚本：
+
+```bash
+python scripts/batch_translate.py
+```
+
+流水线会自动遍历 `source/` 下所有 EPUB，顺序完成书籍注册、章节翻译、两级降级救回、一致性审阅与横排重构，并在项目根目录的 `translated/` 产出最终成品中文 EPUB。
+
+### 4. 单本书单步执行流水线
+
+如需单独推进某本特定书籍，可直接调用 `book_pipeline.py`：
 
 ```bash
 python scripts/book_pipeline.py \
@@ -232,7 +261,7 @@ python scripts/book_pipeline.py \
 - `--layout horizontal`：日文竖排小说自动重构为横排版式；
 - `--primary-translator` / `--fallback-translators` / `--reviewer`：可选临时覆盖 `config.toml` 中的角色分配。
 
-### 4. 独立章节审阅与全书一致性检查
+### 5. 独立章节审阅与全书一致性检查
 
 可随时单独对某一章节或整本书执行审阅：
 
@@ -254,6 +283,21 @@ python scripts/chapter_review.py \
 
 ---
 
+## 跨平台支持说明
+
+| 操作系统 | 支持状态 | 推荐环境与特性 |
+| :--- | :--- | :--- |
+| **Linux** (Ubuntu / Debian / Arch / Fedora 等) | ⭐️ 原生支持 | 项目原生开发与测试平台，配合系统 Python 3.11+ 或 venv 即可无缝运行。 |
+| **macOS** (Apple Silicon / Intel) | ⭐️ 完美支持 | 使用 Homebrew / pyenv 安装 Python 3.11+；Apple Silicon (M 系列芯片) 本地运行 LM Studio / Ollama 具备极佳的推理效率。 |
+| **Windows** (Windows 10 / 11) | ⭐️ 完全支持 | 推荐在 **Windows Terminal + PowerShell 7** 中运行；内置 Windows 非法路径字符安全过滤与全局 UTF-8 编码。 |
+
+> [!NOTE]
+> **Windows 用户注意事项**：
+> 1. **虚拟环境路径**：若单独配置了底层 `novel-translator` 的虚拟环境，可通过 `.env` 中的 `NOVEL_TRANSLATOR_PYTHON=C:/path/to/.venv/Scripts/python.exe` 显式指定。
+> 2. **终端字符编码**：建议在终端执行 `chcp 65001` 或使用 Windows Terminal，保证 UTF-8 日志正常渲染。
+
+---
+
 ## 运行测试
 
 ```bash
@@ -271,3 +315,4 @@ python3 -m py_compile translator/**/*.py scripts/*.py tests/*.py
 ## 开源协议 (License)
 
 本项目基于 [MIT License](LICENSE) 协议开源。
+

@@ -258,3 +258,9 @@ python3 -m py_compile translator/**/*.py scripts/*.py tests/*.py
 - [系统处理架构 (`docs/architecture.md`)](docs/architecture.md)
 - [两级降级容灾工作流 (`docs/provider-fallback.md`)](docs/provider-fallback.md)
 - [章节一致性审阅与长程记忆 (`docs/review-plan.md`)](docs/review-plan.md)
+
+---
+
+## 开源协议 (License)
+
+本项目基于 [MIT License](LICENSE) 协议开源。

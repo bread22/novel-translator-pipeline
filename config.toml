@@ -9,7 +9,7 @@ primary_translator = "muse"
 fallback_translators = ["gemini", "mimo", "hy3"]
 fallback_translator = "gemini"
 secondary_fallback_translator = "mimo"
-reviewer = "muse"
+reviewer = "gemini"
 
 [providers.opencode]
 type = "opencode"

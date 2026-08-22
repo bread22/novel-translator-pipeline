@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -48,7 +49,20 @@ class OpenAIProvider(BaseProvider):
         super().__init__(name, config)
         self.base_url = str(config.get("base_url", "http://127.0.0.1:1234/v1")).rstrip("/")
         self.model = str(config.get("model", ""))
-        self.api_key = str(config.get("api_key", "lm-studio"))
+        raw_key = str(config.get("api_key", "")).strip()
+        if raw_key.startswith("$"):
+            env_var = raw_key[1:]
+            self.api_key = os.environ.get(env_var, "")
+        elif raw_key and raw_key not in {"sk-...", "lm-studio"}:
+            self.api_key = raw_key
+        else:
+            provider_env = f"{name.upper()}_API_KEY"
+            if provider_env in os.environ:
+                self.api_key = os.environ[provider_env]
+            elif "deepseek" in name.lower() or "deepseek.com" in self.base_url:
+                self.api_key = os.environ.get("DEEPSEEK_API_KEY", raw_key or "lm-studio")
+            else:
+                self.api_key = os.environ.get("OPENAI_API_KEY", raw_key or "lm-studio")
         self.context_tokens = int(config.get("context_tokens", 8192))
         self.timeout = int(config.get("timeout", 600))
         self.headers = dict(config.get("headers", {}))

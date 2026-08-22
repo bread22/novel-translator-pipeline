@@ -9,6 +9,28 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_dotenv(dotenv_path: Path = ROOT / ".env") -> None:
+    if not dotenv_path.exists():
+        return
+    try:
+        content = dotenv_path.read_text(encoding="utf-8")
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
 CONFIG_PATH = Path(os.environ.get("TRANSLATOR_CONFIG", ROOT / "config.toml"))
 CONFIG_SCHEMA_PATH = ROOT / "schemas" / "config.schema.json"
 

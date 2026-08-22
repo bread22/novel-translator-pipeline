@@ -83,7 +83,8 @@ def parse_translation_items(content: str) -> list[dict[str, str]]:
     for item in items:
         if not isinstance(item, dict) or not str(item.get("id", "")).strip():
             raise ValueError("翻译响应包含无效 items 项")
-        result.append({"id": str(item["id"]).strip(), "text": str(item.get("text", ""))})
+        text = str(item.get("text", "") or item.get("translation", "") or item.get("translated", "") or item.get("target", "") or "")
+        result.append({"id": str(item["id"]).strip(), "text": text})
     return result
 
 

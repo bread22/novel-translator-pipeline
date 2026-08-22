@@ -8,10 +8,12 @@ import sys
 from typing import Any, Callable
 
 from translator.core.config import (
+    dual_review_enabled,
     fallback_translators_names,
     load_config,
     primary_translator_name,
     reviewer_name,
+    secondary_reviewer_name,
     setting,
 )
 from translator.core.layout import apply_horizontal_layout
@@ -92,6 +94,16 @@ def parse_args() -> argparse.Namespace:
         "--reviewer", dest="reviewer",
         default=reviewer_name(config),
         help="审阅后端",
+    )
+    parser.add_argument(
+        "--secondary-reviewer", dest="secondary_reviewer",
+        default=secondary_reviewer_name(config),
+        help="第二审阅后端（用于双模型独立审阅）",
+    )
+    parser.add_argument(
+        "--dual-review", action=argparse.BooleanOptionalAction,
+        default=dual_review_enabled(config),
+        help="是否启用双模型独立全量审阅",
     )
     return parser.parse_args()
 
@@ -574,6 +586,8 @@ def main() -> int:
             fallback_translator=args.fallback_translator,
             secondary_fallback_translator=args.secondary_fallback_translator,
             reviewer=args.reviewer,
+            secondary_reviewer=args.secondary_reviewer,
+            dual_review=args.dual_review,
         )
     except PreflightError as exc:
         print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
@@ -583,7 +597,14 @@ def main() -> int:
         workspace=workspace,
         manifest=manifest_path(args.book),
         targeted_translator=targeted_translator,
-        chapter_reviewer=lambda input_path, output_path: run_chapter_review(input_path, output_path, autonomous=args.autonomous, backend=args.reviewer),
+        chapter_reviewer=lambda input_path, output_path: run_chapter_review(
+            input_path,
+            output_path,
+            autonomous=args.autonomous,
+            backend=args.reviewer,
+            secondary_backend=args.secondary_reviewer,
+            dual_review=args.dual_review,
+        ),
         primary_batch_max_chars=args.primary_batch_max_chars,
         primary_translator=args.primary_translator,
         max_provider_split_depth=args.max_provider_split_depth,

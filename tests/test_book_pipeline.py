@@ -12,6 +12,7 @@ from translator.pipeline.chapter_pipeline import (
 )
 from translator.review.reviewer import (
     approved_fixes,
+    merge_chapter_reviews,
     missing_checked_ids,
     validate_chapter_review_payload,
     validate_global_consistency_payload,
@@ -50,6 +51,47 @@ class PipelineFunctionTests(unittest.TestCase):
             {"id": "c", "category": "terminology", "severity": "minor", "confidence": 0.99, "replacement": "轻微改写", "auto_apply": True},
         ]
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a"])
+
+    def test_merge_chapter_reviews_consensus_and_deduplication(self) -> None:
+        rev_a = {
+            "checked_ids": ["p1", "p2"],
+            "fixes": [
+                {"id": "p1", "category": "mistranslation", "severity": "major", "confidence": 0.92, "replacement": "修复A"},
+                {"id": "p2", "category": "omission", "severity": "major", "confidence": 0.88, "replacement": "修复A2"},
+            ],
+            "glossary_delta": {"add": [{"source": "東京", "target": "东京"}]},
+            "memory_delta": {"k1": "v1"},
+            "chapter_state": {"summary": "s1"},
+        }
+        rev_b = {
+            "checked_ids": ["p2", "p3"],
+            "fixes": [
+                {"id": "p1", "category": "mistranslation", "severity": "major", "confidence": 0.95, "replacement": "修复B (更准确)"},
+                {"id": "p3", "category": "subject_object", "severity": "major", "confidence": 0.91, "replacement": "修复B3"},
+            ],
+            "glossary_delta": {"add": [{"source": "東京", "target": "东京"}, {"source": "京都", "target": "京都"}]},
+            "memory_delta": {"k2": "v2"},
+            "chapter_state": {"summary": "s2"},
+        }
+        merged = merge_chapter_reviews(rev_a, rev_b)
+        self.assertEqual(merged["checked_ids"], ["p1", "p2", "p3"])
+        
+        fixes_by_id = {f["id"]: f for f in merged["fixes"]}
+        # p1 was reported by both A and B -> consensus: True, confidence >= 0.95, chosen higher confidence replacement
+        self.assertTrue(fixes_by_id["p1"]["consensus"])
+        self.assertEqual(fixes_by_id["p1"]["confidence"], 0.95)
+        self.assertEqual(fixes_by_id["p1"]["replacement"], "修复B (更准确)")
+        
+        # p2 was only reported by A
+        self.assertFalse(fixes_by_id["p2"]["consensus"])
+        self.assertEqual(fixes_by_id["p2"]["reporters"], ["primary"])
+        
+        # p3 was only reported by B
+        self.assertFalse(fixes_by_id["p3"]["consensus"])
+        self.assertEqual(fixes_by_id["p3"]["reporters"], ["secondary"])
+        
+        # Glossary deduplication
+        self.assertEqual(len(merged["glossary_delta"]["add"]), 2)
 
     def test_chapter_validation_requires_exact_checked_ids(self) -> None:
         payload = {

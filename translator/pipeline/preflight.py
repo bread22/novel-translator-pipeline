@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from translator.core.config import (
+    dual_review_enabled,
     fallback_translators_names,
     load_config,
     primary_translator_name,
     reviewer_name,
+    secondary_reviewer_name,
 )
 from translator.providers.translator import ProviderTranslator
 from translator.review.reviewer import check_reviewer
@@ -32,10 +34,19 @@ def run_preflight(
     fallback_translator: str | None = None,
     secondary_fallback_translator: str | None = None,
     reviewer: str | None = None,
+    secondary_reviewer: str | None = None,
+    dual_review: bool | None = None,
 ) -> dict[str, Any]:
     config = load_config()
     primary = primary_translator or primary_translator_name(config)
     rev = reviewer or reviewer_name(config)
+    sec_rev = secondary_reviewer or secondary_reviewer_name(config)
+    if dual_review is not None:
+        is_dual = dual_review
+    elif reviewer is not None and secondary_reviewer is None:
+        is_dual = False
+    else:
+        is_dual = dual_review_enabled(config)
 
     fbs: list[str] = []
     if fallback_translators:
@@ -51,6 +62,8 @@ def run_preflight(
         fbs = fallback_translators_names(config)
 
     checks: list[dict[str, Any]] = [check_reviewer(timeout=timeout, backend=rev)]
+    if is_dual and sec_rev and sec_rev != rev:
+        checks.append(check_reviewer(timeout=timeout, backend=sec_rev))
     checked_providers: set[str] = set()
 
     for provider in [primary] + fbs:

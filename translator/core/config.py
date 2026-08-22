@@ -126,6 +126,11 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     reviewer = roles.get("reviewer")
     if reviewer and reviewer not in providers:
         raise ValueError(f"roles.reviewer 引用了未定义 provider：{reviewer}")
+
+    # Validate secondary reviewer
+    secondary_rev = roles.get("secondary_reviewer")
+    if secondary_rev and secondary_rev not in providers:
+        raise ValueError(f"roles.secondary_reviewer 引用了未定义 provider：{secondary_rev}")
         
     # Validate fallbacks
     fallbacks = roles.get("fallback_translators")
@@ -176,6 +181,22 @@ def fallback_translators_names(config: dict[str, Any]) -> list[str]:
         if sec and sec not in result:
             result.append(sec)
     return result or ["lmstudio"]
+
+
+def reviewer_name(config: dict[str, Any]) -> str:
+    return str(setting(config, "roles.reviewer", "REVIEWER")).strip()
+
+
+def secondary_reviewer_name(config: dict[str, Any]) -> str:
+    roles = config.get("roles", {})
+    return str(roles.get("secondary_reviewer", "") or os.environ.get("SECONDARY_REVIEWER", "")).strip()
+
+
+def dual_review_enabled(config: dict[str, Any]) -> bool:
+    roles = config.get("roles", {})
+    if "DUAL_REVIEW" in os.environ:
+        return os.environ["DUAL_REVIEW"].lower() in {"1", "true", "yes", "on"}
+    return bool(roles.get("dual_review", False))
 
 
 def reviewer_name(config: dict[str, Any]) -> str:

@@ -10,6 +10,9 @@ fallback_translators = ["gemini", "mimo", "hy3"]
 fallback_translator = "gemini"
 secondary_fallback_translator = "mimo"
 reviewer = "gemini"
+secondary_reviewer = "muse"
+dual_review = true
+fallback_reviewers = ["hy3", "mimo"]
 
 [providers.opencode]
 type = "opencode"

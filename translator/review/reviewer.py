@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -182,24 +183,157 @@ def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str
         return {"name": f"reviewer:{selected}", "status": "error", "error": str(exc)}
 
 
-def run_chapter_review(input_path: Path, output_path: Path, autonomous: bool = False, *, backend: str | None = None) -> None:
-    try:
-        input_payload = json.loads(input_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
+def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict[str, Any]) -> dict[str, Any]:
+    checked_a = primary_review.get("checked_ids", []) or []
+    checked_b = secondary_review.get("checked_ids", []) or []
+    merged_checked = sorted(set(checked_a) | set(checked_b))
+
+    fixes_a = primary_review.get("fixes", []) or []
+    fixes_b = secondary_review.get("fixes", []) or []
+    by_id_a = {str(item.get("id", "")): item for item in fixes_a if isinstance(item, dict) and item.get("id")}
+    by_id_b = {str(item.get("id", "")): item for item in fixes_b if isinstance(item, dict) and item.get("id")}
+
+    all_fix_ids = sorted(set(by_id_a) | set(by_id_b))
+    merged_fixes = []
+
+    for fix_id in all_fix_ids:
+        in_a = by_id_a.get(fix_id)
+        in_b = by_id_b.get(fix_id)
+        if in_a and in_b:
+            conf_a = float(in_a.get("confidence", 0) or 0)
+            conf_b = float(in_b.get("confidence", 0) or 0)
+            chosen = dict(in_a if conf_a >= conf_b else in_b)
+            chosen["confidence"] = max(conf_a, conf_b, 0.95)
+            chosen["consensus"] = True
+            chosen["reporters"] = ["primary", "secondary"]
+            merged_fixes.append(chosen)
+        elif in_a:
+            item = dict(in_a)
+            item["consensus"] = False
+            item["reporters"] = ["primary"]
+            merged_fixes.append(item)
+        else:
+            item = dict(in_b)
+            item["consensus"] = False
+            item["reporters"] = ["secondary"]
+            merged_fixes.append(item)
+
+    gloss_a = primary_review.get("glossary_delta", {}) or {}
+    gloss_b = secondary_review.get("glossary_delta", {}) or {}
+    add_a = gloss_a.get("add", []) if isinstance(gloss_a, dict) else []
+    add_b = gloss_b.get("add", []) if isinstance(gloss_b, dict) else []
+    seen_sources = set()
+    merged_add = []
+    for item in add_a + add_b:
+        if isinstance(item, dict) and item.get("source"):
+            src = str(item["source"]).strip()
+            if src not in seen_sources:
+                seen_sources.add(src)
+                merged_add.append(item)
+    merged_glossary_delta = {"add": merged_add}
+
+    mem_a = primary_review.get("memory_delta", {}) or {}
+    mem_b = secondary_review.get("memory_delta", {}) or {}
+    merged_memory = {**mem_b, **mem_a}
+
+    state_a = primary_review.get("chapter_state", {}) or {}
+    state_b = secondary_review.get("chapter_state", {}) or {}
+    merged_state = {**state_b, **state_a}
+
+    return {
+        "checked_ids": merged_checked,
+        "fixes": merged_fixes,
+        "glossary_delta": merged_glossary_delta,
+        "memory_delta": merged_memory,
+        "chapter_state": merged_state,
+        "dual_review": {
+            "enabled": True,
+            "primary_fixes_count": len(fixes_a),
+            "secondary_fixes_count": len(fixes_b),
+            "consensus_fixes_count": sum(1 for f in merged_fixes if f.get("consensus")),
+            "merged_fixes_count": len(merged_fixes),
+        },
+    }
+
+
+def _execute_review_with_fallbacks(
+    kind: str,
+    input_payload: dict[str, Any],
+    schema_path: Path,
+    autonomous: bool = False,
+    backend: str | None = None,
+) -> dict[str, Any]:
     backends = _review_backends(backend)
     last_exc = None
     for candidate in backends:
         try:
             provider = get_provider(candidate)
-            payload = provider.review("chapter", input_payload, CHAPTER_SCHEMA, autonomous=autonomous)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return
+            return provider.review(kind, input_payload, schema_path, autonomous=autonomous)
         except Exception as exc:
             last_exc = exc
             continue
-    raise RuntimeError(f"所有审阅端均失败: {input_path.name}: {last_exc}") from last_exc
+    raise RuntimeError(f"所有审阅端均失败 (kind={kind}, primary={backend}): {last_exc}") from last_exc
+
+
+def run_chapter_review(
+    input_path: Path,
+    output_path: Path,
+    autonomous: bool = False,
+    *,
+    backend: str | None = None,
+    secondary_backend: str | None = None,
+    dual_review: bool | None = None,
+) -> None:
+    try:
+        input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
+
+    config = load_config()
+    is_dual = (
+        dual_review
+        if dual_review is not None
+        else (
+            bool(config.get("roles", {}).get("dual_review", False))
+            or bool(os.environ.get("DUAL_REVIEW", "").lower() in {"1", "true", "yes", "on"})
+        )
+    )
+    primary_cand = (backend or setting(config, "roles.reviewer", "REVIEWER")).strip()
+    sec_cand = (
+        secondary_backend
+        or config.get("roles", {}).get("secondary_reviewer", "")
+        or os.environ.get("SECONDARY_REVIEWER", "")
+    ).strip()
+
+    if not is_dual or not sec_cand or sec_cand == primary_cand:
+        payload = _execute_review_with_fallbacks("chapter", input_payload, CHAPTER_SCHEMA, autonomous, backend=primary_cand)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return
+
+    primary_payload = None
+    secondary_payload = None
+    try:
+        primary_payload = _execute_review_with_fallbacks("chapter", input_payload, CHAPTER_SCHEMA, autonomous, backend=primary_cand)
+    except Exception:
+        pass
+
+    try:
+        secondary_payload = _execute_review_with_fallbacks("chapter", input_payload, CHAPTER_SCHEMA, autonomous, backend=sec_cand)
+    except Exception:
+        pass
+
+    if primary_payload and secondary_payload:
+        merged_payload = merge_chapter_reviews(primary_payload, secondary_payload)
+    elif primary_payload:
+        merged_payload = primary_payload
+    elif secondary_payload:
+        merged_payload = secondary_payload
+    else:
+        raise RuntimeError(f"双审阅端均失败: {input_path.name}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def run_global_consistency_review(input_path: Path, output_path: Path, *, backend: str | None = None) -> None:
@@ -207,19 +341,9 @@ def run_global_consistency_review(input_path: Path, output_path: Path, *, backen
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
-    backends = _review_backends(backend)
-    last_exc = None
-    for candidate in backends:
-        try:
-            provider = get_provider(candidate)
-            payload = provider.review("global", input_payload, GLOBAL_SCHEMA, autonomous=False)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return
-        except Exception as exc:
-            last_exc = exc
-            continue
-    raise RuntimeError(f"所有一致性审阅端均失败: {input_path.name}: {last_exc}") from last_exc
+    payload = _execute_review_with_fallbacks("global", input_payload, GLOBAL_SCHEMA, autonomous=False, backend=backend)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def review_book(

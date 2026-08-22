@@ -27,7 +27,13 @@
           "minItems": 1,
           "items": {"type": "string", "minLength": 1}
         },
-        "reviewer": {"type": "string", "minLength": 1}
+        "reviewer": {"type": "string", "minLength": 1},
+        "secondary_reviewer": {"type": "string", "minLength": 1},
+        "dual_review": {"type": "boolean"},
+        "fallback_reviewers": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
       }
     },
     "providers": {

@@ -138,6 +138,30 @@ def parse_translation_items(content: str) -> list[dict[str, str]]:
     return result
 
 
+def normalize_item_ids(items: list[dict[str, str]], expected_ids: list[str]) -> list[dict[str, str]]:
+    if not items or len(items) != len(expected_ids):
+        return items
+    expected_set = set(expected_ids)
+    received_set = {str(it.get("id", "")).strip() for it in items}
+    if expected_set == received_set:
+        return items
+    normalized: list[dict[str, str]] = []
+    for it, exp_id in zip(items, expected_ids):
+        rec_id = str(it.get("id", "")).strip()
+        if rec_id == exp_id:
+            normalized.append(it)
+            continue
+        rec_digits = re.sub(r"\D", "", rec_id).lstrip("0")
+        exp_digits = re.sub(r"\D", "", exp_id).lstrip("0")
+        if (rec_digits and exp_digits and (rec_digits == exp_digits or exp_digits.endswith(rec_digits))) or rec_id in exp_id or exp_id in rec_id:
+            item_copy = dict(it)
+            item_copy["id"] = exp_id
+            normalized.append(item_copy)
+        else:
+            return items
+    return normalized
+
+
 def normalized_text(text: str) -> str:
     return re.sub(r"\s+", "", text.replace("\\n", "\n"))
 

@@ -10,6 +10,7 @@ from typing import Any
 from translator.core.config import load_config, setting
 from translator.providers.base import (
     extract_json_object,
+    normalize_item_ids,
     normalized_text,
     parse_translation_items,
     previous_context_overlap,
@@ -173,6 +174,7 @@ class ProviderTranslator:
         items, result = self._request(provider, payload, max_tokens)
         if result.get("status") != "ok":
             return result
+        items = normalize_item_ids(items, ids)
         expected = set(ids)
         received_ids = [item["id"] for item in items]
         received = set(received_ids)

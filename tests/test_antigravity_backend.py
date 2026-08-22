@@ -26,6 +26,17 @@ class AntigravityBackendTests(unittest.TestCase):
         self.assertEqual(provider_block_reason("The prompt contains sensitive words"), "content_filter")
         self.assertEqual(provider_block_reason('{"items": []}'), "")
 
+    def test_normalize_item_ids_repairs_minor_typos(self) -> None:
+        from translator.providers.base import normalize_item_ids
+        raw_items = [
+            {"id": "c00101", "text": "译文1"},
+            {"id": "c0007-p00102", "text": "译文2"},
+        ]
+        expected_ids = ["c0007-p00101", "c0007-p00102"]
+        normalized = normalize_item_ids(raw_items, expected_ids)
+        self.assertEqual(normalized[0]["id"], "c0007-p00101")
+        self.assertEqual(normalized[1]["id"], "c0007-p00102")
+
 
 def json_quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)

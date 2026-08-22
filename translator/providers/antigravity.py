@@ -32,6 +32,10 @@ def build_prompt(messages: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+ROOT = Path(__file__).resolve().parents[2]
+TRANSLATION_SCHEMA = ROOT / "schemas" / "translation-output.schema.json"
+
+
 class AntigravityProvider(BaseProvider):
     """Antigravity (AGY CLI / Gemini) universal provider for translation and review."""
 
@@ -128,7 +132,7 @@ class AntigravityProvider(BaseProvider):
             f"最多输出约 {max_tokens} 个 token；必须覆盖 payload.items 中的全部 ID，保持顺序。"
         )
         try:
-            raw = self._run_agy(prompt, timeout=timeout)
+            raw = self._run_agy(prompt, timeout=timeout, schema_path=TRANSLATION_SCHEMA)
         except Exception as exc:
             reason = "content_filter" if "content_filter" in str(exc) else "process"
             return [], {"status": "error", "provider": self.name, "reason": reason, "error": str(exc)}

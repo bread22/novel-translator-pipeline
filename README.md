@@ -1,6 +1,6 @@
 # Novel Translator Pipeline
 
-本项目是 `novel-translator` 的自动化流水线编排与审阅增强层，用于将 EPUB 小说按书籍生命周期管理，提供大模型翻译调度、敏感词/格式异常二分降级容灾、两级备用救回（Two-Level Fallback）、章节一致性审阅与长程记忆事实追踪、横排版式重构，并最终交付高质量中文 EPUB。
+本项目是 [`novel-translator`](https://github.com/OYcedar/novel-translator) 的自动化流水线编排与审阅增强层，用于将 EPUB 小说按书籍生命周期管理，提供大模型翻译调度、敏感词/格式异常二分降级容灾、两级备用救回（Two-Level Fallback）、章节一致性审阅与长程记忆事实追踪、横排版式重构，并最终交付高质量中文 EPUB。
 
 导出 EPUB 时默认保留原书版式；对于日文竖排书，可在流水线命令中加入 `--layout horizontal`。该选项不会修改翻译源或 `novel-translator`，而是在其完成 EPUB 导出后追加横排 CSS、更新正文 CSS 引用、将 spine 翻页方向设为 `ltr`，并将语言元数据设为 `zh-CN`，最后再执行 EPUB 校验。校验完成的成品同时会复制到项目根目录的 `translated/`。
 
@@ -186,16 +186,23 @@ stop_on_error = true
 ### 1. 安装与环境准备
 
 ```bash
+# 1. 克隆本项目与底层 novel-translator
+git clone https://github.com/bread22/novel-translator-pipeline.git
+git clone https://github.com/OYcedar/novel-translator.git
+
+# 2. 初始化环境并配置路径
+cd novel-translator-pipeline
 python3 -m venv .venv
 source .venv/bin/activate
 cp .env.example .env
+# 编辑 .env 将 NOVEL_TRANSLATOR_ROOT 指向 novel-translator 本地目录
 ```
 
-本项目核心代码仅依赖 Python 标准库。请根据使用的 Provider 确保环境可用：
+本项目核心编排逻辑仅依赖 Python 标准库（需配合底层 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础 EPUB 处理能力）。请根据使用的 Provider 确保对应后端可用：
 - **Antigravity**：系统 `PATH` 中包含 `agy` CLI；
 - **OpenCode**：系统 `PATH` 中包含 `opencode` CLI；
 - **LM Studio**：本地启动 HTTP 服务（默认 `http://127.0.0.1:1234/v1`）；
-- **在线 API**：在 `config.toml` 中配置 `api_key` 与 `base_url`。
+- **在线 API**：在 `config.toml` 或 `.env` 中配置 `api_key`（如 `DEEPSEEK_API_KEY`）与 `base_url`。
 
 ### 2. 运行连通性预检
 

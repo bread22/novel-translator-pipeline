@@ -1,11 +1,13 @@
 # 处理架构
 
+本项目基于 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础 EPUB 解析与打包支持，在其之上构建了生产级的自动化流水线编排、长上下文审阅与两级降级容灾体系。
+
 ## 1. 数据流与两级降级容灾
 
 ```text
 原始 EPUB
    ↓ 保留原文件，建立工作副本
-Novel Translator 导入/解包
+Novel Translator (OYcedar/novel-translator) 导入/解包
    ↓
 manifest + 当前译文
    ↓

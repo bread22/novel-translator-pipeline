@@ -647,5 +647,11 @@ def main() -> int:
     return 0
 
 
+ChapterPipeline = IterativePipeline
+
+__all__ = ["ChapterPipeline", "IterativePipeline", "manifest_path", "paragraph_map", "newly_translated"]
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
+

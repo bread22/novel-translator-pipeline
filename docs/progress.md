@@ -17,11 +17,11 @@
 - [x] **1.5** 运行全量测试验证 CLI 核心自包含闭环
 
 ### Component 2: 后端 API 与异步任务管理层 (FastAPI + TaskManager + SSE)
-- [ ] **2.1** 创建 `translator/web/` 基础结构与 FastAPI 应用工厂 (`app.py`)
-- [ ] **2.2** 实现 SSE 实时事件广播器 (`events.py`)
-- [ ] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`)
-- [ ] **2.4** 实现核心 REST API 路由 (`books.py`, `tasks.py`, `knowledge.py`, `system.py`)
-- [ ] **2.5** 编写 `tests/test_web_api.py` 接口自动化测试
+- [x] **2.1** 创建 `translator/web/` 基础结构与 FastAPI 应用工厂 (`app.py`)
+- [x] **2.2** 实现 SSE 实时事件广播器 (`events.py`)
+- [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`)
+- [x] **2.4** 实现核心 REST API 路由 (`books.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
+- [x] **2.5** 编写 `tests/test_web_api.py` 接口自动化测试 (57 项测试 100% 通过)
 
 ### Component 3: 现代化 Web 前端 (React 18/19 + Vite + Tailwind + shadcn/ui)
 - [ ] **3.1** 初始化 `frontend/` 项目结构与依赖配置

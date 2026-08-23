@@ -41,3 +41,8 @@ def get_provider(name: str, config: dict[str, Any] | None = None) -> BaseProvide
         return OpenAIProvider(name, p_config)
 
     raise ValueError(f"无法确定 provider '{name}' 的类型，请在配置中指定 type = 'openai'|'antigravity'|'opencode'|'codex'")
+
+
+create_provider = get_provider
+
+__all__ = ["create_provider", "get_provider"]

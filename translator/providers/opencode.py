@@ -218,7 +218,7 @@ class OpenCodeProvider(BaseProvider):
         self.agent = str(config.get("agent", ""))
         self.timeout = int(config.get("timeout", 600))
 
-    def health_check(self, timeout: int = 60) -> dict[str, Any]:
+    def health_check(self, timeout: int = 5) -> dict[str, Any]:
         eff_model = self.model or model_for("reviewer") or "(configured default)"
         try:
             raw = run_prompt(
@@ -228,6 +228,7 @@ class OpenCodeProvider(BaseProvider):
                 model=self.model or None,
                 binary=self.binary or None,
                 agent=self.agent or None,
+                max_retries=1,
             )
             payload = parse_json_object(raw)
             if payload.get("ok") is not True or set(payload) != {"ok"}:

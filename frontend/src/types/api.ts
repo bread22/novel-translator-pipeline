@@ -145,9 +145,13 @@ export interface SystemConfig {
   };
   roles?: {
     primary_translator?: string;
+    fallback_translator?: string;
+    secondary_fallback_translator?: string;
     fallback_translators?: string[];
     reviewer?: string;
     secondary_reviewer?: string;
+    dual_review?: boolean;
+    fallback_reviewers?: string[];
   };
   providers?: Record<string, {
     type: string;
@@ -158,7 +162,11 @@ export interface SystemConfig {
   }>;
   pipeline?: {
     max_cycles?: number;
+    max_chapter_batches?: number;
     primary_batch_max_chars?: number;
+    max_provider_split_depth?: number;
+    translation_max_tokens?: number;
+    health_check_timeout?: number;
     layout?: string;
     apply?: boolean;
     autonomous?: boolean;
@@ -175,3 +183,4 @@ export interface StreamEvent {
   book_id?: string;
   timestamp: string;
 }
+

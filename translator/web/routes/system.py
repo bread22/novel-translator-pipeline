@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 from pathlib import Path
 import time
 from typing import Any
@@ -19,7 +20,6 @@ from translator.core.config import (
     primary_translator_name,
     reviewer_name,
 )
-from translator.pipeline.preflight import run_preflight
 from translator.providers.registry import create_provider
 from translator.web.models import PreflightProviderResult, PreflightResponse
 
@@ -56,6 +56,8 @@ def run_system_preflight() -> PreflightResponse:
     primary = primary_translator_name(config)
     fallbacks = fallback_translators_names(config)
     reviewer = reviewer_name(config)
+    secondary_reviewer = roles.get("secondary_reviewer")
+    is_dual_review = dual_review_enabled(config)
 
     role_mapping: dict[str, list[str]] = {}
     if primary:
@@ -63,62 +65,75 @@ def run_system_preflight() -> PreflightResponse:
     for idx, fb in enumerate(fallbacks, start=1):
         role_mapping.setdefault(fb, []).append(f"备用 #{idx} (Fallback)")
     if reviewer:
-        role_mapping.setdefault(reviewer, []).append("一致性审阅者 (Reviewer)")
+        role_mapping.setdefault(reviewer, []).append("主审 (Reviewer)")
+    if secondary_reviewer and is_dual_review:
+        role_mapping.setdefault(secondary_reviewer, []).append("副审 (Secondary Reviewer)")
 
-    results: list[PreflightProviderResult] = []
-    all_passed = True
-
-    for p_name, p_conf in providers_config.items():
+    def probe_single_provider(p_name: str, p_conf: dict[str, Any]) -> PreflightProviderResult:
         p_type = p_conf.get("type", "unknown")
         role_desc = " / ".join(role_mapping.get(p_name, ["未分配"]))
         model_name = p_conf.get("model", "")
-
         t0 = time.time()
         try:
             provider_inst = create_provider(p_name, config)
-            # Run simple test check
-            health_ok = provider_inst.health_check()
+            # Run quick health check with 5s timeout
+            check_res = provider_inst.health_check(timeout=5)
             latency = round((time.time() - t0) * 1000, 1)
 
-            if health_ok:
-                results.append(
-                    PreflightProviderResult(
-                        provider=p_name,
-                        type=p_type,
-                        role=role_desc,
-                        status="ok",
-                        latency_ms=latency,
-                        model=model_name,
-                        message="连通性正常，模型响应就绪",
-                    )
+            is_ok = False
+            err_detail = ""
+            if isinstance(check_res, dict):
+                is_ok = check_res.get("status") == "ok"
+                err_detail = str(check_res.get("error", ""))
+                model_name = str(check_res.get("model", model_name))
+            elif isinstance(check_res, bool):
+                is_ok = check_res
+
+            if is_ok:
+                return PreflightProviderResult(
+                    provider=p_name,
+                    type=p_type,
+                    role=role_desc,
+                    status="ok",
+                    latency_ms=latency,
+                    model=model_name,
+                    message="连通性正常，模型响应就绪",
                 )
             else:
-                all_passed = False
-                results.append(
-                    PreflightProviderResult(
-                        provider=p_name,
-                        type=p_type,
-                        role=role_desc,
-                        status="failed",
-                        latency_ms=latency,
-                        model=model_name,
-                        message="健康预检失败，模型未响应标准响应",
-                    )
-                )
-        except Exception as exc:
-            all_passed = False
-            latency = round((time.time() - t0) * 1000, 1)
-            results.append(
-                PreflightProviderResult(
+                return PreflightProviderResult(
                     provider=p_name,
                     type=p_type,
                     role=role_desc,
                     status="failed",
                     latency_ms=latency,
                     model=model_name,
-                    message=f"连接异常: {exc}",
+                    message=f"预检未通过: {err_detail[:180]}" if err_detail else "健康探测未返回预期响应",
                 )
+        except Exception as exc:
+            latency = round((time.time() - t0) * 1000, 1)
+            return PreflightProviderResult(
+                provider=p_name,
+                type=p_type,
+                role=role_desc,
+                status="failed",
+                latency_ms=latency,
+                model=model_name,
+                message=f"探测异常: {str(exc)[:180]}",
             )
 
-    return PreflightResponse(all_passed=all_passed, results=results)
+    results: list[PreflightProviderResult] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, len(providers_config) or 1)) as executor:
+        futures = [
+            executor.submit(probe_single_provider, p_name, p_conf)
+            for p_name, p_conf in providers_config.items()
+        ]
+        for f in concurrent.futures.as_completed(futures):
+            results.append(f.result())
 
+    # Sort results: assigned roles first, then alphabetically
+    results.sort(key=lambda r: (0 if r.role != "未分配" else 1, r.provider))
+
+    # All active roles passed
+    active_passed = all(r.status == "ok" for r in results if r.role != "未分配")
+
+    return PreflightResponse(all_passed=active_passed, results=results)

@@ -2,7 +2,14 @@
 
 from translator.core.config import config_value, load_config, setting
 from translator.core.layout import apply_horizontal_layout
-from translator.core.novel_tool import call_novel_translator, provider_failure_reason
+from translator.core.novel_tool import (
+    NOVEL_TRANSLATOR_PYTHON,
+    NOVEL_TRANSLATOR_ROOT,
+    call_novel_translator,
+    provider_failure_reason,
+    resolve_novel_translator_python,
+    resolve_novel_translator_root,
+)
 from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
@@ -19,6 +26,8 @@ from translator.core.workspace import (
 
 __all__ = [
     "BookWorkspace",
+    "NOVEL_TRANSLATOR_PYTHON",
+    "NOVEL_TRANSLATOR_ROOT",
     "apply_horizontal_layout",
     "call_novel_translator",
     "config_value",
@@ -31,6 +40,8 @@ __all__ = [
     "novel_translator_terms",
     "provider_failure_reason",
     "read_json",
+    "resolve_novel_translator_python",
+    "resolve_novel_translator_root",
     "safe_book_name",
     "setting",
     "utc_now",

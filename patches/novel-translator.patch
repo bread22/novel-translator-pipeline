@@ -1,0 +1,130 @@
+From 69d5eb49b6a083800d22b8f6db90504082849c40 Mon Sep 17 00:00:00 2001
+From: Qingyi Wu <wuqingyi22@gmail.com>
+Date: Fri, 21 Aug 2026 22:19:13 -0400
+Subject: [PATCH] Fix nested DOM parsing and TOC title mapping; add
+ configurable temperature and max_tokens with strict schema
+
+---
+ app/book_io.py       | 11 ++++++++---
+ app/config.py        |  4 ++++
+ app/translator.py    | 32 +++++++++++++++++++++++++++++++-
+ setting.example.toml |  2 ++
+ 4 files changed, 45 insertions(+), 4 deletions(-)
+
+diff --git a/app/book_io.py b/app/book_io.py
+index f976682..aa5b7cf 100644
+--- a/app/book_io.py
++++ b/app/book_io.py
+@@ -637,7 +637,7 @@ def _soup_translatable_nodes(soup) -> list:
+ 
+ 
+ def _has_block_children(element: ET.Element) -> bool:
+-    return any(_local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in list(element))
++    return any(child is not element and _local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in element.iter())
+ 
+ 
+ def _element_text(element: ET.Element) -> str:
+@@ -986,8 +986,13 @@ def _text_hash(text: str) -> str:
+ def _chapter_title_translations(book: Book) -> dict[str, str]:
+     mapping: dict[str, str] = {}
+     for chapter in book.chapters:
+-        if chapter.paragraphs and chapter.paragraphs[0].translated and chapter.paragraphs[0].source == chapter.title:
+-            mapping[chapter.title] = chapter.paragraphs[0].translated
++        if chapter.paragraphs and chapter.paragraphs[0].translated:
++            first = chapter.paragraphs[0]
++            # EPUB TOC entries often use the file-level chapter title while the
++            # visible translated heading is the first paragraph in the file.
++            # Map both forms so navigation text follows the translated heading.
++            mapping[chapter.title] = first.translated
++            mapping[first.source] = first.translated
+         for paragraph in chapter.paragraphs:
+             epub = paragraph.metadata.get("epub", {})
+             if epub.get("node_tag") in {"h1", "h2", "h3", "h4", "h5", "h6"} and paragraph.translated:
+diff --git a/app/config.py b/app/config.py
+index 47a6f42..b6201df 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -29,6 +29,8 @@ class TranslationConfig:
+     style_sample_file: str = ""
+     style_sample_max_chars: int = 1200
+     batch_max_chars: int = 4000
++    temperature: float = 0.3
++    max_tokens: int = 4096
+     retry_count: int = 3
+     retry_delay: int = 2
+     quality_passes: int = 2
+@@ -174,6 +176,8 @@ def load_config(root: Path, config_path: Path | None = None) -> AppConfig:
+         style_sample_file=str(translation_raw.get("style_sample_file", "")),
+         style_sample_max_chars=int(translation_raw.get("style_sample_max_chars", 1200)),
+         batch_max_chars=int(translation_raw.get("batch_max_chars", 4000)),
++        temperature=float(translation_raw.get("temperature", 0.3)),
++        max_tokens=int(translation_raw.get("max_tokens", 4096)),
+         retry_count=int(translation_raw.get("retry_count", 3)),
+         retry_delay=int(translation_raw.get("retry_delay", 2)),
+         quality_passes=int(translation_raw.get("quality_passes", 2)),
+diff --git a/app/translator.py b/app/translator.py
+index a8a06ce..394984f 100644
+--- a/app/translator.py
++++ b/app/translator.py
+@@ -11,6 +11,34 @@ from app.placeholders import placeholder_payload_for_paragraph
+ from app.terminology import Term, relevant_terms_for_text
+ 
+ 
++TRANSLATION_RESPONSE_SCHEMA = {
++    "type": "json_schema",
++    "json_schema": {
++        "name": "translation_result",
++        "strict": True,
++        "schema": {
++            "type": "object",
++            "properties": {
++                "items": {
++                    "type": "array",
++                    "items": {
++                        "type": "object",
++                        "properties": {
++                            "id": {"type": "string"},
++                            "text": {"type": "string"},
++                        },
++                        "required": ["id", "text"],
++                        "additionalProperties": False,
++                    },
++                }
++            },
++            "required": ["items"],
++            "additionalProperties": False,
++        },
++    },
++}
++
++
+ def pending_paragraphs(paragraphs: Iterable[Paragraph]) -> list[Paragraph]:
+     return [paragraph for paragraph in paragraphs if not paragraph.translated.strip()]
+ 
+@@ -61,7 +89,9 @@ def translate_batch(
+                     {"role": "system", "content": system_prompt},
+                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                 ],
+-                response_format={"type": "json_object"},
++                temperature=config.translation.temperature,
++                max_tokens=config.translation.max_tokens,
++                response_format=TRANSLATION_RESPONSE_SCHEMA,
+             )
+             content = response.choices[0].message.content or ""
+             result = parse_translation_response(content)
+diff --git a/setting.example.toml b/setting.example.toml
+index 3fe7582..96bce79 100644
+--- a/setting.example.toml
++++ b/setting.example.toml
+@@ -13,6 +13,8 @@ dialogue_style = "符合中文网文/出版小说阅读习惯，称谓、语气
+ style_sample_file = ""
+ style_sample_max_chars = 1200
+ batch_max_chars = 4000
++temperature = 0.3
++max_tokens = 4096
+ retry_count = 3
+ retry_delay = 2
+ quality_passes = 2
+-- 
+2.55.0
+

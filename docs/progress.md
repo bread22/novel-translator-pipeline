@@ -2,7 +2,7 @@
 
 ## 📌 里程碑概览
 
-- [ ] **Release v0.1: CLI 核心流水线自包含版 (Component 1)**
+- [x] **Release v0.1: CLI 核心流水线自包含版 (Component 1)**
 - [ ] **Release v1.0: 现代化 Web 工作台与 Docker 镜像 (Components 2 ~ 4)**
 
 ---
@@ -10,11 +10,11 @@
 ## 🛠️ 任务分解与进度跟踪
 
 ### Component 1: 底层依赖收敛 (Submodule & Path Resolution)
-- [ ] **1.1** 确认 `novel-translator` fork 仓库与修复分支 (含 commit `69d5eb4`)
-- [ ] **1.2** 在本项目中引入 `vendor/novel-translator` Git Submodule
-- [ ] **1.3** 改造 `translator/core/novel_tool.py` 路径自适应与 Python 解释器探测
-- [ ] **1.4** 更新 `README.md` 与 `.env.example` 降低用户配置门槛
-- [ ] **1.5** 运行全量测试验证 CLI 核心自包含闭环
+- [x] **1.1** 确认 `novel-translator` fork 仓库与修复分支 (含 commit `69d5eb4`)
+- [x] **1.2** 在本项目中引入 `vendor/novel-translator` Git Submodule
+- [x] **1.3** 改造 `translator/core/novel_tool.py` 路径自适应与 Python 解释器探测
+- [x] **1.4** 更新 `README.md` 与 `.env.example` 降低用户配置门槛
+- [x] **1.5** 运行全量测试验证 CLI 核心自包含闭环
 
 ### Component 2: 后端 API 与异步任务管理层 (FastAPI + TaskManager + SSE)
 - [ ] **2.1** 创建 `translator/web/` 基础结构与 FastAPI 应用工厂 (`app.py`)

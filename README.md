@@ -190,30 +190,28 @@ stop_on_error = true
 
 #### Linux / macOS (Bash / Zsh)
 ```bash
-# 1. 克隆本项目与底层 novel-translator
-git clone https://github.com/bread22/novel-translator-pipeline.git
-git clone https://github.com/OYcedar/novel-translator.git
+# 1. 递归克隆本项目（自带内置增强版 vendor/novel-translator）
+git clone --recursive https://github.com/bread22/novel-translator-pipeline.git
+cd novel-translator-pipeline
 
 # 2. 创建虚拟环境并配置
-cd novel-translator-pipeline
 python3 -m venv .venv
 source .venv/bin/activate
 cp .env.example .env
-# 编辑 .env 将 NOVEL_TRANSLATOR_ROOT 指向 novel-translator 本地目录（若不在默认 ~/src/novel-translator）
+# 可选：在 .env 中配置在线 API Key（如 DEEPSEEK_API_KEY）
 ```
 
 #### Windows (PowerShell)
 ```powershell
-# 1. 克隆本项目与底层 novel-translator
-git clone https://github.com/bread22/novel-translator-pipeline.git
-git clone https://github.com/OYcedar/novel-translator.git
+# 1. 递归克隆本项目（自带内置增强版 vendor/novel-translator）
+git clone --recursive https://github.com/bread22/novel-translator-pipeline.git
+cd novel-translator-pipeline
 
 # 2. 创建虚拟环境并配置
-cd novel-translator-pipeline
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 Copy-Item .env.example .env
-# 编辑 .env 配置 NOVEL_TRANSLATOR_ROOT 或 API Key
+# 可选：在 .env 中配置在线 API Key（如 DEEPSEEK_API_KEY）
 ```
 
 > [!TIP]

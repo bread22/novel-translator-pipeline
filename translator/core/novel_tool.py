@@ -4,16 +4,48 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[2]
-NOVEL_TRANSLATOR_ROOT = Path(
-    os.environ.get("NOVEL_TRANSLATOR_ROOT", str(Path.home() / "src" / "novel-translator"))
-).expanduser().resolve()
-NOVEL_TRANSLATOR_PYTHON = NOVEL_TRANSLATOR_ROOT / ".venv" / "bin" / "python"
-if not NOVEL_TRANSLATOR_PYTHON.exists():
-    NOVEL_TRANSLATOR_PYTHON = Path(os.environ.get("NOVEL_TRANSLATOR_PYTHON", "python3"))
+
+
+def resolve_novel_translator_root() -> Path:
+    env_root = os.environ.get("NOVEL_TRANSLATOR_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    vendor_root = ROOT / "vendor" / "novel-translator"
+    if (vendor_root / "main.py").exists():
+        return vendor_root.resolve()
+    default_home = Path.home() / "src" / "novel-translator"
+    if (default_home / "main.py").exists():
+        return default_home.resolve()
+    return vendor_root.resolve()
+
+
+def resolve_novel_translator_python(novel_root: Path | None = None) -> Path:
+    env_python = os.environ.get("NOVEL_TRANSLATOR_PYTHON")
+    if env_python:
+        return Path(env_python).expanduser().resolve()
+    if novel_root is None:
+        novel_root = resolve_novel_translator_root()
+
+    for candidate in (
+        novel_root / ".venv" / "bin" / "python",
+        novel_root / ".venv" / "Scripts" / "python.exe",
+        ROOT / ".venv" / "bin" / "python",
+        ROOT / ".venv" / "Scripts" / "python.exe",
+    ):
+        if candidate.exists():
+            return candidate.resolve()
+
+    if sys.executable:
+        return Path(sys.executable).resolve()
+    return Path("python3")
+
+
+NOVEL_TRANSLATOR_ROOT = resolve_novel_translator_root()
+NOVEL_TRANSLATOR_PYTHON = resolve_novel_translator_python(NOVEL_TRANSLATOR_ROOT)
 
 
 def provider_failure_reason(result: dict[str, Any] | None) -> str:
@@ -94,17 +126,19 @@ def provider_failure_reason(result: dict[str, Any] | None) -> str:
     return "provider_error"
 
 
-def call_novel_translator(*args: str) -> dict[str, Any]:
+def call_novel_translator(*args: str, novel_root: Path | None = None, python_bin: Path | None = None) -> dict[str, Any]:
+    root = novel_root or resolve_novel_translator_root()
+    py_bin = python_bin or resolve_novel_translator_python(root)
     command = [
-        str(NOVEL_TRANSLATOR_PYTHON),
-        str(NOVEL_TRANSLATOR_ROOT / "main.py"),
+        str(py_bin),
+        str(root / "main.py"),
         "--agent-mode",
         *args,
         "--json",
     ]
     result = subprocess.run(
         command,
-        cwd=NOVEL_TRANSLATOR_ROOT,
+        cwd=root,
         text=True,
         capture_output=True,
         check=False,

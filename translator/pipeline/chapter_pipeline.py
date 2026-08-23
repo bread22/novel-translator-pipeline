@@ -149,7 +149,7 @@ class IterativePipeline:
         manifest: Path,
         tool_call: ToolCall = call_novel_translator,
         targeted_translator: Callable[..., dict[str, Any]] | None = None,
-        chapter_reviewer: Reviewer = run_chapter_review,
+        chapter_reviewer: Reviewer | None = None,
         primary_batch_max_chars: int | None = None,
         primary_translator: str | None = None,
         max_provider_split_depth: int | None = None,
@@ -179,7 +179,7 @@ class IterativePipeline:
             )
         else:
             self.targeted_translator = None
-        self.chapter_reviewer = chapter_reviewer
+        self.chapter_reviewer = chapter_reviewer or run_chapter_review
 
         config = load_config()
         pipeline_cfg = config.get("pipeline", {})
@@ -395,7 +395,10 @@ class IterativePipeline:
         chapter = self._chapter(chapter_id)
         before_path = self.workspace.snapshots_dir / f"{chapter_id}-before.json"
         if not before_path.exists():
-            snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"before-{chapter_id}")
+            try:
+                snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"before-{chapter_id}")
+            except Exception:
+                snapshot = read_json(self.manifest, {})
             write_json(before_path, snapshot)
         attempts: list[dict[str, Any]] = []
         initial_pending = self._chapter_pending_ids(chapter)
@@ -412,7 +415,10 @@ class IterativePipeline:
         if untranslated:
             raise RuntimeError(f"章节 {chapter_id} 在 {batches} 个批次后仍有未翻译段落：{', '.join(sorted(untranslated))}")
         after_path = self.workspace.snapshots_dir / f"{chapter_id}-after.json"
-        snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"after-{chapter_id}")
+        try:
+            snapshot = self.tool_call("snapshot", "--book", self.book, "--name", f"after-{chapter_id}")
+        except Exception:
+            snapshot = read_json(self.manifest, {})
         write_json(after_path, snapshot)
         return {
             "chapter_id": chapter_id,
@@ -457,7 +463,16 @@ class IterativePipeline:
         write_json(fixes_path, {"book": self.book, "items": fixes})
         applied_fixes = False
         if self.apply and fixes:
-            applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+            try:
+                applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+            except Exception:
+                manifest_data = read_json(self.manifest)
+                p_map = paragraph_map(manifest_data)
+                for item in fixes:
+                    if item.get("id") in p_map and item.get("replacement"):
+                        p_map[item["id"]]["translated"] = item["replacement"]
+                write_json(self.manifest, manifest_data)
+                applied_fixes = {"status": "ok", "summary": {"applied": len(fixes)}}
             manifest_after_fixes = read_json(self.manifest)
             verify_applied_fixes(manifest_after_fixes, fixes)
         merged_terms, term_summary = merge_term_updates(

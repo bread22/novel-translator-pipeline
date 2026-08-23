@@ -109,3 +109,4 @@ def retranslate_paragraph(request: RetranslateParagraphRequest) -> dict[str, Any
         "provider": provider_name,
         "translated": translated_text,
     }
+

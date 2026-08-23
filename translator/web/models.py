@@ -137,3 +137,4 @@ class PreflightProviderResult(BaseModel):
 class PreflightResponse(BaseModel):
     all_passed: bool
     results: list[PreflightProviderResult]
+

@@ -83,3 +83,4 @@ class EventBroadcaster:
 
 # Global singleton instance
 broadcaster = EventBroadcaster()
+

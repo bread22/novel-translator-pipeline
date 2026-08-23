@@ -21,3 +21,4 @@ async def event_stream(book_id: str | None = Query(None, description="可选订�
             "X-Accel-Buffering": "no",
         },
     )
+

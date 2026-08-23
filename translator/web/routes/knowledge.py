@@ -116,3 +116,4 @@ def get_chapter_review(book_id: str, chapter_id: str) -> dict[str, Any]:
         "review_output": output_data,
         "applied_fixes": fixes_data,
     }
+

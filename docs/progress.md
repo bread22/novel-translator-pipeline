@@ -22,7 +22,6 @@
 - [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`)
 - [x] **2.4** 实现核心 REST API 路由 (`books.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
 - [x] **2.5** 编写 `tests/test_web_api.py` 接口自动化测试 (57 项测试 100% 通过)
-
 ### Component 3: 现代化 Web 前端 (React 18/19 + Vite + Tailwind + shadcn/ui)
 - [ ] **3.1** 初始化 `frontend/` 项目结构与依赖配置
 - [ ] **3.2** 构建全局布局、主题切换与顶栏状态大屏

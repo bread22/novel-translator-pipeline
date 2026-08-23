@@ -83,11 +83,51 @@ def get_book_memory(book_id: str) -> BookMemoryResponse:
             if s:
                 chapter_states.append(s)
 
+    characters = list(memory_data.get("characters", []))
+    world_settings = list(memory_data.get("world_settings", []))
+    timeline = list(memory_data.get("timeline", []))
+
+    # Parse and map structured entries into characters and world settings
+    for entry in memory_data.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key", "")).strip()
+        val = str(entry.get("value", "")).strip()
+        cat = str(entry.get("category", "")).strip().lower()
+        note = str(entry.get("note", "")).strip()
+        first_chapter = str(entry.get("first_seen_chapter", "")).strip()
+
+        if not key or not val:
+            continue
+
+        if cat in ("character", "relationship", "person", "role"):
+            if not any(c.get("name") == key for c in characters):
+                role_tag = "角色档案" if cat == "character" else "人物关系"
+                summary_text = val
+                if note:
+                    summary_text = f"{val}\n\n【出处与备注】: {note}"
+                characters.append({
+                    "name": key,
+                    "role": role_tag,
+                    "summary": summary_text,
+                    "first_seen": first_chapter or None,
+                })
+        else:
+            if not any(w.get("term") == key for w in world_settings):
+                expl_text = val
+                if note:
+                    expl_text = f"{val} ({note})"
+                world_settings.append({
+                    "term": key,
+                    "explanation": expl_text,
+                    "category": cat or "fact",
+                })
+
     return BookMemoryResponse(
         book_id=book_id,
-        characters=memory_data.get("characters", []),
-        world_settings=memory_data.get("world_settings", []),
-        timeline=memory_data.get("timeline", []),
+        characters=characters,
+        world_settings=world_settings,
+        timeline=timeline,
         chapter_states=chapter_states,
     )
 

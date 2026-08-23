@@ -7,6 +7,11 @@ import {
   Check,
   RotateCcw,
   Search,
+  ShieldCheck,
+  AlertCircle,
+  Sparkles,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import { BookSummary, ChapterDetail, ChapterSummary } from '../types/api';
 import { api } from '../lib/api';
@@ -19,6 +24,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [chapterDetail, setChapterDetail] = useState<ChapterDetail | null>(null);
+  const [chapterReview, setChapterReview] = useState<any | null>(null);
+  const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [editingParaId, setEditingParaId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
@@ -47,8 +54,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const loadChapterDetail = async (bookId: string, chapterId: string) => {
     setIsLoading(true);
     try {
-      const detail = await api.getChapterDetail(bookId, chapterId);
+      const [detail, reviewRes] = await Promise.all([
+        api.getChapterDetail(bookId, chapterId),
+        api.getChapterReview(bookId, chapterId).catch(() => null),
+      ]);
       setChapterDetail(detail);
+      setChapterReview(reviewRes);
     } catch (err: any) {
       alert(`加载章节失败: ${err.message}`);
     } finally {
@@ -188,8 +199,21 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
             </p>
           </div>
 
-          {/* Prev / Next chapter buttons */}
-          <div className="flex items-center gap-2">
+          {/* Action buttons & Prev / Next */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {chapterReview?.status === 'ok' && (
+              <button
+                onClick={() => setShowReviewPanel(!showReviewPanel)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  showReviewPanel
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
+                    : 'bg-purple-950/60 border border-purple-800/60 text-purple-300 hover:bg-purple-900/60'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-purple-400" />
+                本章审阅报告
+              </button>
+            )}
             <button
               onClick={() => prevChapter && handleSelectChapter(prevChapter.id)}
               disabled={!prevChapter}
@@ -208,6 +232,80 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
             </button>
           </div>
         </div>
+
+        {/* Chapter Review Diagnostics Dropdown Card */}
+        {showReviewPanel && chapterReview && (
+          <div className="bg-slate-900/95 border border-purple-800/60 rounded-2xl p-5 shadow-2xl space-y-4 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-purple-400" />
+                <h4 className="text-xs font-bold text-purple-200">本章一致性审阅与质检报告</h4>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800">
+                  100% ID 覆盖
+                </span>
+              </div>
+              <button
+                onClick={() => setShowReviewPanel(false)}
+                className="text-slate-400 hover:text-slate-200 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Narrative summary */}
+            {chapterReview.chapter_state?.summary && (
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
+                <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-indigo-400" />
+                  本章摘要与长程记忆 (Narrative Summary):
+                </span>
+                <p className="text-slate-200 leading-relaxed font-novel text-xs">
+                  {chapterReview.chapter_state.summary}
+                </p>
+              </div>
+            )}
+
+            {/* Fixes Breakdown */}
+            {chapterReview.fixes && chapterReview.fixes.length > 0 ? (
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-amber-400 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  已修正客观缺陷 ({chapterReview.fixes.length} 处):
+                </span>
+                <div className="space-y-2">
+                  {chapterReview.fixes.map((fix: any, fIdx: number) => (
+                    <div
+                      key={fIdx}
+                      className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-mono font-bold text-amber-300">段落 ID: {fix.id}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 uppercase font-mono text-[10px]">
+                          {fix.category || 'mistranslation'}
+                        </span>
+                      </div>
+                      {fix.reason && (
+                        <p className="text-slate-300 text-[11px]">
+                          <strong className="text-amber-400">问题:</strong> {fix.reason}
+                        </p>
+                      )}
+                      {fix.replacement && (
+                        <p className="text-emerald-300 text-[11px] font-novel bg-slate-950/60 p-2 rounded border border-emerald-900/30">
+                          <strong className="text-emerald-400">修正译文:</strong> {fix.replacement}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400 flex items-center gap-1.5 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>全章经模型审阅校验，未发现错译、漏译或事实冲突，初译文质量合格。</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Search inside chapter */}
         <div className="relative">

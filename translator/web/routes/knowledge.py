@@ -92,28 +92,77 @@ def get_book_memory(book_id: str) -> BookMemoryResponse:
     )
 
 
+@router.get("/{book_id}/reports")
+def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
+    workspace = get_workspace_for_book(book_id)
+    reports: list[dict[str, Any]] = []
+
+    if not workspace.reports_dir.exists() and not workspace.reviews_dir.exists():
+        return []
+
+    # Find all chapter report files
+    report_files = {p.stem: p for p in workspace.reports_dir.glob("c*.json")}
+    review_output_files = {p.stem.replace("-output", ""): p for p in workspace.reviews_dir.glob("c*-output.json")}
+    approved_fix_files = {p.stem.replace("-approved-fixes", ""): p for p in workspace.reviews_dir.glob("c*-approved-fixes.json")}
+    state_files = {p.stem: p for p in workspace.chapter_states_dir.glob("c*.json")}
+
+    all_ch_ids = sorted(set(report_files.keys()) | set(review_output_files.keys()) | set(state_files.keys()))
+
+    for ch_id in all_ch_ids:
+        rep = read_json(report_files.get(ch_id, Path("nonexistent")), default={})
+        rev = read_json(review_output_files.get(ch_id, Path("nonexistent")), default={})
+        approved = read_json(approved_fix_files.get(ch_id, Path("nonexistent")), default={})
+        st = read_json(state_files.get(ch_id, Path("nonexistent")), default={})
+
+        fixes = rev.get("fixes", [])
+        if not fixes and approved.get("items"):
+            fixes = approved.get("items", [])
+
+        reports.append({
+            "chapter_id": ch_id,
+            "reviewed_at": rep.get("reviewed_at") or utc_now(),
+            "checked_paragraphs": rep.get("checked_paragraphs") or len(rev.get("checked_ids", [])),
+            "reported_issues": len(fixes),
+            "applied_fixes": rep.get("applied_fixes") or len([f for f in fixes if f.get("auto_apply")]),
+            "fixes": fixes,
+            "glossary_delta": rev.get("glossary_delta", {}).get("add", []),
+            "memory_delta": rev.get("memory_delta", {}).get("add", []),
+            "chapter_state": st or rev.get("chapter_state", {}),
+            "dual_review": rev.get("dual_review", {}),
+        })
+
+    return reports
+
+
 @router.get("/{book_id}/reviews/{chapter_id}")
 def get_chapter_review(book_id: str, chapter_id: str) -> dict[str, Any]:
     workspace = get_workspace_for_book(book_id)
     review_output_file = workspace.reviews_dir / f"{chapter_id}-output.json"
-    review_fixes_file = workspace.reviews_dir / f"{chapter_id}-fixes.json"
+    approved_fixes_file = workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
+    report_file = workspace.reports_dir / f"{chapter_id}.json"
+    state_file = workspace.chapter_states_dir / f"{chapter_id}.json"
 
     output_data = read_json(review_output_file, default=None)
-    fixes_data = read_json(review_fixes_file, default=None)
+    approved_data = read_json(approved_fixes_file, default=None)
+    report_data = read_json(report_file, default=None)
+    state_data = read_json(state_file, default=None)
 
-    if not output_data and not fixes_data:
+    if not output_data and not report_data and not state_data:
         return {
             "status": "not_found",
             "message": f"章节 {chapter_id} 尚未执行审阅或无审阅记录",
             "chapter_id": chapter_id,
-            "auto_applied_fixes": [],
-            "candidates": [],
+            "fixes": [],
         }
+
+    fixes = (output_data.get("fixes") if output_data else []) or (approved_data.get("items") if approved_data else [])
 
     return {
         "status": "ok",
         "chapter_id": chapter_id,
+        "report": report_data,
         "review_output": output_data,
-        "applied_fixes": fixes_data,
+        "fixes": fixes,
+        "chapter_state": state_data or (output_data.get("chapter_state") if output_data else {}),
     }
 

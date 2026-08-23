@@ -2,6 +2,7 @@ import {
   BookMemoryResponse,
   BookSummary,
   ChapterDetail,
+  ChapterReviewReport,
   ChapterSummary,
   GlossaryItem,
   GlossaryResponse,
@@ -116,8 +117,9 @@ export const api = {
       body: JSON.stringify({ terms }),
     }),
   getMemory: (bookId: string) => request<BookMemoryResponse>(`/knowledge/${bookId}/memory`),
+  getReports: (bookId: string) => request<ChapterReviewReport[]>(`/knowledge/${encodeURIComponent(bookId)}/reports`),
   getChapterReview: (bookId: string, chapterId: string) =>
-    request<any>(`/knowledge/${bookId}/reviews/${chapterId}`),
+    request<any>(`/knowledge/${encodeURIComponent(bookId)}/reviews/${encodeURIComponent(chapterId)}`),
 
   // System & Preflight & Prompts
   getConfig: () => request<SystemConfig>('/system/config'),

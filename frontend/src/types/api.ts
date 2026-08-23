@@ -119,18 +119,66 @@ export interface BookMemoryResponse {
     explanation?: string;
     category?: string;
   }>;
-  timeline: Array<{
+  timeline?: Array<{
     chapter_id?: string;
     event?: string;
     impact?: string;
   }>;
-  chapter_states: Array<{
+  chapter_states?: Array<{
     chapter_id: string;
     chapter_name?: string;
     summary?: string;
     character_states?: Record<string, any>;
     active_conflicts?: string[];
   }>;
+}
+
+export interface ChapterReviewReport {
+  chapter_id: string;
+  reviewed_at: string;
+  checked_paragraphs: number;
+  reported_issues: number;
+  applied_fixes: number;
+  fixes: Array<{
+    id: string;
+    category?: string;
+    severity?: string;
+    confidence?: number;
+    reason?: string;
+    replacement?: string;
+    auto_apply?: boolean;
+  }>;
+  glossary_delta: Array<{
+    source: string;
+    target: string;
+    category?: string;
+    note?: string;
+    confidence?: number;
+  }>;
+  memory_delta: Array<{
+    key?: string;
+    value?: string;
+    category?: string;
+    note?: string;
+    confidence?: number;
+  }>;
+  chapter_state?: {
+    chapter_id?: string;
+    title?: string;
+    status?: string;
+    updated_at?: string;
+    summary?: string;
+    important_changes?: string[];
+    active_entities?: string[];
+    location?: string;
+  };
+  dual_review?: {
+    enabled?: boolean;
+    primary_fixes_count?: number;
+    secondary_fixes_count?: number;
+    consensus_fixes_count?: number;
+    merged_fixes_count?: number;
+  };
 }
 
 export interface PreflightProviderResult {

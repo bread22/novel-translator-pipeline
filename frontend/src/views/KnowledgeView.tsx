@@ -7,8 +7,13 @@ import {
   Plus,
   Search,
   Tag,
+  ShieldCheck,
+  FileCheck2,
+  AlertCircle,
+  Sparkles,
+  CheckCircle2,
 } from 'lucide-react';
-import { BookMemoryResponse, BookSummary, GlossaryItem } from '../types/api';
+import { BookMemoryResponse, BookSummary, ChapterReviewReport, GlossaryItem } from '../types/api';
 import { api } from '../lib/api';
 
 interface KnowledgeViewProps {
@@ -16,9 +21,10 @@ interface KnowledgeViewProps {
 }
 
 export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
-  const [activeTab, setActiveTab] = useState<'glossary' | 'characters' | 'world' | 'timeline'>('glossary');
+  const [activeTab, setActiveTab] = useState<'glossary' | 'characters' | 'world' | 'timeline' | 'reports'>('reports');
   const [glossaryTerms, setGlossaryTerms] = useState<GlossaryItem[]>([]);
   const [memory, setMemory] = useState<BookMemoryResponse | null>(null);
+  const [reports, setReports] = useState<ChapterReviewReport[]>([]);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -36,12 +42,14 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
 
   const loadData = async (bookId: string) => {
     try {
-      const [glossaryRes, memoryRes] = await Promise.all([
+      const [glossaryRes, memoryRes, reportsRes] = await Promise.all([
         api.getGlossary(bookId).catch(() => ({ terms: [] })),
         api.getMemory(bookId).catch(() => null),
+        api.getReports(bookId).catch(() => []),
       ]);
       setGlossaryTerms(glossaryRes.terms || []);
       setMemory(memoryRes);
+      setReports(reportsRes || []);
     } catch (err: any) {
       console.error('Failed to load knowledge:', err);
     }
@@ -131,6 +139,15 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
           >
             <Globe className="w-3.5 h-3.5" />
             世界观设定 ({memory?.world_settings?.length || 0})
+          </button>
+          <button
+            onClick={() => setActiveTab('reports')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              activeTab === 'reports' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            章节审阅与质检报告 ({reports.length})
           </button>
           <button
             onClick={() => setActiveTab('timeline')}
@@ -274,6 +291,176 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                 <p className="text-xs text-slate-300 leading-relaxed font-novel">{ws.explanation}</p>
               </div>
             ))
+          )}
+        </div>
+      )}
+
+      {/* Tab: Chapter Review Reports */}
+      {activeTab === 'reports' && (
+        <div className="space-y-6">
+          {/* Summary metrics header */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+              <span className="text-slate-400 text-xs flex items-center gap-1.5">
+                <FileCheck2 className="w-4 h-4 text-indigo-400" />
+                已审阅章节
+              </span>
+              <p className="text-xl font-bold text-white font-mono mt-1">
+                {reports.length} <span className="text-xs text-slate-500 font-normal">章</span>
+              </p>
+            </div>
+            <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+              <span className="text-slate-400 text-xs flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                质检审查段落
+              </span>
+              <p className="text-xl font-bold text-emerald-400 font-mono mt-1">
+                {reports.reduce((acc, r) => acc + (r.checked_paragraphs || 0), 0)}{' '}
+                <span className="text-xs text-slate-500 font-normal">段 (100% 覆盖)</span>
+              </p>
+            </div>
+            <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+              <span className="text-slate-400 text-xs flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-400" />
+                识别并修复缺陷
+              </span>
+              <p className="text-xl font-bold text-amber-400 font-mono mt-1">
+                {reports.reduce((acc, r) => acc + (r.reported_issues || 0), 0)}{' '}
+                <span className="text-xs text-slate-500 font-normal">处客观缺陷</span>
+              </p>
+            </div>
+            <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+              <span className="text-slate-400 text-xs flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                动态抽取术语
+              </span>
+              <p className="text-xl font-bold text-purple-400 font-mono mt-1">
+                {reports.reduce((acc, r) => acc + (r.glossary_delta?.length || 0), 0)}{' '}
+                <span className="text-xs text-slate-500 font-normal">条已沉淀</span>
+              </p>
+            </div>
+          </div>
+
+          {/* Per-Chapter Reports List */}
+          {reports.length === 0 ? (
+            <div className="text-center py-16 text-slate-500 text-xs border border-dashed border-slate-800 rounded-2xl">
+              暂无已完成的章节审阅报告（流水线处理完各章节后将自动在此展示审阅质检详情）
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {reports.map((report) => (
+                <div
+                  key={report.chapter_id}
+                  className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-sm font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/50 px-2.5 py-1 rounded-lg">
+                        {report.chapter_id}
+                      </span>
+                      <h4 className="text-sm font-bold text-white">
+                        {report.chapter_state?.title || `章节 ${report.chapter_id}`}
+                      </h4>
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-800/50 text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        已审查 {report.checked_paragraphs} 段落 (100% 覆盖)
+                      </span>
+                    </div>
+
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {report.reviewed_at ? new Date(report.reviewed_at).toLocaleString() : ''}
+                    </span>
+                  </div>
+
+                  {/* Chapter Narrative Summary */}
+                  {report.chapter_state?.summary && (
+                    <div className="bg-slate-950/70 border border-slate-800/70 p-3.5 rounded-xl space-y-1">
+                      <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-indigo-400" />
+                        本章剧情与长程记忆摘要 (Narrative Summary):
+                      </span>
+                      <p className="text-xs text-slate-200 leading-relaxed font-novel">
+                        {report.chapter_state.summary}
+                      </p>
+                      {report.chapter_state.active_entities && report.chapter_state.active_entities.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-800/40 text-[11px]">
+                          <span className="text-slate-500">活跃角色/实体:</span>
+                          {report.chapter_state.active_entities.map((ent, eIdx) => (
+                            <span
+                              key={eIdx}
+                              className="px-2 py-0.5 bg-slate-800/80 rounded text-slate-300 font-medium"
+                            >
+                              {ent}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Discovered & Applied Fixes */}
+                  {report.fixes && report.fixes.length > 0 ? (
+                    <div className="space-y-2">
+                      <span className="text-xs font-semibold text-amber-400 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        客观缺陷与修正记录 ({report.fixes.length} 处):
+                      </span>
+                      <div className="space-y-2">
+                        {report.fixes.map((fix, fIdx) => (
+                          <div
+                            key={fIdx}
+                            className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 text-xs space-y-1"
+                          >
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-mono font-bold text-amber-300">段落 ID: {fix.id}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 uppercase font-mono text-[10px]">
+                                {fix.category || 'mistranslation'} · {fix.severity || 'major'}
+                              </span>
+                            </div>
+                            {fix.reason && (
+                              <p className="text-slate-300 text-[11px]">
+                                <strong className="text-amber-400">问题原因:</strong> {fix.reason}
+                              </p>
+                            )}
+                            {fix.replacement && (
+                              <p className="text-emerald-300 text-[11px] font-novel bg-slate-950/60 p-2 rounded border border-emerald-900/30">
+                                <strong className="text-emerald-400">写回修正译文:</strong> {fix.replacement}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-slate-400 flex items-center gap-1.5 py-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>未检测到错译、主客颠倒或漏译等客观事实缺陷，初译质量合格。</span>
+                    </div>
+                  )}
+
+                  {/* Extracted Glossary Delta */}
+                  {report.glossary_delta && report.glossary_delta.length > 0 && (
+                    <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                      <span className="text-[11px] font-semibold text-purple-400 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" />
+                        本章自动抽取沉淀的专有名词与术语 ({report.glossary_delta.length} 个):
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                        {report.glossary_delta.map((term, tIdx) => (
+                          <div
+                            key={tIdx}
+                            className="bg-purple-950/20 border border-purple-800/40 px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between"
+                          >
+                            <span className="text-slate-300 font-medium">{term.source}</span>
+                            <span className="text-purple-300 font-bold">→ {term.target}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

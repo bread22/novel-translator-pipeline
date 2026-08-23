@@ -200,6 +200,10 @@ class TaskManager:
                 fallback_translators=task.options.fallback_translators or None,
                 reviewer=task.options.reviewer or None,
                 translation_policy=policy_path,
+                targeted_translator=ProviderTranslator(
+                    novel_root=NOVEL_TRANSLATOR_ROOT,
+                    manifest=manifest_path(task.book_id),
+                ),
             )
 
             # 4. Iterate over chapters

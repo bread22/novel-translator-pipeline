@@ -170,7 +170,15 @@ class IterativePipeline:
         self.workspace = workspace
         self.manifest = manifest
         self.tool_call = tool_call
-        self.targeted_translator = targeted_translator
+        if targeted_translator is not None:
+            self.targeted_translator = targeted_translator
+        elif tool_call is call_novel_translator:
+            self.targeted_translator = ProviderTranslator(
+                novel_root=NOVEL_TRANSLATOR_ROOT,
+                manifest=manifest,
+            )
+        else:
+            self.targeted_translator = None
         self.chapter_reviewer = chapter_reviewer
 
         config = load_config()

@@ -28,11 +28,12 @@ from translator.providers.registry import create_provider
 from translator.web.models import PreflightProviderResult, PreflightResponse
 
 
+ROOT = Path(__file__).resolve().parents[3]
 router = APIRouter(prefix="/system", tags=["System"])
 
 
 def get_config_path() -> Path:
-    return Path("config.toml").resolve()
+    return ROOT / "config.toml"
 
 
 def _env_var_name_for_provider(p_name: str) -> str:
@@ -109,7 +110,7 @@ def set_env_variables(env_data: dict[str, str]) -> dict[str, Any]:
 
 
 def get_prompts_dir() -> Path:
-    p = Path("docs/prompts").resolve()
+    p = (ROOT / "docs" / "prompts").resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
 

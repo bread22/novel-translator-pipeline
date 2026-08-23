@@ -1,6 +1,6 @@
 [project]
 name = "novel-translator-pipeline"
-version = "1.0.0"
+version = "0.1.0"
 description = "Universal AI Novel Translation and Consistency Review Pipeline for Novel Translator"
 requires-python = ">=3.11"
 

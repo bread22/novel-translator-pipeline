@@ -82,7 +82,6 @@ timeout = 600
 type = "codex"
 binary = "codex"
 model = ""
-reasoning_effort = ""
 timeout = 600
 
 [providers.nemotron]
@@ -109,7 +108,7 @@ timeout = 600
 type = "openai"
 base_url = "https://integrate.api.nvidia.com/v1"
 model = "deepseek-ai/deepseek-v4-flash-0731"
-api_key = "$NVIDIA_API_KEY"
+api_key = "$DEEPSEEK_API_KEY"
 context_tokens = 131072
 timeout = 600
 
@@ -117,7 +116,7 @@ timeout = 600
 type = "openai"
 base_url = "https://integrate.api.nvidia.com/v1"
 model = "deepseek-ai/deepseek-v4-flash-0731"
-api_key = "$NVIDIA_API_KEY"
+api_key = "$DEEPSEEK_API_KEY"
 context_tokens = 131072
 timeout = 600
 

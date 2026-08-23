@@ -49,28 +49,28 @@ class OpenAIProvider(BaseProvider):
         super().__init__(name, config)
         self.base_url = str(config.get("base_url", "http://127.0.0.1:1234/v1")).rstrip("/")
         self.model = str(config.get("model", ""))
-        raw_key = str(config.get("api_key", "")).strip()
-        if raw_key.startswith("$"):
-            env_var = raw_key[1:]
+        self.raw_key = str(config.get("api_key", "")).strip()
+        if self.raw_key.startswith("$"):
+            env_var = self.raw_key[1:]
             self.api_key = os.environ.get(env_var, "")
             if not self.api_key:
                 from translator.core.config import _load_dotenv
-                _load_dotenv()
+                _load_dotenv(override=True)
                 self.api_key = os.environ.get(env_var, "")
-        elif raw_key and raw_key not in {"sk-...", "lm-studio"}:
-            self.api_key = raw_key
+        elif self.raw_key and self.raw_key not in {"sk-...", "lm-studio"}:
+            self.api_key = self.raw_key
         else:
             provider_env = f"{name.upper()}_API_KEY"
             if provider_env in os.environ:
                 self.api_key = os.environ[provider_env]
             elif "gemini" in name.lower() or "googleapis.com" in self.base_url:
-                self.api_key = os.environ.get("GEMINI_API_KEY", raw_key or "lm-studio")
+                self.api_key = os.environ.get("GEMINI_API_KEY", self.raw_key or "lm-studio")
             elif "nvidia" in name.lower() or "nvidia.com" in self.base_url:
-                self.api_key = os.environ.get("NVIDIA_API_KEY", raw_key or "lm-studio")
+                self.api_key = os.environ.get("NVIDIA_API_KEY", self.raw_key or "lm-studio")
             elif "deepseek" in name.lower() or "deepseek.com" in self.base_url:
-                self.api_key = os.environ.get("DEEPSEEK_API_KEY", raw_key or "lm-studio")
+                self.api_key = os.environ.get("DEEPSEEK_API_KEY", self.raw_key or "lm-studio")
             else:
-                self.api_key = os.environ.get("OPENAI_API_KEY", raw_key or "lm-studio")
+                self.api_key = os.environ.get("OPENAI_API_KEY", self.raw_key or "lm-studio")
         self.context_tokens = int(config.get("context_tokens", 8192))
         self.timeout = int(config.get("timeout", 600))
         self.headers = dict(config.get("headers", {}))
@@ -80,6 +80,9 @@ class OpenAIProvider(BaseProvider):
             self.chat_template_kwargs["thinking"] = bool(config["thinking"])
 
     def _make_headers(self) -> dict[str, str]:
+        # Always check fresh os.environ if env var is configured
+        if self.raw_key and self.raw_key.startswith("$"):
+            self.api_key = os.environ.get(self.raw_key[1:], self.api_key)
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -100,7 +103,18 @@ class OpenAIProvider(BaseProvider):
             status = int(response.status)
         return raw, status, None
 
-    def health_check(self, timeout: int = 60) -> dict[str, Any]:
+    def health_check(self, timeout: int = 5) -> dict[str, Any]:
+        if self.raw_key and self.raw_key.startswith("$"):
+            self.api_key = os.environ.get(self.raw_key[1:], "")
+        is_local = "127.0.0.1" in self.base_url or "localhost" in self.base_url
+        if not self.api_key and not is_local:
+            return {
+                "name": f"provider:{self.name}",
+                "status": "error",
+                "base_url": self.base_url,
+                "model": self.model,
+                "error": "未配置有效 API Key (请在下方填入密钥并点击保存)",
+            }
         payload = {
             "items": [{"id": "__healthcheck__", "text": "テスト"}],
         }
@@ -110,7 +124,7 @@ class OpenAIProvider(BaseProvider):
             "不要输出 Markdown、解释或 JSON 之外的文字。"
         )
         try:
-            items, result = self.translate(payload, system_prompt, max_tokens=512, timeout=timeout)
+            items, result = self.translate(payload, system_prompt, max_tokens=128, timeout=timeout)
             if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
                 err = result.get("error") or result.get("reason") or "healthcheck response invalid"
                 return {

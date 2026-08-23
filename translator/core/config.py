@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_dotenv(dotenv_path: Path = ROOT / ".env") -> None:
+def _load_dotenv(dotenv_path: Path = ROOT / ".env", override: bool = True) -> None:
     if not dotenv_path.exists():
         return
     try:
@@ -26,10 +26,56 @@ def _load_dotenv(dotenv_path: Path = ROOT / ".env") -> None:
             key, value = line.split("=", 1)
             key = key.strip()
             value = value.strip().strip("'\"")
-            if key and key not in os.environ:
-                os.environ[key] = value
+            if key:
+                if override or key not in os.environ:
+                    os.environ[key] = value
     except Exception:
         pass
+
+
+def read_env_keys(dotenv_path: Path = ROOT / ".env") -> dict[str, str]:
+    """Read all key-values from .env file."""
+    if not dotenv_path.exists():
+        return {}
+    res = {}
+    try:
+        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            res[k.strip()] = v.strip().strip("'\"")
+    except Exception:
+        pass
+    return res
+
+
+def write_env_key(key: str, value: str, dotenv_path: Path = ROOT / ".env") -> None:
+    """Write or update a single key in .env and update os.environ immediately."""
+    key = key.strip()
+    value = value.strip()
+    lines: list[str] = []
+    if dotenv_path.exists():
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+
+    found = False
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            k, _ = stripped.split("=", 1)
+            if k.strip() == key:
+                new_lines.append(f"{key}={value}")
+                found = True
+                continue
+        new_lines.append(line)
+
+    if not found:
+        new_lines.append(f"{key}={value}")
+
+    dotenv_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    os.environ[key] = value
+    _load_dotenv(dotenv_path, override=True)
 
 
 _load_dotenv()

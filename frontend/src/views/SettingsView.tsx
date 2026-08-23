@@ -58,6 +58,7 @@ export const SettingsView: React.FC = () => {
       setPreflightData(res);
     } catch (err: any) {
       console.error('Preflight error:', err);
+      alert(`预检请求异常: ${err.message || err}`);
     } finally {
       setIsRunningPreflight(false);
     }

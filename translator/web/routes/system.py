@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -14,11 +15,14 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
 from translator.core.config import (
+    _load_dotenv,
     dual_review_enabled,
     fallback_translators_names,
     load_config,
     primary_translator_name,
+    read_env_keys,
     reviewer_name,
+    write_env_key,
 )
 from translator.providers.registry import create_provider
 from translator.web.models import PreflightProviderResult, PreflightResponse
@@ -31,24 +35,82 @@ def get_config_path() -> Path:
     return Path("config.toml").resolve()
 
 
+def _env_var_name_for_provider(p_name: str) -> str:
+    p_lower = p_name.lower()
+    if p_lower == "nemotron" or "nvidia" in p_lower:
+        return "NVIDIA_API_KEY"
+    if p_lower == "deepseek":
+        return "DEEPSEEK_API_KEY"
+    if "gemini" in p_lower:
+        return "GEMINI_API_KEY"
+    if "openai" in p_lower:
+        return "OPENAI_API_KEY"
+    clean = p_name.upper().replace("-", "_").replace(".", "_")
+    return f"{clean}_API_KEY"
+
+
 @router.get("/config")
 def get_system_config() -> dict[str, Any]:
-    return load_config()
+    _load_dotenv(override=True)
+    cfg = load_config()
+    # Resolve actual API keys for UI display
+    providers = cfg.get("providers", {})
+    for p_name, p_conf in providers.items():
+        raw_key = str(p_conf.get("api_key", "")).strip()
+        if raw_key.startswith("$"):
+            env_var = raw_key[1:]
+            val = os.environ.get(env_var, "")
+            p_conf["api_key"] = val
+    return cfg
 
 
 @router.post("/config")
 def save_system_config(config_data: dict[str, Any]) -> dict[str, Any]:
     config_file = get_config_path()
     try:
+        # Separate API keys into .env and keep references in config.toml
+        providers = config_data.get("providers", {})
+        for p_name, p_conf in providers.items():
+            if not isinstance(p_conf, dict):
+                continue
+            key_val = str(p_conf.get("api_key", "")).strip()
+            if not key_val or key_val in {"sk-...", "lm-studio"}:
+                continue
+            if key_val.startswith("$"):
+                # Reference existing env var
+                continue
+            # Real key entered -> Save to .env securely!
+            env_var = _env_var_name_for_provider(p_name)
+            write_env_key(env_var, key_val)
+            p_conf["api_key"] = f"${env_var}"
+
         raw_toml = tomli_w.dumps(config_data)
         config_file.write_text(raw_toml, encoding="utf-8")
+        _load_dotenv(override=True)
+        validated = load_config(config_file)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"保存配置文件失败: {e}")
-    return {"status": "ok", "config": load_config()}
+    return {"status": "ok", "config": validated}
+
+
+@router.get("/env")
+def get_env_variables() -> dict[str, str]:
+    _load_dotenv(override=True)
+    return read_env_keys()
+
+
+@router.post("/env")
+def set_env_variables(env_data: dict[str, str]) -> dict[str, Any]:
+    for k, v in env_data.items():
+        if k and isinstance(k, str):
+            write_env_key(k.strip(), str(v).strip())
+    _load_dotenv(override=True)
+    return {"status": "ok", "env": read_env_keys()}
 
 
 @router.post("/preflight", response_model=PreflightResponse)
 def run_system_preflight() -> PreflightResponse:
+    _load_dotenv(override=True)
     config = load_config()
     providers_config = config.get("providers", {})
     roles = config.get("roles", {})

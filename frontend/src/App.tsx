@@ -12,6 +12,9 @@ export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>('library');
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [selectedBookId, setSelectedBookId] = useState<string | null>(() => {
+    return localStorage.getItem('selected_book_id') || null;
+  });
+  const [activeTask, setActiveTask] = useState<TaskStatusResponse | null>(null);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
 
@@ -23,11 +26,23 @@ export const App: React.FC = () => {
       if (data.length > 0) {
         setSelectedBookId((prev) => {
           if (prev && data.some((b) => b.id === prev)) {
+            return prev;
+          }
+          const saved = localStorage.getItem('selected_book_id');
+          if (saved && data.some((b) => b.id === saved)) {
+            return saved;
+          }
+          return data[0].id;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch books:', err);
     }
   }, []);
 
   // Refresh active task status
   const refreshTask = useCallback(async () => {
+    if (!selectedBookId) return;
     try {
       const task = await api.getTaskStatus(selectedBookId).catch(() => null);
       setActiveTask(task);
@@ -52,7 +67,18 @@ export const App: React.FC = () => {
     const unsubscribe = api.subscribeEvents((evt) => {
       // Filter out connect events or data events from other books
       if (selectedBookId) {
+        if (evt.event === 'connect' && evt.data?.book_id && evt.data.book_id !== selectedBookId) {
           return;
+        }
+        if (evt.data?.book_id && evt.data.book_id !== selectedBookId) {
+          return;
+        }
+      }
+
+      if (evt.event === 'connect') {
+        setSseConnected(true);
+      }
+      setStreamEvents((prev) => [...prev.slice(-200), evt]);
 
       // 1. Direct activeTask state update from event payload if present
       if (evt.data && typeof evt.data === 'object' && evt.data.task_id && evt.data.status) {
@@ -90,6 +116,8 @@ export const App: React.FC = () => {
     setStreamEvents([]);
     if (targetTab) {
       setCurrentTab(targetTab);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white">

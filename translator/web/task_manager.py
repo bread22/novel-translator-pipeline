@@ -221,6 +221,12 @@ class TaskManager:
 
                 chapter_id = chapter.get("id", f"c{idx:04d}")
                 chapter_title = chapter.get("title", chapter_id)
+
+                # Skip chapters that are already fully translated and reviewed
+                if pipeline.is_chapter_completed(chapter_id):
+                    logger.info("章节 %s (%s) 已完成翻译与审阅，跳过并进入下一章", chapter_id, chapter_title)
+                    continue
+
                 task.current_chapter = chapter_id
                 task.current_chapter_index = idx
                 task.overall_progress = round(idx / max(1, task.total_chapters), 3)

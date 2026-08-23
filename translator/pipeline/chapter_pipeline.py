@@ -275,6 +275,15 @@ class IterativePipeline:
             if isinstance(paragraph, dict) and paragraph.get("id") and not str(paragraph.get("translated", "")).strip()
         ]
 
+    def is_chapter_completed(self, chapter_id: str) -> bool:
+        """Check if a chapter is completely translated and has a review state or report."""
+        pending = self._chapter_pending_paragraphs(chapter_id)
+        if pending:
+            return False
+        state_path = self.workspace.chapter_states_dir / f"{chapter_id}.json"
+        report_path = self.workspace.reports_dir / f"{chapter_id}.json"
+        return state_path.exists() or report_path.exists()
+
     @staticmethod
     def _window(paragraphs: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
         window: list[dict[str, Any]] = []

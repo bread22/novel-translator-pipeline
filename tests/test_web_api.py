@@ -164,6 +164,28 @@ class WebApiTests(unittest.TestCase):
         updated = json.loads((self.book_dir / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(updated["chapters"][0]["paragraphs"][1]["translated"], "冒险开始了。")
 
+    @patch("translator.web.routes.books.manifest_path")
+    @patch("translator.web.routes.books.get_output_root")
+    @patch("translator.web.routes.books.call_novel_translator")
+    def test_reset_book(self, mock_call: MagicMock, mock_out_root: MagicMock, mock_manifest_path: MagicMock) -> None:
+        mock_out_root.return_value = self.output_root
+        mock_manifest_path.return_value = self.book_dir / "manifest.json"
+        mock_call.return_value = {"status": "ok"}
+
+        response = self.client.post(f"/api/v1/books/{self.book_id}/reset")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+    @patch("translator.web.routes.books.manifest_path")
+    @patch("translator.web.routes.books.get_output_root")
+    def test_delete_book(self, mock_out_root: MagicMock, mock_manifest_path: MagicMock) -> None:
+        mock_out_root.return_value = self.output_root
+        mock_manifest_path.return_value = self.book_dir / "manifest.json"
+
+        response = self.client.delete(f"/api/v1/books/{self.book_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
     @patch("translator.web.routes.knowledge.load_config")
     @patch("translator.web.routes.knowledge.manifest_path")
     def test_glossary_crud(self, mock_manifest_path: MagicMock, mock_load_config: MagicMock) -> None:

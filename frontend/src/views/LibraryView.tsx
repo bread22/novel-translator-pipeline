@@ -10,6 +10,8 @@ import {
   Search,
   Sparkles,
   BookOpen,
+  RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { BookSummary } from '../types/api';
 import { api } from '../lib/api';
@@ -30,6 +32,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [exportingBookId, setExportingBookId] = useState<string | null>(null);
+  const [resettingBookId, setResettingBookId] = useState<string | null>(null);
+  const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredBooks = books.filter((book) => {
@@ -81,8 +85,44 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     }
   };
 
+  const handleResetBook = async (bookId: string, bookName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`确定要重置《${bookName}》的翻译进度吗？\n\n注意：这会清空已翻译的段落文本并重置所有提取的长程记忆，从头开始重新翻译。`)) {
+      return;
+    }
+    setResettingBookId(bookId);
+    try {
+      await api.resetBook(bookId);
+      await onRefreshBooks();
+      setUploadMessage(`《${bookName}》翻译进度与长程记忆已重置！`);
+    } catch (err: any) {
+      alert(`重置失败: ${err.message}`);
+    } finally {
+      setResettingBookId(null);
+      setTimeout(() => setUploadMessage(null), 4000);
+    }
+  };
+
+  const handleDeleteBook = async (bookId: string, bookName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`确定要彻底删除《${bookName}》吗？\n\n警告：这将删除该书籍的所有章节、段落工作区、审阅记录和已生成的 EPUB 成品文件，不可恢复！`)) {
+      return;
+    }
+    setDeletingBookId(bookId);
+    try {
+      await api.deleteBook(bookId);
+      await onRefreshBooks();
+      setUploadMessage(`《${bookName}》已彻底删除`);
+    } catch (err: any) {
+      alert(`删除失败: ${err.message}`);
+    } finally {
+      setDeletingBookId(null);
+      setTimeout(() => setUploadMessage(null), 4000);
+    }
+  };
+
   return (
-    <div className="space-y-8 max-w-7xl mx-auto pb-12">
+    <div className="space-y-8 max-w-7xl mx-auto pb-16">
       {/* Hero / Upload Banner */}
       <div
         onDragOver={(e) => e.preventDefault()}
@@ -202,22 +242,47 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 className="group relative flex flex-col justify-between bg-slate-900/70 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-6 transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/5 cursor-pointer"
               >
                 <div>
-                  {/* Top Badge & Type */}
+                  {/* Top Badge & Delete / Reset Actions */}
                   <div className="flex items-center justify-between gap-2 mb-3">
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase">
-                      {book.source_type || 'epub'}
-                    </span>
-                    {isCompleted ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-0.5 rounded-full">
-                        <CheckCircle2 className="w-3 h-3" />
-                        已完结
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase">
+                        {book.source_type || 'epub'}
                       </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 bg-amber-950/60 border border-amber-800/60 px-2.5 py-0.5 rounded-full">
-                        <Clock className="w-3 h-3" />
-                        {progressPercent}%
-                      </span>
-                    )}
+                      {isCompleted ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
+                          <CheckCircle2 className="w-3 h-3" />
+                          已完结
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded-full">
+                          <Clock className="w-3 h-3" />
+                          {progressPercent}%
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Top Right: Reset & Delete Buttons */}
+                    <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={(e) => handleResetBook(book.id, book.name, e)}
+                        disabled={resettingBookId === book.id}
+                        className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-amber-950/80 text-slate-400 hover:text-amber-300 border border-slate-700/50 transition-colors"
+                        title="重置全书翻译进度与记忆"
+                      >
+                        <RotateCcw className={`w-3.5 h-3.5 ${resettingBookId === book.id ? 'animate-spin' : ''}`} />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteBook(book.id, book.name, e)}
+                        disabled={deletingBookId === book.id}
+                        className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-rose-950/80 text-slate-400 hover:text-rose-400 border border-slate-700/50 transition-colors"
+                        title="删除该书籍及工作区"
+                      >
+                        <Trash2 className={`w-3.5 h-3.5 ${deletingBookId === book.id ? 'animate-pulse' : ''}`} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Title */}

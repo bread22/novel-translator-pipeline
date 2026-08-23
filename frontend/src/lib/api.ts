@@ -67,6 +67,14 @@ export const api = {
     request<{ status: string; download_url: string }>(`/books/${bookId}/export?layout=${layout}`, {
       method: 'POST',
     }),
+  resetBook: (bookId: string) =>
+    request<{ status: string; message: string }>(`/books/${bookId}/reset`, {
+      method: 'POST',
+    }),
+  deleteBook: (bookId: string) =>
+    request<{ status: string; message: string }>(`/books/${bookId}`, {
+      method: 'DELETE',
+    }),
 
   // Tasks
   startPipeline: (data: PipelineStartRequest) =>
@@ -168,3 +176,4 @@ export const api = {
     };
   },
 };
+

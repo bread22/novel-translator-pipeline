@@ -340,3 +340,69 @@ def download_book_epub(book_id: str) -> FileResponse:
         filename=workspace.epub_path.name,
         media_type="application/epub+zip",
     )
+
+
+@router.delete("/{book_id}")
+def delete_book(book_id: str) -> dict[str, Any]:
+    manifest = read_json(manifest_path(book_id), default=None)
+    output_root = get_output_root()
+
+    title = manifest.get("title", book_id) if manifest else book_id
+
+    # 1. Remove output workspace
+    workspace = BookWorkspace.at(output_root, title)
+    if workspace.root.exists():
+        shutil.rmtree(workspace.root, ignore_errors=True)
+
+    safe_dir = output_root / safe_book_name(title)
+    if safe_dir.exists() and safe_dir != workspace.root:
+        shutil.rmtree(safe_dir, ignore_errors=True)
+
+    # 2. Remove from novel-translator data/books
+    data_book_dir = NOVEL_TRANSLATOR_ROOT / "data" / "books" / book_id
+    if data_book_dir.exists():
+        shutil.rmtree(data_book_dir, ignore_errors=True)
+
+    return {"status": "ok", "message": f"书籍 '{title}' 已彻底删除"}
+
+
+@router.post("/{book_id}/reset")
+def reset_book(book_id: str) -> dict[str, Any]:
+    manifest = read_json(manifest_path(book_id), default=None)
+    if not manifest:
+        raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}")
+
+    output_root = get_output_root()
+    title = manifest.get("title", book_id)
+    workspace = BookWorkspace.at(output_root, title)
+
+    # 1. Call novel-translator reset-translations
+    try:
+        call_novel_translator("reset-translations", "--book", book_id, "--all")
+    except Exception:
+        # Fallback: reset manifest chapters directly
+        for ch in manifest.get("chapters", []):
+            for p in ch.get("paragraphs", []):
+                p["translated"] = ""
+        write_json(manifest_path(book_id), manifest)
+
+    # 2. Reset workspace progress & memory
+    if workspace.data_dir.exists():
+        write_json(
+            workspace.progress_path,
+            {"book": book_id, "state": "initialized", "completed_cycles": 0, "last_chunk": "", "updated_at": utc_now()},
+        )
+        if workspace.book_memory_path.exists():
+            write_json(
+                workspace.book_memory_path,
+                {"book": book_id, "characters": [], "world_settings": [], "timeline": [], "chapter_states": []},
+            )
+        if workspace.chapter_states_dir.exists():
+            for p in workspace.chapter_states_dir.glob("*.json"):
+                p.unlink(missing_ok=True)
+
+    # 3. Remove output EPUB
+    if workspace.epub_path.exists():
+        workspace.epub_path.unlink(missing_ok=True)
+
+    return {"status": "ok", "message": f"书籍 '{title}' 翻译进度与记忆已重置"}

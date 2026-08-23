@@ -117,7 +117,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const filteredEvents = streamEvents.filter((evt) => {
     if (eventFilter === 'fallback') return evt.event === 'fallback_triggered';
     if (eventFilter === 'pipeline') {
-      return ['pipeline_started', 'chapter_started', 'pipeline_progress', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
+      return ['pipeline_started', 'chapter_started', 'batch_completed', 'pipeline_progress', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
     }
     return true;
   });
@@ -532,6 +532,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
               const isFallback = evt.event === 'fallback_triggered';
               const isCompleted = evt.event === 'pipeline_completed';
               const isChapterDone = evt.event === 'chapter_completed';
+              const isBatchDone = evt.event === 'batch_completed';
 
               let content = null;
               if (evt.event === 'connect') {
@@ -544,6 +545,19 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 content = (
                   <span className="text-slate-200 font-sans">
                     📖 {chIndex ? <><strong className="text-indigo-300">第 {chIndex} 章</strong> {chId ? `(${chId})` : ''} · </> : ''}{evt.data?.message || '开始翻译与一致性审阅...'}
+                  </span>
+                );
+              } else if (evt.event === 'batch_completed') {
+                const chIndex = evt.data?.chapter_index ?? evt.data?.current_chapter_index;
+                const chId = evt.data?.chapter_id ?? evt.data?.current_chapter;
+                const bIdx = evt.data?.batch_index;
+                const bParas = evt.data?.batch_paragraphs || 0;
+                const remP = evt.data?.chapter_pending_paragraphs;
+                const prog = Math.round((evt.data?.overall_progress || 0) * 100);
+                content = (
+                  <span className="text-cyan-300 font-sans">
+                    📦 {chIndex ? <><strong className="text-cyan-200">第 {chIndex} 章</strong> {chId ? `(${chId})` : ''} · </> : ''}
+                    批次 #{bIdx} 翻译完成 (本批已译 {bParas} 段{remP !== undefined ? `，本章剩余 ${remP} 段` : ''} · 全书进度 <strong className="text-cyan-200">{prog}%</strong>)
                   </span>
                 );
               } else if (evt.event === 'pipeline_progress') {
@@ -603,6 +617,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                       ? 'bg-amber-950/40 border-amber-800/60 text-amber-200'
                       : isChapterDone
                       ? 'bg-indigo-950/40 border-indigo-800/60 text-indigo-200'
+                      : isBatchDone
+                      ? 'bg-cyan-950/30 border-cyan-800/50 text-cyan-200'
                       : isCompleted
                       ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-200'
                       : 'bg-slate-950/60 border-slate-800/70 text-slate-300'

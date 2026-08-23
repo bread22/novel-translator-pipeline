@@ -165,6 +165,7 @@ class IterativePipeline:
         reviewer: str | None = None,
         layout: str | None = None,
         translated_root: Path | None = None,
+        on_batch_completed: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.book = book
         self.workspace = workspace
@@ -219,6 +220,7 @@ class IterativePipeline:
         self.reviewer = reviewer or reviewer_name(config)
         self.layout = layout or str(pipeline_cfg.get("layout", "preserve"))
         self.translated_root = translated_root or ROOT / "translated"
+        self.on_batch_completed = on_batch_completed
 
     def initialize(self) -> None:
         self.workspace.initialize(book_id=self.book)
@@ -419,6 +421,18 @@ class IterativePipeline:
             batch_window = self._window(pending_paragraphs, self.primary_batch_max_chars)
             self._translate_segment_with_recovery(chapter_id, batch_window, attempts)
             batches += 1
+            if self.on_batch_completed is not None:
+                remaining_after = self._chapter_pending_paragraphs(chapter_id)
+                try:
+                    self.on_batch_completed({
+                        "book": self.book,
+                        "chapter_id": chapter_id,
+                        "batch_index": batches,
+                        "batch_paragraphs": len(batch_window),
+                        "remaining_pending": len(remaining_after),
+                    })
+                except Exception:
+                    pass
 
         untranslated = self._chapter_pending_ids(self._chapter(chapter_id))
         if untranslated:

@@ -91,6 +91,7 @@ export const App: React.FC = () => {
       const pipelineEvents = [
         'pipeline_started',
         'chapter_started',
+        'batch_completed',
         'pipeline_progress',
         'chapter_completed',
         'pipeline_completed',

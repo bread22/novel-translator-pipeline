@@ -188,6 +188,46 @@ class TaskManager:
 
             policy_path = Path(task.options.translation_policy).resolve() if task.options.translation_policy else None
 
+            # Helper to calculate paragraph-level progress (unified with Library View)
+            def _get_paragraph_progress() -> tuple[int, int, float]:
+                m = read_json(manifest_path(task.book_id), default={})
+                ch_list = m.get("chapters", [])
+                tot_p = sum(len(c.get("paragraphs", [])) for c in ch_list)
+                tra_p = sum(sum(1 for p in c.get("paragraphs", []) if bool(str(p.get("translated", "")).strip())) for c in ch_list)
+                ratio = round(tra_p / max(1, tot_p), 3) if tot_p > 0 else 0.0
+                return tra_p, tot_p, ratio
+
+            def handle_batch_completed(batch_info: dict[str, Any]) -> None:
+                b_idx = batch_info.get("batch_index", 1)
+                b_paras = batch_info.get("batch_paragraphs", 0)
+                rem_p = batch_info.get("remaining_pending", 0)
+                ch_id = batch_info.get("chapter_id", task.current_chapter)
+
+                t_p, tot_p, prog_ratio = _get_paragraph_progress()
+                task.overall_progress = prog_ratio
+                task.current_batch = b_idx
+                task.message = f"第 {task.current_chapter_index}/{task.total_chapters} 章 · 批次 #{b_idx} 翻译完成（本批已译 {b_paras} 段，本章剩余 {rem_p} 段 · 全书进度 {int(round(prog_ratio * 100))}%）"
+                task.updated_at = utc_now()
+
+                broadcaster.broadcast_sync(
+                    "batch_completed",
+                    {
+                        "book_id": task.book_id,
+                        "chapter_id": ch_id,
+                        "chapter_index": task.current_chapter_index,
+                        "total_chapters": task.total_chapters,
+                        "batch_index": b_idx,
+                        "batch_paragraphs": b_paras,
+                        "chapter_pending_paragraphs": rem_p,
+                        "translated_paragraphs": t_p,
+                        "total_paragraphs": tot_p,
+                        "overall_progress": prog_ratio,
+                        "message": task.message,
+                    },
+                    book_id=task.book_id,
+                )
+                self._emit_status(task, "pipeline_progress")
+
             # 3. Instantiate pipeline
             pipeline = ChapterPipeline(
                 book=task.book_id,
@@ -204,6 +244,7 @@ class TaskManager:
                     novel_root=NOVEL_TRANSLATOR_ROOT,
                     manifest=manifest_path(task.book_id),
                 ),
+                on_batch_completed=handle_batch_completed,
             )
 
             # 4. Iterate over chapters
@@ -227,15 +268,21 @@ class TaskManager:
                     logger.info("章节 %s (%s) 已完成翻译与审阅，跳过并进入下一章", chapter_id, chapter_title)
                     continue
 
+                t_p, tot_p, prog_ratio = _get_paragraph_progress()
                 task.current_chapter = chapter_id
                 task.current_chapter_index = idx
-                task.overall_progress = round(idx / max(1, task.total_chapters), 3)
-                task.message = f"正在处理第 {idx}/{task.total_chapters} 章：{chapter_title}"
+                task.overall_progress = prog_ratio
+                task.current_batch = 0
+                task.message = f"正在处理第 {idx}/{task.total_chapters} 章：{chapter_title}（全书已译 {t_p}/{tot_p} 段）"
                 task.updated_at = utc_now()
                 self._emit_status(task, "chapter_started")
 
                 # Run chapter translation & review
                 result = pipeline.run_chapter(chapter_id, cycle=idx)
+
+                # Update progress after review and fixes writeback
+                t_p, tot_p, prog_ratio = _get_paragraph_progress()
+                task.overall_progress = prog_ratio
 
                 # Emit chapter complete event
                 issues_cnt = result.get("issues") if result.get("issues") is not None else result.get("review", {}).get("issues", 0)

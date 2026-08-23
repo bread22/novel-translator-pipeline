@@ -165,6 +165,7 @@ export const api = {
       'pipeline_started',
       'pipeline_progress',
       'chapter_started',
+      'batch_completed',
       'chapter_completed',
       'fallback_triggered',
       'review_completed',

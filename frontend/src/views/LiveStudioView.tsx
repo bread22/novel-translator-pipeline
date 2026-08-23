@@ -33,7 +33,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const [applyFixes, setApplyFixes] = useState(true);
   const [autonomous, setAutonomous] = useState(true);
   const [layout, setLayout] = useState<'horizontal' | 'preserve'>('horizontal');
-  const [eventFilter, setEventFilter] = useState<'all' | 'fallback' | 'review'>('all');
+  const [eventFilter, setEventFilter] = useState<'all' | 'pipeline' | 'fallback'>('all');
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [selectedPolicy, setSelectedPolicy] = useState<string>('docs/prompts/erotic-novel-policy.md');
   const feedBottomRef = useRef<HTMLDivElement>(null);
@@ -116,7 +116,9 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
 
   const filteredEvents = streamEvents.filter((evt) => {
     if (eventFilter === 'fallback') return evt.event === 'fallback_triggered';
-    if (eventFilter === 'review') return evt.event === 'review_completed';
+    if (eventFilter === 'pipeline') {
+      return ['pipeline_started', 'chapter_started', 'pipeline_progress', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
+    }
     return true;
   });
 
@@ -497,7 +499,15 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 eventFilter === 'all' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              全部
+              全部事件
+            </button>
+            <button
+              onClick={() => setEventFilter('pipeline')}
+              className={`px-2.5 py-1 rounded text-xs transition-all ${
+                eventFilter === 'pipeline' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              流水线推进
             </button>
             <button
               onClick={() => setEventFilter('fallback')}
@@ -505,15 +515,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 eventFilter === 'fallback' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              降级事件
-            </button>
-            <button
-              onClick={() => setEventFilter('review')}
-              className={`px-2.5 py-1 rounded text-xs transition-all ${
-                eventFilter === 'review' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              审阅报告
+              降级容灾
             </button>
           </div>
         </div>
@@ -523,13 +525,59 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           {filteredEvents.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
               <Activity className="w-8 h-8 mx-auto mb-2 opacity-40 animate-pulse" />
-              <p>等待流水线事件推送中...</p>
+              <p>等待流水线实时事件推送中...</p>
             </div>
           ) : (
             filteredEvents.map((evt, idx) => {
               const isFallback = evt.event === 'fallback_triggered';
-              const isReview = evt.event === 'review_completed';
               const isCompleted = evt.event === 'pipeline_completed';
+              const isChapterDone = evt.event === 'chapter_completed';
+
+              let content = null;
+              if (evt.event === 'connect') {
+                content = <span className="text-emerald-400 font-sans">🟢 SSE 实时事件通道已连接</span>;
+              } else if (evt.event === 'pipeline_started') {
+                content = <span className="text-indigo-300 font-sans">🚀 {evt.data?.message || '流水线已启动'}</span>;
+              } else if (evt.event === 'chapter_started') {
+                content = (
+                  <span className="text-slate-200 font-sans">
+                    📖 <strong className="text-indigo-300">第 {evt.data?.chapter_index || ''} 章</strong> ({evt.data?.chapter_id || ''}) · {evt.data?.message || '开始翻译与一致性审阅...'}
+                  </span>
+                );
+              } else if (evt.event === 'pipeline_progress') {
+                content = (
+                  <span className="text-slate-300 font-sans">
+                    📊 全书进度: <strong className="text-indigo-300">{Math.round((evt.data?.overall_progress || 0) * 100)}%</strong> · {evt.data?.message || ''}
+                  </span>
+                );
+              } else if (evt.event === 'chapter_completed') {
+                const issues = evt.data?.result?.issues || 0;
+                const fixes = evt.data?.result?.fixes || 0;
+                content = (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-sans">
+                    <span className="text-emerald-300 font-medium">
+                      ✅ <strong className="text-emerald-200">第 {evt.data?.chapter_index || ''} 章</strong> ({evt.data?.chapter_id || ''}) 处理完成 (发现 {issues} 处问题，写回 {fixes} 处修复)
+                    </span>
+                    <span className="text-[11px] text-purple-300 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">
+                      详细质检报告已沉淀至「知识库」
+                    </span>
+                  </div>
+                );
+              } else if (evt.event === 'fallback_triggered') {
+                content = (
+                  <span className="text-amber-300 font-sans">
+                    ⚡ 触发模型降级: <strong className="text-amber-200">{evt.data?.from_provider}</strong> 发生异常 ({evt.data?.reason || '阻塞'}) ➔ 自动切换至 <strong className="text-emerald-300">{evt.data?.to_provider}</strong>
+                  </span>
+                );
+              } else if (evt.event === 'pipeline_completed') {
+                content = <span className="text-emerald-300 font-bold font-sans">🎉 {evt.data?.message || '全书翻译完成，中文 EPUB 已就绪！'}</span>;
+              } else {
+                content = (
+                  <span className="text-slate-300 font-sans">
+                    {evt.data?.message || (typeof evt.data === 'string' ? evt.data : JSON.stringify(evt.data))}
+                  </span>
+                );
+              }
 
               return (
                 <div
@@ -537,8 +585,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                   className={`p-3 rounded-xl border transition-all ${
                     isFallback
                       ? 'bg-amber-950/40 border-amber-800/60 text-amber-200'
-                      : isReview
-                      ? 'bg-purple-950/40 border-purple-800/60 text-purple-200'
+                      : isChapterDone
+                      ? 'bg-indigo-950/40 border-indigo-800/60 text-indigo-200'
                       : isCompleted
                       ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-200'
                       : 'bg-slate-950/60 border-slate-800/70 text-slate-300'
@@ -551,8 +599,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                     <span className="text-slate-500">{new Date(evt.timestamp).toLocaleTimeString()}</span>
                   </div>
 
-                  <div className="text-xs text-slate-200 break-all">
-                    {typeof evt.data === 'string' ? evt.data : JSON.stringify(evt.data, null, 2)}
+                  <div className="text-xs break-all">
+                    {content}
                   </div>
                 </div>
               );

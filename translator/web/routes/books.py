@@ -108,29 +108,37 @@ async def upload_book(file: UploadFile = File(...)) -> BookSummary:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = Path(tmp.name)
 
+    book_title = Path(file.filename).stem
+    book_id = safe_book_name(book_title)
+
     try:
         # Register book in novel-translator
-        result = call_novel_translator("add-book", "--source", str(tmp_path))
-        book_id = str(result.get("summary", {}).get("book_id", "") or result.get("book_id", ""))
-        if not book_id:
-            # Try to infer book_id from data/books
-            manifest_candidates = list((NOVEL_TRANSLATOR_ROOT / "data" / "books").glob("*/manifest.json"))
-            if manifest_candidates:
-                book_id = sorted(manifest_candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0].parent.name
+        result = call_novel_translator(
+            "add-book",
+            "--path",
+            str(tmp_path),
+            "--title",
+            book_title,
+            "--id",
+            book_id,
+        )
+        if result.get("status") != "ok":
+            error_msg = "; ".join([e.get("message", "") for e in result.get("errors", [])]) or "Novel Translator 注册失败"
+            raise HTTPException(status_code=500, detail=error_msg)
 
-        if not book_id:
-            raise HTTPException(status_code=500, detail="无法解析或注册书籍元数据")
+        summary = result.get("summary", {})
+        registered_id = str(summary.get("book", "") or summary.get("book_id", "") or book_id)
 
-        manifest = read_json(manifest_path(book_id))
+        manifest = read_json(manifest_path(registered_id))
         if not manifest:
-            raise HTTPException(status_code=500, detail=f"未找到已注册书籍 manifest: {book_id}")
+            raise HTTPException(status_code=500, detail=f"未找到已注册书籍 manifest: {registered_id}")
 
         output_root = get_output_root()
-        title = manifest.get("title", file.filename)
+        title = manifest.get("title", book_title)
         workspace = BookWorkspace.at(output_root, title)
-        workspace.initialize(source_epub=tmp_path if suffix == ".epub" else None, book_id=book_id)
+        workspace.initialize(source_epub=tmp_path if suffix == ".epub" else None, book_id=registered_id)
 
-        return summarize_book(book_id, manifest, output_root)
+        return summarize_book(registered_id, manifest, output_root)
     finally:
         if tmp_path.exists():
             tmp_path.unlink()

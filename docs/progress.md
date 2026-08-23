@@ -22,14 +22,14 @@
 - [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`)
 - [x] **2.4** 实现核心 REST API 路由 (`books.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
 - [x] **2.5** 编写 `tests/test_web_api.py` 接口自动化测试 (57 项测试 100% 通过)
-### Component 3: 现代化 Web 前端 (React 18/19 + Vite + Tailwind + shadcn/ui)
-- [ ] **3.1** 初始化 `frontend/` 项目结构与依赖配置
-- [ ] **3.2** 构建全局布局、主题切换与顶栏状态大屏
-- [ ] **3.3** 实现 **书架中心 (LibraryPage)**：EPUB 拖拽上传与状态卡片
-- [ ] **3.4** 实现 **实时作战室 (LiveStudioPage)**：降级容灾流向拓扑与实时段落瀑布流
-- [ ] **3.5** 实现 **双语阅读器 (ReaderEditorPage)**：虚拟滚动长列表与 AI 审阅记录查看
-- [ ] **3.6** 实现 **记忆与术语透视台 (KnowledgePage)**：Glossary 与 Book Memory 可视化
-- [ ] **3.7** 实现 **模型路由与系统设置 (SettingsPage)**：Provider 连通性预检与配置
+### Component 3: 现代化 Web 前端 (React 18/19 + Vite + Tailwind + Lucide Icons)
+- [x] **3.1** 初始化 `frontend/` 项目结构与依赖配置 (Vite + React 19 + Tailwind v4)
+- [x] **3.2** 构建全局布局、顶栏状态大屏与实时 SSE 状态同步 (`Navbar.tsx`)
+- [x] **3.3** 实现 **书架中心 (LibraryView)**：EPUB/TXT 拖拽上传解析与自适应进度卡片
+- [x] **3.4** 实现 **实时作战室 (LiveStudioView)**：两级降级容灾流向拓扑与实时事件瀑布流
+- [x] **3.5** 实现 **双语阅读器 (ReaderView)**：章节分栏阅读、原地编辑修改与单段重译
+- [x] **3.6** 实现 **记忆与术语透视台 (KnowledgeView)**：Glossary 术语表与角色长程记忆事实
+- [x] **3.7** 实现 **模型路由与系统设置 (SettingsView)**：Provider 连通性预检与配置热更新
 
 ### Component 4: 容器化与一键交付 (Deployment & Distribution)
 - [ ] **4.1** 编写多阶段构建 `Dockerfile` (Node.js 构建前端 + Python 3.11+ 运行后端)

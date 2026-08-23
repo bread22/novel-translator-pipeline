@@ -237,6 +237,11 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
         instructions = """
 这是章节级一致性审阅。
 - 顶层必须输出一个 JSON 对象，结构必须包含：{"checked_ids": [...], "fixes": [...], "glossary_delta": {"add":[], "update":[], "conflicts":[]}, "memory_delta": {"character_profiles":[], "world_rules":[], "relationship_graph":[], "chronology":[], "unresolved_clues":[]}, "chapter_state": {"summary": "...", "significant_changes": []}}。
+- 【语言规范与严禁残留日文】：
+  * 所有 fixes 里的 replacement（修正译文）必须是纯正、地道、通顺的完整简体中文段落！
+  * 绝对严禁在 replacement 中残留任何日文假名（包括平假名、片假名，如 すぐそば、カタカナ、の、に 等）或未翻译的生造日文词汇！
+  * 若原文中出现片假名概念词（如「カタカナ職業」），必须意译为其对应中文含义（如“时尚新潮职业”/“白领职业”），严禁直接复制日文假名！
+  * glossary_delta 的 target（中文译名）、memory_delta 中的各字段值、chapter_state 中的 summary，全部必须使用规范简体中文。
 - 只报告会导致读者误解原文的实质错误，不做文学润色。
 - 不报告纯风格偏好、轻微措辞差异、可接受的自然化、标点偏好或普通敬称差异。
 - 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids（必须覆盖 items 中的全部段落 ID）。
@@ -251,6 +256,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
         instructions = """
 这是全书状态的一致性审阅。
 - 顶层必须输出一个 JSON 对象，结构必须包含：{"checked_chapters": [...], "conflicts": [...], "recommendations": [...]}。
+- 【语言规范】：所有 recommendations、conflicts 和描述必须全部使用标准简体中文，严禁残留日文假名。
 - 必须把输入中的每个 chapter_id 写入 checked_chapters，且不得重复或添加未知章节。
 - 只检查 glossary、book_memory、章节摘要之间的事实、人物关系、时间线和术语冲突。
 - 不重新审阅全文，不做文学润色，不因为不同章节的正常措辞差异而报告问题。
@@ -266,7 +272,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     )
     schema = schema_path.read_text(encoding="utf-8")
     return f"""
-你是日译中小说译文审阅者。只分析输入 JSON，不修改文件，不调用外部工具。
+你是资深日译中小说审阅专家。只分析输入 JSON，不修改文件，不调用外部工具。
 {instructions}
 - {auto_rule}
 - glossary 是已有术语表；不得与已有术语冲突。

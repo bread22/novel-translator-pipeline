@@ -52,6 +52,38 @@ class PipelineFunctionTests(unittest.TestCase):
         ]
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a"])
 
+    def test_approved_fixes_rejects_japanese_kana_hallucinations(self) -> None:
+        items = [
+            {
+                "id": "p1",
+                "category": "mistranslation",
+                "severity": "major",
+                "confidence": 0.98,
+                "replacement": "车子已经来到那栋公寓的すぐそば。",
+                "auto_apply": True,
+            },
+            {
+                "id": "p2",
+                "category": "mistranslation",
+                "severity": "major",
+                "confidence": 0.98,
+                "replacement": "从事カタカナ职业的独身女性的房间。",
+                "auto_apply": True,
+            },
+            {
+                "id": "p3",
+                "category": "mistranslation",
+                "severity": "major",
+                "confidence": 0.98,
+                "replacement": "车子已经开到了那栋公寓的近旁。",
+                "auto_apply": True,
+            },
+        ]
+        approved = approved_fixes(items, autonomous=True)
+        self.assertEqual(len(approved), 1)
+        self.assertEqual(approved[0]["id"], "p3")
+        self.assertEqual(approved[0]["replacement"], "车子已经开到了那栋公寓的近旁。")
+
     def test_merge_chapter_reviews_consensus_and_deduplication(self) -> None:
         rev_a = {
             "checked_ids": ["p1", "p2"],

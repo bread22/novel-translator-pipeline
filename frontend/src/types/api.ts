@@ -147,6 +147,7 @@ export interface ChapterReviewReport {
     reason?: string;
     replacement?: string;
     auto_apply?: boolean;
+    invalid_reason?: string;
   }>;
   glossary_delta: Array<{
     source: string;

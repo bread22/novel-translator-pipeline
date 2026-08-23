@@ -422,6 +422,11 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                                 <strong className="text-amber-400">问题原因:</strong> {fix.reason}
                               </p>
                             )}
+                            {fix.invalid_reason && (
+                              <div className="text-[10px] text-rose-300 bg-rose-950/40 p-1.5 rounded border border-rose-800/40">
+                                ⚠️ {fix.invalid_reason}
+                              </div>
+                            )}
                             {fix.replacement && (
                               <p className="text-emerald-300 text-[11px] font-novel bg-slate-950/60 p-2 rounded border border-emerald-900/30">
                                 <strong className="text-emerald-400">写回修正译文:</strong> {fix.replacement}

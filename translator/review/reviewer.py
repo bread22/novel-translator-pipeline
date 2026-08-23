@@ -44,6 +44,15 @@ OBJECTIVE_CATEGORIES = {
 OBJECTIVE_SEVERITIES = {"critical", "major"}
 
 
+import re
+
+JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+
+
+def has_japanese_kana(text: str) -> bool:
+    return bool(JAPANESE_KANA_REGEX.search(text))
+
+
 def manifest_path(book: str) -> Path:
     from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT
     return NOVEL_TRANSLATOR_ROOT / "data" / "books" / book / "manifest.json"
@@ -68,6 +77,9 @@ def approved_fixes(items: list[dict[str, Any]], threshold: float = 0.9, *, auton
             str(item.get("category", "")) not in OBJECTIVE_CATEGORIES
             or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
         ):
+            continue
+        # Quality Guardrail: Strictly reject any replacement that contains leftover Japanese kana
+        if has_japanese_kana(replacement):
             continue
         if (autonomous or item.get("auto_apply") is True) and float(item.get("confidence", 0) or 0) >= threshold and replacement:
             item["approved_translation"] = replacement
@@ -102,8 +114,19 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
             seen.add(cid)
             checked_ids.append(cid)
     payload["checked_ids"] = checked_ids
-    # Filter fixes to only valid expected IDs
-    payload["fixes"] = [item for item in fixes if isinstance(item, dict) and str(item.get("id", "")) in expected_ids]
+    
+    # Filter fixes to only valid expected IDs and sanitize Japanese kana hallucinations
+    sanitized_fixes = []
+    for item in fixes:
+        if not isinstance(item, dict) or str(item.get("id", "")) not in expected_ids:
+            continue
+        rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
+        if rep and has_japanese_kana(rep):
+            item["auto_apply"] = False
+            item["confidence"] = min(float(item.get("confidence", 0) or 0), 0.3)
+            item["invalid_reason"] = "修正译文中残留未翻译日文假名，已拦截并禁用自动写回"
+        sanitized_fixes.append(item)
+    payload["fixes"] = sanitized_fixes
 
     received = set(checked_ids)
     missing = sorted(expected_ids - received)
@@ -200,7 +223,16 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
         if in_a and in_b:
             conf_a = float(in_a.get("confidence", 0) or 0)
             conf_b = float(in_b.get("confidence", 0) or 0)
-            chosen = dict(in_a if conf_a >= conf_b else in_b)
+            rep_a = str(in_a.get("replacement", "")).strip()
+            rep_b = str(in_b.get("replacement", "")).strip()
+            kana_a = has_japanese_kana(rep_a)
+            kana_b = has_japanese_kana(rep_b)
+            if kana_a and not kana_b:
+                chosen = dict(in_b)
+            elif kana_b and not kana_a:
+                chosen = dict(in_a)
+            else:
+                chosen = dict(in_a if conf_a >= conf_b else in_b)
             chosen["confidence"] = max(conf_a, conf_b, 0.95)
             chosen["consensus"] = True
             chosen["reporters"] = ["primary", "secondary"]

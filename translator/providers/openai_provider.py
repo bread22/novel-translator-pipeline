@@ -284,7 +284,10 @@ class OpenAIProvider(BaseProvider):
         body_data: dict[str, Any] = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "你是日译中小说审阅专家。严格输出合规的 JSON 对象，不包含任何 Markdown 或解释。"},
+                {
+                    "role": "system",
+                    "content": "你是资深日译中小说审阅专家。你的任务是找出译文中改变原意的实质性客观错误。你输出的所有 fixes（包括 replacement 修正译文）、glossary 与 memory 必须是纯正流畅的简体中文，严禁在修正译文中残留任何日文假名（平假名/片假名）或未翻译词汇。严格只输出合规的 JSON 对象，不包含 Markdown 代码块或额外文字。",
+                },
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,

@@ -159,6 +159,12 @@ export interface SystemConfig {
     base_url?: string;
     api_key?: string;
     temperature?: number;
+    context_tokens?: number;
+    timeout?: number;
+    binary?: string;
+    agy?: string;
+    effort?: string;
+    agent?: string;
   }>;
   pipeline?: {
     max_cycles?: number;

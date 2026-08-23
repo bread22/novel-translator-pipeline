@@ -286,23 +286,268 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
     }
 
 
+REVIEW_CHUNK_MAX_PARAGRAPHS = 200
+
+
+def dynamic_review_timeout(input_payload: dict[str, Any]) -> int:
+    """Calculate dynamic timeout linearly based on source character volume."""
+    items = input_payload.get("items", [])
+    total_chars = sum(len(str(item.get("source", ""))) for item in items if isinstance(item, dict))
+    return max(60, min(360, 45 + int(total_chars * 0.05)))
+
+
 def _execute_review_with_fallbacks(
     kind: str,
     input_payload: dict[str, Any],
     schema_path: Path,
     autonomous: bool = False,
     backend: str | None = None,
+    timeout: int | None = None,
 ) -> dict[str, Any]:
     backends = _review_backends(backend)
     last_exc = None
+    effective_timeout = timeout or dynamic_review_timeout(input_payload)
     for candidate in backends:
         try:
             provider = get_provider(candidate)
-            return provider.review(kind, input_payload, schema_path, autonomous=autonomous)
+            return provider.review(kind, input_payload, schema_path, autonomous=autonomous, timeout=effective_timeout)
         except Exception as exc:
             last_exc = exc
             continue
     raise RuntimeError(f"所有审阅端均失败 (kind={kind}, primary={backend}): {last_exc}") from last_exc
+
+
+def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str, Any]) -> dict[str, Any]:
+    """Forward newly extracted terms, character memory, and narrative state to subsequent chunks."""
+    rolling = dict(base_payload)
+
+    # 1. Forward Glossary
+    current_glossary = list(rolling.get("glossary", []))
+    new_terms = chunk_review.get("glossary_delta", {}).get("add", [])
+    seen_sources = {str(t.get("source", "")).strip() for t in current_glossary if isinstance(t, dict)}
+    for term in new_terms:
+        if isinstance(term, dict) and term.get("source"):
+            src = str(term["source"]).strip()
+            if src and src not in seen_sources:
+                seen_sources.add(src)
+                current_glossary.append(term)
+    rolling["glossary"] = current_glossary
+
+    # 2. Forward Book Memory
+    current_memory = dict(rolling.get("book_memory", {}))
+    mem_delta = chunk_review.get("memory_delta", {})
+    if isinstance(mem_delta, dict) and mem_delta:
+        merged_chars = {c.get("name"): c for c in current_memory.get("characters", []) if isinstance(c, dict) and c.get("name")}
+        for c in mem_delta.get("characters", []):
+            if isinstance(c, dict) and c.get("name"):
+                merged_chars[c["name"]] = c
+        current_memory["characters"] = list(merged_chars.values())
+
+        merged_ws = {w.get("term"): w for w in current_memory.get("world_settings", []) if isinstance(w, dict) and w.get("term")}
+        for w in mem_delta.get("world_settings", []):
+            if isinstance(w, dict) and w.get("term"):
+                merged_ws[w["term"]] = w
+        current_memory["world_settings"] = list(merged_ws.values())
+
+        merged_hints = list(current_memory.get("plot_hints", []))
+        for h in mem_delta.get("plot_hints", []):
+            if h not in merged_hints:
+                merged_hints.append(h)
+        current_memory["plot_hints"] = merged_hints
+
+        merged_entries = {e.get("key"): e for e in current_memory.get("entries", []) if isinstance(e, dict) and e.get("key")}
+        for e in mem_delta.get("entries", []):
+            if isinstance(e, dict) and e.get("key"):
+                merged_entries[e["key"]] = e
+        current_memory["entries"] = list(merged_entries.values())
+        rolling["book_memory"] = current_memory
+
+    # 3. Forward Chapter State (Narrative summary of immediate preceding chunk)
+    chunk_state = chunk_review.get("chapter_state")
+    if isinstance(chunk_state, dict) and chunk_state:
+        rolling["previous_chapter_state"] = chunk_state
+
+    return rolling
+
+
+def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> dict[str, Any]:
+    """Combine two sequential chunk reviews into a unified review structure."""
+    # Checked IDs concatenated preserving order
+    seen_ids = set()
+    merged_checked = []
+    for cid in (chunk_a.get("checked_ids", []) or []) + (chunk_b.get("checked_ids", []) or []):
+        if cid not in seen_ids:
+            seen_ids.add(cid)
+            merged_checked.append(cid)
+
+    # Fixes concatenated
+    merged_fixes = (chunk_a.get("fixes", []) or []) + (chunk_b.get("fixes", []) or [])
+
+    # Glossary Delta deduplication
+    gloss_a = chunk_a.get("glossary_delta", {}) or {}
+    gloss_b = chunk_b.get("glossary_delta", {}) or {}
+    add_a = gloss_a.get("add", []) if isinstance(gloss_a, dict) else []
+    add_b = gloss_b.get("add", []) if isinstance(gloss_b, dict) else []
+    seen_sources = set()
+    merged_add = []
+    for item in add_a + add_b:
+        if isinstance(item, dict) and item.get("source"):
+            src = str(item["source"]).strip()
+            if src not in seen_sources:
+                seen_sources.add(src)
+                merged_add.append(item)
+    merged_glossary_delta = {"add": merged_add}
+
+    # Memory Delta merger
+    mem_a = chunk_a.get("memory_delta", {}) or {}
+    mem_b = chunk_b.get("memory_delta", {}) or {}
+    merged_memory = {**mem_b, **mem_a}
+    if isinstance(mem_a, dict) and isinstance(mem_b, dict):
+        for key in ["characters", "world_settings", "plot_hints", "entries"]:
+            list_a = mem_a.get(key, []) if isinstance(mem_a.get(key), list) else []
+            list_b = mem_b.get(key, []) if isinstance(mem_b.get(key), list) else []
+            if list_a or list_b:
+                merged_memory[key] = list_a + list_b
+
+    # Chapter State synthesis
+    state_a = chunk_a.get("chapter_state", {}) or {}
+    state_b = chunk_b.get("chapter_state", {}) or {}
+    summary_a = str(state_a.get("summary", "")).strip()
+    summary_b = str(state_b.get("summary", "")).strip()
+    if summary_a and summary_b:
+        merged_summary = f"{summary_a}\n{summary_b}"
+    else:
+        merged_summary = summary_b or summary_a
+
+    merged_entities = sorted(set((state_a.get("active_entities", []) or []) + (state_b.get("active_entities", []) or [])))
+    merged_changes = (state_a.get("important_changes", []) or []) + (state_b.get("important_changes", []) or [])
+
+    merged_state = {
+        "summary": merged_summary,
+        "active_entities": merged_entities,
+        "important_changes": merged_changes,
+        "open_questions": (state_a.get("open_questions", []) or []) + (state_b.get("open_questions", []) or []),
+    }
+
+    return {
+        "checked_ids": merged_checked,
+        "fixes": merged_fixes,
+        "glossary_delta": merged_glossary_delta,
+        "memory_delta": merged_memory,
+        "chapter_state": merged_state,
+    }
+
+
+def _execute_single_segment_review(
+    input_payload: dict[str, Any],
+    schema_path: Path,
+    autonomous: bool = False,
+    backend: str | None = None,
+    secondary_backend: str | None = None,
+    is_dual: bool = False,
+) -> dict[str, Any]:
+    """Execute single segment review with dual review (if configured) and backend failover."""
+    primary_cand = backend
+    sec_cand = secondary_backend
+
+    if not is_dual or not sec_cand or sec_cand == primary_cand:
+        return _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
+
+    primary_payload = None
+    secondary_payload = None
+    errors = []
+    try:
+        primary_payload = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
+    except Exception as exc:
+        errors.append(f"primary ({primary_cand}) error: {exc}")
+
+    try:
+        secondary_payload = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=sec_cand)
+    except Exception as exc:
+        errors.append(f"secondary ({sec_cand}) error: {exc}")
+
+    if primary_payload and secondary_payload:
+        return merge_chapter_reviews(primary_payload, secondary_payload)
+    elif primary_payload:
+        return primary_payload
+    elif secondary_payload:
+        return secondary_payload
+    else:
+        raise RuntimeError(f"双审阅端均失败: {'; '.join(errors)}")
+
+
+def _execute_segment_with_adaptive_split(
+    base_payload: dict[str, Any],
+    items: list[dict[str, Any]],
+    schema_path: Path,
+    autonomous: bool = False,
+    backend: str | None = None,
+    secondary_backend: str | None = None,
+    is_dual: bool = False,
+    depth: int = 0,
+    max_depth: int = 4,
+) -> dict[str, Any]:
+    """Execute review for items. If failure occurs and len(items) > 1, recursively binary split."""
+    if not items:
+        return {
+            "checked_ids": [],
+            "fixes": [],
+            "glossary_delta": {"add": []},
+            "memory_delta": {},
+            "chapter_state": base_payload.get("previous_chapter_state") or {},
+        }
+
+    segment_payload = dict(base_payload)
+    segment_payload["items"] = items
+    expected_ids = {str(item.get("id", "")) for item in items if item.get("id")}
+
+    try:
+        res = _execute_single_segment_review(
+            segment_payload,
+            schema_path,
+            autonomous=autonomous,
+            backend=backend,
+            secondary_backend=secondary_backend,
+            is_dual=is_dual,
+        )
+        res = validate_chapter_review_payload(res, expected_ids)
+        return res
+    except Exception as exc:
+        if len(items) > 1 and depth < max_depth:
+            # Recursive binary split on failure: Never skip review!
+            midpoint = max(1, len(items) // 2)
+            left_items = items[:midpoint]
+            right_items = items[midpoint:]
+
+            left_res = _execute_segment_with_adaptive_split(
+                base_payload,
+                left_items,
+                schema_path,
+                autonomous=autonomous,
+                backend=backend,
+                secondary_backend=secondary_backend,
+                is_dual=is_dual,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+
+            rolling_payload = _update_rolling_payload(base_payload, left_res)
+
+            right_res = _execute_segment_with_adaptive_split(
+                rolling_payload,
+                right_items,
+                schema_path,
+                autonomous=autonomous,
+                backend=backend,
+                secondary_backend=secondary_backend,
+                is_dual=is_dual,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+
+            return _combine_chunk_reviews(left_res, right_res)
+        else:
+            raise exc
 
 
 def run_chapter_review(
@@ -313,6 +558,7 @@ def run_chapter_review(
     backend: str | None = None,
     secondary_backend: str | None = None,
     dual_review: bool | None = None,
+    chunk_size: int = REVIEW_CHUNK_MAX_PARAGRAPHS,
 ) -> None:
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -335,33 +581,43 @@ def run_chapter_review(
         or os.environ.get("SECONDARY_REVIEWER", "")
     ).strip()
 
-    if not is_dual or not sec_cand or sec_cand == primary_cand:
-        payload = _execute_review_with_fallbacks("chapter", input_payload, CHAPTER_SCHEMA, autonomous, backend=primary_cand)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        return
+    items = input_payload.get("items", [])
+    expected_ids = {str(item["id"]) for item in items if isinstance(item, dict) and item.get("id")}
 
-    primary_payload = None
-    secondary_payload = None
-    try:
-        primary_payload = _execute_review_with_fallbacks("chapter", input_payload, CHAPTER_SCHEMA, autonomous, backend=primary_cand)
-    except Exception:
-        pass
-
-    try:
-        secondary_payload = _execute_review_with_fallbacks("chapter", input_payload, CHAPTER_SCHEMA, autonomous, backend=sec_cand)
-    except Exception:
-        pass
-
-    if primary_payload and secondary_payload:
-        merged_payload = merge_chapter_reviews(primary_payload, secondary_payload)
-    elif primary_payload:
-        merged_payload = primary_payload
-    elif secondary_payload:
-        merged_payload = secondary_payload
+    if len(items) <= chunk_size:
+        merged_payload = _execute_segment_with_adaptive_split(
+            input_payload,
+            items,
+            CHAPTER_SCHEMA,
+            autonomous=autonomous,
+            backend=primary_cand,
+            secondary_backend=sec_cand,
+            is_dual=is_dual,
+        )
     else:
-        raise RuntimeError(f"双审阅端均失败: {input_path.name}")
+        # Super-large chapter chunked review with rolling context forwarding
+        chunks = [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
+        rolling_payload = dict(input_payload)
+        chunk_results = []
 
+        for chunk_items in chunks:
+            chunk_res = _execute_segment_with_adaptive_split(
+                rolling_payload,
+                chunk_items,
+                CHAPTER_SCHEMA,
+                autonomous=autonomous,
+                backend=primary_cand,
+                secondary_backend=sec_cand,
+                is_dual=is_dual,
+            )
+            chunk_results.append(chunk_res)
+            rolling_payload = _update_rolling_payload(rolling_payload, chunk_res)
+
+        merged_payload = chunk_results[0]
+        for next_res in chunk_results[1:]:
+            merged_payload = _combine_chunk_reviews(merged_payload, next_res)
+
+    validate_chapter_review_payload(merged_payload, expected_ids)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

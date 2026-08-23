@@ -440,6 +440,115 @@ class PipelineFunctionTests(unittest.TestCase):
                 ("gemini", ("p1", "p2", "p3", "p4")),
             ])
 
+    def test_run_chapter_review_chunks_large_chapter_and_forwards_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "c1-input.json"
+            output_path = root / "c1-output.json"
+
+            input_data = {
+                "book": "test-book",
+                "chapter_id": "c1",
+                "chapter_title": "第一章",
+                "translation_policy": "政策",
+                "book_memory": {"characters": [], "world_settings": [], "plot_hints": [], "entries": []},
+                "previous_chapter_state": {},
+                "glossary": [],
+                "items": [
+                    {"id": "p1", "source": "源1", "translated": "译1"},
+                    {"id": "p2", "source": "源2", "translated": "译2"},
+                    {"id": "p3", "source": "源3", "translated": "译3"},
+                    {"id": "p4", "source": "源4", "translated": "译4"},
+                    {"id": "p5", "source": "源5", "translated": "译5"},
+                ],
+            }
+            input_path.write_text(json.dumps(input_data), encoding="utf-8")
+
+            # Mock _execute_review_with_fallbacks
+            from unittest.mock import patch
+            from translator.review.reviewer import run_chapter_review
+
+            def mock_execute(*args: Any, **kwargs: Any) -> dict:
+                payload = kwargs.get("input_payload") or (args[1] if len(args) > 1 else {})
+                chunk_items = payload.get("items", [])
+                cids = [item["id"] for item in chunk_items]
+                return {
+                    "checked_ids": cids,
+                    "fixes": [
+                        {
+                            "id": cids[0],
+                            "category": "mistranslation",
+                            "severity": "major",
+                            "confidence": 0.95,
+                            "reason": "更准确",
+                            "replacement": f"优化-{cids[0]}",
+                            "auto_apply": True,
+                        }
+                    ],
+                    "glossary_delta": {"add": [{"source": f"term-{cids[0]}", "target": f"词-{cids[0]}"}]},
+                    "memory_delta": {"characters": [{"name": f"char-{cids[0]}"}]},
+                    "chapter_state": {"summary": f"总结-{','.join(cids)}"},
+                }
+
+            with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=mock_execute):
+                run_chapter_review(input_path, output_path, chunk_size=2)
+
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["checked_ids"], ["p1", "p2", "p3", "p4", "p5"])
+            self.assertEqual(len(result["fixes"]), 3)  # One per chunk (chunk1: p1, chunk2: p3, chunk3: p5)
+            self.assertEqual(len(result["glossary_delta"]["add"]), 3)
+            self.assertEqual(len(result["memory_delta"]["characters"]), 3)
+            self.assertIn("总结-p1,p2", result["chapter_state"]["summary"])
+            self.assertIn("总结-p5", result["chapter_state"]["summary"])
+
+    def test_run_chapter_review_adaptive_split_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "c1-input.json"
+            output_path = root / "c1-output.json"
+
+            input_data = {
+                "book": "test-book",
+                "chapter_id": "c1",
+                "chapter_title": "第一章",
+                "translation_policy": "政策",
+                "book_memory": {},
+                "previous_chapter_state": {},
+                "glossary": [],
+                "items": [
+                    {"id": "p1", "source": "源1", "translated": "译1"},
+                    {"id": "p2", "source": "源2", "translated": "译2"},
+                    {"id": "p3", "source": "源3", "translated": "译3"},
+                    {"id": "p4", "source": "源4", "translated": "译4"},
+                ],
+            }
+            input_path.write_text(json.dumps(input_data), encoding="utf-8")
+
+            from unittest.mock import patch
+            from translator.review.reviewer import run_chapter_review
+
+            def mock_failing_execute(*args: Any, **kwargs: Any) -> dict:
+                payload = kwargs.get("input_payload") or (args[1] if len(args) > 1 else {})
+                chunk_items = payload.get("items", [])
+                cids = [item["id"] for item in chunk_items]
+                # Fail if asked to review more than 2 items at once (simulating timeout on large input)
+                if len(cids) > 2:
+                    raise RuntimeError("Prefill Timeout on large chunk")
+                return {
+                    "checked_ids": cids,
+                    "fixes": [],
+                    "glossary_delta": {"add": []},
+                    "memory_delta": {},
+                    "chapter_state": {"summary": f"完成-{','.join(cids)}"},
+                }
+
+            with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=mock_failing_execute):
+                # chunk_size=4 will initially fail on all 4 items, then adaptively binary split into 2 + 2 and succeed!
+                run_chapter_review(input_path, output_path, chunk_size=4)
+
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["checked_ids"], ["p1", "p2", "p3", "p4"])
+
 
 if __name__ == "__main__":
     unittest.main()

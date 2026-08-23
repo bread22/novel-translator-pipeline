@@ -144,9 +144,9 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
             <h2 className="text-xl font-bold text-white tracking-tight">{book.name}</h2>
           </div>
           <p className="text-xs text-slate-400 mt-1 flex items-center gap-2">
-            <span>总章节: {book.total_chapters} 章</span>
+            <span>总章节: {book.total_chapters} 章 ({book.translated_chapters} 章已完成)</span>
             <span>·</span>
-            <span>总段落: {book.total_paragraphs} 段</span>
+            <span>总段落: {book.total_paragraphs} 段 ({book.translated_paragraphs} 段已译)</span>
             <span>·</span>
             <span className="text-indigo-400 font-medium">
               {liveMessage}
@@ -406,9 +406,13 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
 
                   <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-xs">
                     <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
-                      <span className="text-slate-500 text-[10px]">当前章节</span>
+                      <span className="text-slate-500 text-[10px]">
+                        {isRunning ? '正在翻译章节' : '已完成章节'}
+                      </span>
                       <p className="font-mono font-bold text-slate-200 mt-0.5">
-                        {activeTask?.current_chapter_index || 0} / {activeTask?.total_chapters || book.total_chapters}
+                        {isRunning && activeTask?.current_chapter_index
+                          ? `第 ${activeTask.current_chapter_index} / ${activeTask.total_chapters || book.total_chapters} 章`
+                          : `${book.translated_chapters} / ${book.total_chapters} 章`}
                       </p>
                     </div>
                     <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">

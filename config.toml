@@ -1,18 +1,21 @@
-# Novel Translator unified parameters. Values here are the runtime source of truth.
-
 [paths]
 output_root = "output"
 translation_policy = "docs/prompts/erotic-novel-policy.md"
 
 [roles]
 primary_translator = "nemotron"
-fallback_translators = ["gemini_lite", "deepseek"]
+fallback_translators = [
+    "gemini_lite",
+    "deepseek",
+]
 fallback_translator = "gemini_lite"
 secondary_fallback_translator = "deepseek"
 reviewer = "nemotron"
 secondary_reviewer = "gemini_lite"
 dual_review = true
-fallback_reviewers = ["deepseek"]
+fallback_reviewers = [
+    "deepseek",
+]
 
 [providers.opencode]
 type = "opencode"
@@ -90,7 +93,9 @@ api_key = "$NVIDIA_API_KEY"
 context_tokens = 131072
 timeout = 600
 thinking = false
-chat_template_kwargs = { thinking = false }
+
+[providers.nemotron.chat_template_kwargs]
+thinking = false
 
 [providers.gemini_lite]
 type = "openai"
@@ -119,9 +124,9 @@ timeout = 600
 [pipeline]
 max_cycles = 1000
 max_chapter_batches = 1000
-primary_batch_max_chars = 1500 # 适中批次大小（约 15~20 段），保证最高文学润色与上下文质量
-max_provider_split_depth = 2 # 遇到审查/格式错误时最多允许二分拆分深度；设为 2 表示最多二分 2 次即直接转入 fallback
-split_on_content_filter = false # 遇到审查/模型内部拒答时是否二分；设为 false 时立即触发 fallback 不进行二分
+primary_batch_max_chars = 1500
+max_provider_split_depth = 2
+split_on_content_filter = false
 translation_max_tokens = 8192
 health_check_timeout = 120
 layout = "horizontal"

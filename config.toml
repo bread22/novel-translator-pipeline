@@ -6,16 +6,13 @@ translation_policy = "docs/prompts/erotic-novel-policy.md"
 primary_translator = "nemotron"
 fallback_translators = [
     "gemini_lite",
-    "deepseek",
 ]
 fallback_translator = "gemini_lite"
-secondary_fallback_translator = "deepseek"
+secondary_fallback_translator = ""
 reviewer = "nemotron"
 secondary_reviewer = "gemini_lite"
 dual_review = true
-fallback_reviewers = [
-    "deepseek",
-]
+fallback_reviewers = []
 
 [providers.opencode]
 type = "opencode"
@@ -87,7 +84,7 @@ timeout = 600
 [providers.nemotron]
 type = "openai"
 base_url = "https://integrate.api.nvidia.com/v1"
-model = "nvidia/nemotron-3-ultra-550b-a55b"
+model = "nvidia/llama-3.3-nemotron-super-49b-v1"
 api_key = "$NVIDIA_API_KEY"
 context_tokens = 131072
 timeout = 600

@@ -133,13 +133,14 @@ def run_system_preflight() -> PreflightResponse:
 
     def probe_single_provider(p_name: str, p_conf: dict[str, Any]) -> PreflightProviderResult:
         p_type = p_conf.get("type", "unknown")
+        is_assigned = p_name in role_mapping
         role_desc = " / ".join(role_mapping.get(p_name, ["未分配"]))
         model_name = p_conf.get("model", "")
         t0 = time.time()
+        timeout = 12 if is_assigned else 3
         try:
             provider_inst = create_provider(p_name, config)
-            # Run quick health check with 5s timeout
-            check_res = provider_inst.health_check(timeout=5)
+            check_res = provider_inst.health_check(timeout=timeout)
             latency = round((time.time() - t0) * 1000, 1)
 
             is_ok = False

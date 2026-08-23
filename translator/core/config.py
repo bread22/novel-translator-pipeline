@@ -184,9 +184,9 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         for fb in fallbacks:
             if fb not in providers:
                 raise ValueError(f"roles.fallback_translators 引用了未定义 provider：{fb}")
-    if "fallback_translator" in roles and roles["fallback_translator"] not in providers:
+    if roles.get("fallback_translator") and roles["fallback_translator"] not in providers:
         raise ValueError(f"roles.fallback_translator 引用了未定义 provider：{roles['fallback_translator']}")
-    if "secondary_fallback_translator" in roles and roles["secondary_fallback_translator"] not in providers:
+    if roles.get("secondary_fallback_translator") and roles["secondary_fallback_translator"] not in providers:
         raise ValueError(f"roles.secondary_fallback_translator 引用了未定义 provider：{roles['secondary_fallback_translator']}")
         
     return value

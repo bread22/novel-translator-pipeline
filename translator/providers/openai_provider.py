@@ -103,7 +103,7 @@ class OpenAIProvider(BaseProvider):
             status = int(response.status)
         return raw, status, None
 
-    def health_check(self, timeout: int = 5) -> dict[str, Any]:
+    def health_check(self, timeout: int = 15) -> dict[str, Any]:
         if self.raw_key and self.raw_key.startswith("$"):
             self.api_key = os.environ.get(self.raw_key[1:], "")
         is_local = "127.0.0.1" in self.base_url or "localhost" in self.base_url

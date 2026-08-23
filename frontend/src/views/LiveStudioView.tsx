@@ -539,9 +539,11 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
               } else if (evt.event === 'pipeline_started') {
                 content = <span className="text-indigo-300 font-sans">🚀 {evt.data?.message || '流水线已启动'}</span>;
               } else if (evt.event === 'chapter_started') {
+                const chIndex = evt.data?.current_chapter_index ?? evt.data?.chapter_index;
+                const chId = evt.data?.current_chapter ?? evt.data?.chapter_id;
                 content = (
                   <span className="text-slate-200 font-sans">
-                    📖 <strong className="text-indigo-300">第 {evt.data?.chapter_index || ''} 章</strong> ({evt.data?.chapter_id || ''}) · {evt.data?.message || '开始翻译与一致性审阅...'}
+                    📖 {chIndex ? <><strong className="text-indigo-300">第 {chIndex} 章</strong> {chId ? `(${chId})` : ''} · </> : ''}{evt.data?.message || '开始翻译与一致性审阅...'}
                   </span>
                 );
               } else if (evt.event === 'pipeline_progress') {
@@ -551,12 +553,14 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                   </span>
                 );
               } else if (evt.event === 'chapter_completed') {
+                const chIndex = evt.data?.chapter_index ?? evt.data?.current_chapter_index;
+                const chId = evt.data?.chapter_id ?? evt.data?.current_chapter;
                 const issues = evt.data?.result?.issues || 0;
                 const fixes = evt.data?.result?.fixes || 0;
                 content = (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-sans">
                     <span className="text-emerald-300 font-medium">
-                      ✅ <strong className="text-emerald-200">第 {evt.data?.chapter_index || ''} 章</strong> ({evt.data?.chapter_id || ''}) 处理完成 (发现 {issues} 处问题，写回 {fixes} 处修复)
+                      ✅ {chIndex ? <><strong className="text-emerald-200">第 {chIndex} 章</strong> {chId ? `(${chId})` : ''} </> : ''}处理完成 (发现 {issues} 处问题，写回 {fixes} 处修复)
                     </span>
                     <span className="text-[11px] text-purple-300 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">
                       详细质检报告已沉淀至「知识库」

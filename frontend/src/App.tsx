@@ -58,12 +58,24 @@ export const App: React.FC = () => {
       }
       setStreamEvents((prev) => [...prev.slice(-200), evt]);
 
-      // If event matches current active book, refresh status
-      if (
-        evt.event === 'pipeline_progress' ||
-        evt.event === 'chapter_completed' ||
-        evt.event === 'pipeline_completed'
-      ) {
+      // 1. Direct activeTask state update from event payload if present
+      if (evt.data && typeof evt.data === 'object' && evt.data.task_id && evt.data.status) {
+        if (!selectedBookId || evt.data.book_id === selectedBookId) {
+          setActiveTask(evt.data as TaskStatusResponse);
+        }
+      }
+
+      // 2. If pipeline state changed or chapter completed, sync task and books
+      const pipelineEvents = [
+        'pipeline_started',
+        'chapter_started',
+        'pipeline_progress',
+        'chapter_completed',
+        'pipeline_completed',
+        'pipeline_paused',
+        'pipeline_stopped',
+      ];
+      if (pipelineEvents.includes(evt.event)) {
         refreshTask();
         refreshBooks();
       }

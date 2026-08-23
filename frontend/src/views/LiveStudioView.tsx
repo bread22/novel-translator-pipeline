@@ -122,6 +122,14 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
     ? Math.round(activeTask.overall_progress * 100)
     : Math.round((book.progress_percentage || 0) * 100);
 
+  const latestStatusEvent = [...streamEvents].reverse().find(
+    (e) => e.data && typeof e.data === 'object' && e.data.task_id && e.data.message
+  );
+  const liveMessage =
+    latestStatusEvent?.data?.message ||
+    activeTask?.message ||
+    (isRunning ? '流水线推进中...' : '准备就绪');
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* Header & Controls Toolbar */}
@@ -138,8 +146,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
             <span>·</span>
             <span>总段落: {book.total_paragraphs} 段</span>
             <span>·</span>
-            <span className="text-indigo-400">
-              {activeTask?.message || (isRunning ? '流水线推进中...' : '准备就绪')}
+            <span className="text-indigo-400 font-medium">
+              {liveMessage}
             </span>
           </p>
         </div>

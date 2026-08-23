@@ -5,41 +5,11 @@ Subject: [PATCH] Fix nested DOM parsing and TOC title mapping; add
  configurable temperature and max_tokens with strict schema
 
 ---
- app/book_io.py       | 11 ++++++++---
  app/config.py        |  4 ++++
  app/translator.py    | 32 +++++++++++++++++++++++++++++++-
  setting.example.toml |  2 ++
- 4 files changed, 45 insertions(+), 4 deletions(-)
+ 3 files changed, 37 insertions(+), 1 deletion(-)
 
-diff --git a/app/book_io.py b/app/book_io.py
-index f976682..aa5b7cf 100644
---- a/app/book_io.py
-+++ b/app/book_io.py
-@@ -637,7 +637,7 @@ def _soup_translatable_nodes(soup) -> list:
- 
- 
- def _has_block_children(element: ET.Element) -> bool:
--    return any(_local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in list(element))
-+    return any(child is not element and _local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in element.iter())
- 
- 
- def _element_text(element: ET.Element) -> str:
-@@ -986,8 +986,13 @@ def _text_hash(text: str) -> str:
- def _chapter_title_translations(book: Book) -> dict[str, str]:
-     mapping: dict[str, str] = {}
-     for chapter in book.chapters:
--        if chapter.paragraphs and chapter.paragraphs[0].translated and chapter.paragraphs[0].source == chapter.title:
--            mapping[chapter.title] = chapter.paragraphs[0].translated
-+        if chapter.paragraphs and chapter.paragraphs[0].translated:
-+            first = chapter.paragraphs[0]
-+            # EPUB TOC entries often use the file-level chapter title while the
-+            # visible translated heading is the first paragraph in the file.
-+            # Map both forms so navigation text follows the translated heading.
-+            mapping[chapter.title] = first.translated
-+            mapping[first.source] = first.translated
-         for paragraph in chapter.paragraphs:
-             epub = paragraph.metadata.get("epub", {})
-             if epub.get("node_tag") in {"h1", "h2", "h3", "h4", "h5", "h6"} and paragraph.translated:
 diff --git a/app/config.py b/app/config.py
 index 47a6f42..b6201df 100644
 --- a/app/config.py

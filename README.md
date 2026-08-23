@@ -190,8 +190,8 @@ stop_on_error = true
 
 #### Linux / macOS (Bash / Zsh)
 ```bash
-# 1. 递归克隆本项目（自带内置增强版 vendor/novel-translator）
-git clone --recursive https://github.com/bread22/novel-translator-pipeline.git
+# 1. 克隆本项目
+git clone https://github.com/bread22/novel-translator-pipeline.git
 cd novel-translator-pipeline
 
 # 2. 创建虚拟环境并配置
@@ -203,8 +203,8 @@ cp .env.example .env
 
 #### Windows (PowerShell)
 ```powershell
-# 1. 递归克隆本项目（自带内置增强版 vendor/novel-translator）
-git clone --recursive https://github.com/bread22/novel-translator-pipeline.git
+# 1. 克隆本项目
+git clone https://github.com/bread22/novel-translator-pipeline.git
 cd novel-translator-pipeline
 
 # 2. 创建虚拟环境并配置

@@ -20,7 +20,7 @@ def resolve_novel_translator_root() -> Path:
     default_home = Path.home() / "src" / "novel-translator"
     if (default_home / "main.py").exists():
         return default_home.resolve()
-    return vendor_root.resolve()
+    return default_home.resolve()
 
 
 def resolve_novel_translator_python(novel_root: Path | None = None) -> Path:

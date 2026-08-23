@@ -1,0 +1,42 @@
+From 69d5eb49b6a083800d22b8f6db90504082849c40 Mon Sep 17 00:00:00 2001
+From: Qingyi Wu <wuqingyi22@gmail.com>
+Date: Fri, 21 Aug 2026 22:19:13 -0400
+Subject: [PATCH] Fix nested DOM parsing and TOC title mapping; add
+ configurable temperature and max_tokens with strict schema
+
+---
+ app/book_io.py | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/app/book_io.py b/app/book_io.py
+index f976682..aa5b7cf 100644
+--- a/app/book_io.py
++++ b/app/book_io.py
+@@ -637,7 +637,7 @@ def _soup_translatable_nodes(soup) -> list:
+ 
+ 
+ def _has_block_children(element: ET.Element) -> bool:
+-    return any(_local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in list(element))
++    return any(child is not element and _local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in element.iter())
+ 
+ 
+ def _element_text(element: ET.Element) -> str:
+@@ -986,8 +986,13 @@ def _text_hash(text: str) -> str:
+ def _chapter_title_translations(book: Book) -> dict[str, str]:
+     mapping: dict[str, str] = {}
+     for chapter in book.chapters:
+-        if chapter.paragraphs and chapter.paragraphs[0].translated and chapter.paragraphs[0].source == chapter.title:
+-            mapping[chapter.title] = chapter.paragraphs[0].translated
++        if chapter.paragraphs and chapter.paragraphs[0].translated:
++            first = chapter.paragraphs[0]
++            # EPUB TOC entries often use the file-level chapter title while the
++            # visible translated heading is the first paragraph in the file.
++            # Map both forms so navigation text follows the translated heading.
++            mapping[chapter.title] = first.translated
++            mapping[first.source] = first.translated
+         for paragraph in chapter.paragraphs:
+             epub = paragraph.metadata.get("epub", {})
+             if epub.get("node_tag") in {"h1", "h2", "h3", "h4", "h5", "h6"} and paragraph.translated:
+-- 
+2.55.0
+

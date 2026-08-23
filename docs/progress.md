@@ -9,9 +9,9 @@
 
 ## 🛠️ 任务分解与进度跟踪
 
-### Component 1: 底层依赖收敛 (Submodule & Path Resolution)
-- [x] **1.1** 确认 `novel-translator` fork 仓库与修复分支 (含 commit `69d5eb4`)
-- [x] **1.2** 在本项目中引入 `vendor/novel-translator` Git Submodule
+### Component 1: 底层依赖与补丁收敛 (Patches & Path Resolution)
+- [x] **1.1** 梳理 `novel-translator` 改动，拆解为 2 个独立 PR 补丁 (`patches/0001-...` 与 `patches/0002-...`)
+- [x] **1.2** 保持单仓库架构，提供清晰补丁便于向上游提交 PR
 - [x] **1.3** 改造 `translator/core/novel_tool.py` 路径自适应与 Python 解释器探测
 - [x] **1.4** 更新 `README.md` 与 `.env.example` 降低用户配置门槛
 - [x] **1.5** 运行全量测试验证 CLI 核心自包含闭环

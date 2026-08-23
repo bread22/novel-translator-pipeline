@@ -76,6 +76,16 @@ export interface PipelineStartRequest {
   primary_translator?: string;
   fallback_translators?: string[];
   reviewer?: string;
+  translation_policy?: string;
+}
+
+export interface PromptItem {
+  id: string;
+  filename: string;
+  path: string;
+  name: string;
+  type: 'translation' | 'review';
+  content: string;
 }
 
 export interface GlossaryItem {

@@ -108,6 +108,101 @@ def set_env_variables(env_data: dict[str, str]) -> dict[str, Any]:
     return {"status": "ok", "env": read_env_keys()}
 
 
+def get_prompts_dir() -> Path:
+    p = Path("docs/prompts").resolve()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+@router.get("/prompts")
+def list_prompts() -> list[dict[str, Any]]:
+    prompts_dir = get_prompts_dir()
+    prompts: list[dict[str, Any]] = []
+
+    friendly_names = {
+        "erotic-novel-policy.md": "限制级/轻小说文学规范 (Erotic Policy)",
+        "general-novel-policy.md": "通用全年龄小说文学规范 (General Policy)",
+        "light-novel-policy.md": "日式轻小说与二次元风格规范 (Light Novel Policy)",
+        "translation-policy.md": "标准文学严谨翻译规范 (Standard Policy)",
+        "consistency-review-policy.md": "长程一致性与客观缺陷审阅规范 (Consistency Review Policy)",
+    }
+
+    for file_path in sorted(prompts_dir.glob("*.md")):
+        content = file_path.read_text(encoding="utf-8")
+        filename = file_path.name
+        is_review = "review" in filename or "审阅" in content[:100]
+        first_heading = ""
+        for line in content.splitlines():
+            if line.strip().startswith("#"):
+                first_heading = line.strip().lstrip("#").strip()
+                break
+        name = friendly_names.get(filename, first_heading or filename)
+        prompts.append({
+            "id": filename,
+            "filename": filename,
+            "path": f"docs/prompts/{filename}",
+            "name": name,
+            "type": "review" if is_review else "translation",
+            "content": content,
+        })
+    return prompts
+
+
+@router.get("/prompts/{prompt_id}")
+def get_prompt_detail(prompt_id: str) -> dict[str, Any]:
+    prompts_dir = get_prompts_dir()
+    file_path = prompts_dir / prompt_id
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"未找到提示词文件: {prompt_id}")
+    content = file_path.read_text(encoding="utf-8")
+    is_review = "review" in prompt_id
+    return {
+        "id": prompt_id,
+        "filename": prompt_id,
+        "path": f"docs/prompts/{prompt_id}",
+        "type": "review" if is_review else "translation",
+        "content": content,
+    }
+
+
+@router.post("/prompts")
+def save_prompt(prompt_data: dict[str, Any]) -> dict[str, Any]:
+    filename = str(prompt_data.get("filename", "")).strip()
+    content = str(prompt_data.get("content", "")).strip()
+    if not filename.endswith(".md"):
+        filename = f"{filename}.md"
+    filename = filename.lower().replace(" ", "-")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Prompt 内容不能为空")
+
+    prompts_dir = get_prompts_dir()
+    target_file = prompts_dir / filename
+    target_file.write_text(content, encoding="utf-8")
+
+    return {
+        "status": "ok",
+        "id": filename,
+        "path": f"docs/prompts/{filename}",
+        "message": f"Prompt '{filename}' 已保存",
+    }
+
+
+@router.delete("/prompts/{prompt_id}")
+def delete_prompt(prompt_id: str) -> dict[str, Any]:
+    protected = {"erotic-novel-policy.md", "general-novel-policy.md", "translation-policy.md"}
+    if prompt_id in protected:
+        raise HTTPException(status_code=400, detail="默认系统 Prompt 规范不可删除")
+
+    prompts_dir = get_prompts_dir()
+    target_file = prompts_dir / prompt_id
+    if not target_file.exists():
+        raise HTTPException(status_code=404, detail=f"未找到文件: {prompt_id}")
+
+    target_file.unlink(missing_ok=True)
+    return {"status": "ok", "message": f"Prompt '{prompt_id}' 已删除"}
+
+
 @router.post("/preflight", response_model=PreflightResponse)
 def run_system_preflight() -> PreflightResponse:
     _load_dotenv(override=True)

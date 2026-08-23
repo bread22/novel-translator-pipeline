@@ -280,6 +280,33 @@ class WebApiTests(unittest.TestCase):
         res_stop = self.client.post(f"/api/v1/tasks/pipeline/stop?task_or_book_id={self.book_id}")
         self.assertEqual(res_stop.status_code, 200)
 
+    def test_prompts_crud(self) -> None:
+        # 1. List prompts
+        res_list = self.client.get("/api/v1/system/prompts")
+        self.assertEqual(res_list.status_code, 200)
+        prompts = res_list.json()
+        self.assertIsInstance(prompts, list)
+        self.assertTrue(len(prompts) >= 3)
+
+        # 2. Save a custom prompt
+        custom_id = "test-custom-policy.md"
+        res_save = self.client.post(
+            "/api/v1/system/prompts",
+            json={"filename": custom_id, "content": "# Custom Policy\nTest translation policy."},
+        )
+        self.assertEqual(res_save.status_code, 200)
+
+        # 3. Read custom prompt detail
+        res_get = self.client.get(f"/api/v1/system/prompts/{custom_id}")
+        self.assertEqual(res_get.status_code, 200)
+        detail = res_get.json()
+        self.assertEqual(detail["id"], custom_id)
+        self.assertIn("Custom Policy", detail["content"])
+
+        # 4. Delete custom prompt
+        res_del = self.client.delete(f"/api/v1/system/prompts/{custom_id}")
+        self.assertEqual(res_del.status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

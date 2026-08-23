@@ -7,6 +7,7 @@ import {
   GlossaryResponse,
   PipelineStartRequest,
   PreflightResponse,
+  PromptItem,
   StreamEvent,
   SystemConfig,
   TaskStatusResponse,
@@ -118,7 +119,7 @@ export const api = {
   getChapterReview: (bookId: string, chapterId: string) =>
     request<any>(`/knowledge/${bookId}/reviews/${chapterId}`),
 
-  // System & Preflight
+  // System & Preflight & Prompts
   getConfig: () => request<SystemConfig>('/system/config'),
   saveConfig: (config: SystemConfig) =>
     request<{ status: string }>('/system/config', {
@@ -126,6 +127,17 @@ export const api = {
       body: JSON.stringify(config),
     }),
   runPreflight: () => request<PreflightResponse>('/system/preflight', { method: 'POST' }),
+  getPrompts: () => request<PromptItem[]>('/system/prompts'),
+  getPromptDetail: (promptId: string) => request<PromptItem>(`/system/prompts/${encodeURIComponent(promptId)}`),
+  savePrompt: (data: { filename: string; content: string }) =>
+    request<{ status: string; id: string; message: string }>('/system/prompts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deletePrompt: (promptId: string) =>
+    request<{ status: string; message: string }>(`/system/prompts/${encodeURIComponent(promptId)}`, {
+      method: 'DELETE',
+    }),
 
   // SSE Stream
   subscribeEvents: (onEvent: (event: StreamEvent) => void, bookId?: string): (() => void) => {

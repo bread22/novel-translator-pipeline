@@ -186,6 +186,8 @@ class TaskManager:
             task.message = f"共 {task.total_chapters} 章节，开始流水线处理..."
             self._emit_status(task, "pipeline_started")
 
+            policy_path = Path(task.options.translation_policy).resolve() if task.options.translation_policy else None
+
             # 3. Instantiate pipeline
             pipeline = ChapterPipeline(
                 book=task.book_id,
@@ -197,6 +199,7 @@ class TaskManager:
                 primary_translator=task.options.primary_translator or None,
                 fallback_translators=task.options.fallback_translators or None,
                 reviewer=task.options.reviewer or None,
+                translation_policy=policy_path,
             )
 
             # 4. Iterate over chapters

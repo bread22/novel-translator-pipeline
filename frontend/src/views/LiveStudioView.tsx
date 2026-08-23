@@ -10,7 +10,7 @@ import {
   Split,
   Terminal,
 } from 'lucide-react';
-import { BookSummary, StreamEvent, TaskStatusResponse } from '../types/api';
+import { BookSummary, PromptItem, StreamEvent, TaskStatusResponse } from '../types/api';
 import { api } from '../lib/api';
 
 interface LiveStudioViewProps {
@@ -33,6 +33,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const [autonomous, setAutonomous] = useState(true);
   const [layout, setLayout] = useState<'horizontal' | 'preserve'>('horizontal');
   const [eventFilter, setEventFilter] = useState<'all' | 'fallback' | 'review'>('all');
+  const [prompts, setPrompts] = useState<PromptItem[]>([]);
+  const [selectedPolicy, setSelectedPolicy] = useState<string>('docs/prompts/erotic-novel-policy.md');
   const feedBottomRef = useRef<HTMLDivElement>(null);
 
   const isRunning = activeTask && activeTask.status === 'running';
@@ -42,12 +44,22 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
     feedBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [streamEvents]);
 
+  useEffect(() => {
+    api.getPrompts().then((list) => {
+      setPrompts(list);
+      const defaultTranslation = list.find((p) => p.type === 'translation');
+      if (defaultTranslation) {
+        setSelectedPolicy(defaultTranslation.path);
+      }
+    }).catch(() => {});
+  }, []);
+
   if (!book) {
     return (
       <div className="text-center py-24 border border-dashed border-slate-800 rounded-2xl p-12 max-w-xl mx-auto">
         <Activity className="w-12 h-12 text-slate-600 mx-auto mb-3" />
         <h3 className="text-slate-300 font-medium">未选择任何书籍</h3>
-        <p className="text-slate-500 text-xs mt-1">请在顶部下拉列表或书架中心选择一部小说进入作战室</p>
+        <p className="text-slate-500 text-xs mt-1">请在顶部下拉列表或书架中心选择一部小说进入翻译控制台</p>
       </div>
     );
   }
@@ -61,6 +73,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         autonomous: autonomous,
         finalize: true,
         layout: layout,
+        translation_policy: selectedPolicy,
       });
       await onRefreshTask();
     } catch (err: any) {
@@ -313,6 +326,23 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
               >
                 <option value="horizontal">重构为中文横排</option>
                 <option value="preserve">保留原版竖排</option>
+              </select>
+            </div>
+            {/* Prompt Policy Selector */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-1">
+              <span className="text-[11px] font-medium text-slate-300 block">
+                选择翻译提示词规范 (Policy Prompt):
+              </span>
+              <select
+                value={selectedPolicy}
+                onChange={(e) => setSelectedPolicy(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700/70 rounded-lg px-2 py-1.5 text-xs text-indigo-300 font-medium focus:outline-none focus:border-indigo-500"
+              >
+                {prompts.filter(p => p.type === 'translation').map((p) => (
+                  <option key={p.path} value={p.path}>
+                    {p.name}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

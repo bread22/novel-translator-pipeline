@@ -65,7 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <Activity className="w-4 h-4" />
-            实时作战室
+            翻译控制台
             {isTaskRunning && (
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute top-1 right-1" />
             )}

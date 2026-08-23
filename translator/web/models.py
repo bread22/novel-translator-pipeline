@@ -69,6 +69,7 @@ class PipelineStartRequest(BaseModel):
     primary_translator: str | None = None
     fallback_translators: list[str] | None = None
     reviewer: str | None = None
+    translation_policy: str | None = None
     max_cycles: int = 1000
 
 

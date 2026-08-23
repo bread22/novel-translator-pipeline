@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,14 +37,14 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     )
 
     # 2. Register API v1 routers
-    api_v1 = FastAPI()
+    api_v1 = APIRouter(prefix="/api/v1")
     api_v1.include_router(books_router)
     api_v1.include_router(tasks_router)
     api_v1.include_router(knowledge_router)
     api_v1.include_router(system_router)
     api_v1.include_router(events_router)
 
-    app.mount("/api/v1", api_v1)
+    app.include_router(api_v1)
 
     # 3. Basic health check
     @app.get("/health")
@@ -64,8 +64,14 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
             if file_candidate.exists() and file_candidate.is_file():
                 return FileResponse(file_candidate)
             return FileResponse(dist_path / "index.html")
+    else:
+        @app.get("/")
+        def root_redirect():
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/docs")
 
     return app
 
 
 app = create_app()
+

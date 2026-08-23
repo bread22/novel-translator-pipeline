@@ -1,14 +1,22 @@
-From 69d5eb49b6a083800d22b8f6db90504082849c40 Mon Sep 17 00:00:00 2001
+From 67ac8dbb2234f9c95e4581a5bc40a3c28488500f Mon Sep 17 00:00:00 2001
 From: Qingyi Wu <wuqingyi22@gmail.com>
-Date: Fri, 21 Aug 2026 22:19:13 -0400
-Subject: [PATCH] Fix nested DOM parsing and TOC title mapping; add
- configurable temperature and max_tokens with strict schema
+Date: Sat, 22 Aug 2026 20:18:14 -0400
+Subject: [PATCH] =?UTF-8?q?feat(translator):=20=E5=85=81=E8=AE=B8=E9=85=8D?=
+ =?UTF-8?q?=E7=BD=AE=E9=87=87=E6=A0=B7=E6=B8=A9=E5=BA=A6/=E6=9C=80?=
+ =?UTF-8?q?=E5=A4=A7Token=E5=B9=B6=E6=94=AF=E6=8C=81Strict=20JSON=20Schema?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
+- config: setting.toml 增加 temperature (默认0.3) 与 max_tokens (默认4096)
+- translator: 翻译请求引入 strict: true 的 json_schema 增强输出稳定性
+- 补充对应单元测试
 ---
- app/config.py        |  4 ++++
- app/translator.py    | 32 +++++++++++++++++++++++++++++++-
- setting.example.toml |  2 ++
- 3 files changed, 37 insertions(+), 1 deletion(-)
+ app/config.py         |  4 ++++
+ app/translator.py     | 32 ++++++++++++++++++++++++++++-
+ setting.example.toml  |  2 ++
+ tests/test_book_io.py | 48 +++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 85 insertions(+), 1 deletion(-)
 
 diff --git a/app/config.py b/app/config.py
 index 47a6f42..b6201df 100644
@@ -95,6 +103,62 @@ index 3fe7582..96bce79 100644
  retry_count = 3
  retry_delay = 2
  quality_passes = 2
+diff --git a/tests/test_book_io.py b/tests/test_book_io.py
+index 0aee617..62120f5 100644
+--- a/tests/test_book_io.py
++++ b/tests/test_book_io.py
+@@ -1598,3 +1598,51 @@ def _write_epub_with_metadata(path: Path) -> None:
+             """<?xml version="1.0"?>
+ <html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hello.</p></body></html>""",
+         )
++
++
++def test_translation_config_temperature_and_max_tokens_defaults_and_custom(tmp_path: Path) -> None:
++    from app.config import load_config
++
++    setting_file = tmp_path / "setting.toml"
++    setting_file.write_text(
++        """
++[translation]
++batch_max_chars = 4000
++""",
++        encoding="utf-8",
++    )
++    default_config = load_config(tmp_path, setting_file)
++    assert default_config.translation.temperature == 0.3
++    assert default_config.translation.max_tokens == 4096
++
++    custom_setting = tmp_path / "custom_setting.toml"
++    custom_setting.write_text(
++        """
++[translation]
++batch_max_chars = 4000
++temperature = 0.8
++max_tokens = 2048
++""",
++        encoding="utf-8",
++    )
++
++    custom_config = load_config(tmp_path, custom_setting)
++    assert custom_config.translation.temperature == 0.8
++    assert custom_config.translation.max_tokens == 2048
++
++
++def test_translation_response_schema_strict_format() -> None:
++    from app.translator import TRANSLATION_RESPONSE_SCHEMA
++
++    assert TRANSLATION_RESPONSE_SCHEMA["type"] == "json_schema"
++    json_schema = TRANSLATION_RESPONSE_SCHEMA["json_schema"]
++    assert json_schema["strict"] is True
++    assert json_schema["name"] == "translation_result"
++    schema = json_schema["schema"]
++    assert schema["type"] == "object"
++    assert schema["required"] == ["items"]
++    assert schema["additionalProperties"] is False
++    items_schema = schema["properties"]["items"]
++    assert items_schema["type"] == "array"
++    assert items_schema["items"]["required"] == ["id", "text"]
++
 -- 
 2.55.0
 

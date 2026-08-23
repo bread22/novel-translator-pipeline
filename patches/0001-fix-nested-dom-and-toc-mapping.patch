@@ -1,12 +1,21 @@
-From 69d5eb49b6a083800d22b8f6db90504082849c40 Mon Sep 17 00:00:00 2001
+From 6b247658b3d0c0aba7e1379991e54e2bbeece6c3 Mon Sep 17 00:00:00 2001
 From: Qingyi Wu <wuqingyi22@gmail.com>
-Date: Fri, 21 Aug 2026 22:19:13 -0400
-Subject: [PATCH] Fix nested DOM parsing and TOC title mapping; add
- configurable temperature and max_tokens with strict schema
+Date: Sat, 22 Aug 2026 20:18:03 -0400
+Subject: [PATCH] =?UTF-8?q?fix(book=5Fio):=20=E4=BF=AE=E5=A4=8D=20EPUB=20?=
+ =?UTF-8?q?=E5=B5=8C=E5=A5=97=E5=9D=97=E7=BA=A7=E5=85=83=E7=B4=A0=E9=80=92?=
+ =?UTF-8?q?=E5=BD=92=E8=AF=86=E5=88=AB=E4=B8=8E=20TOC=20=E7=9B=AE=E5=BD=95?=
+ =?UTF-8?q?=E6=A0=87=E9=A2=98=E6=98=A0=E5=B0=84?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
+- _has_block_children: 使用 element.iter() 递归检测嵌套块级标签，防止嵌套段落被误判为叶子节点
+- _chapter_title_translations: 同时映射 chapter.title 与首段 source，保证导航目录正确匹配中文译名
+- 补充对应单元测试
 ---
- app/book_io.py | 11 ++++++++---
- 1 file changed, 8 insertions(+), 3 deletions(-)
+ app/book_io.py        | 11 +++++---
+ tests/test_book_io.py | 60 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 68 insertions(+), 3 deletions(-)
 
 diff --git a/app/book_io.py b/app/book_io.py
 index f976682..aa5b7cf 100644
@@ -37,6 +46,74 @@ index f976682..aa5b7cf 100644
          for paragraph in chapter.paragraphs:
              epub = paragraph.metadata.get("epub", {})
              if epub.get("node_tag") in {"h1", "h2", "h3", "h4", "h5", "h6"} and paragraph.translated:
+diff --git a/tests/test_book_io.py b/tests/test_book_io.py
+index 0aee617..7703c09 100644
+--- a/tests/test_book_io.py
++++ b/tests/test_book_io.py
+@@ -1598,3 +1598,63 @@ def _write_epub_with_metadata(path: Path) -> None:
+             """<?xml version="1.0"?>
+ <html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hello.</p></body></html>""",
+         )
++
++
++def test_has_block_children_detects_deeply_nested_translatable_tags() -> None:
++    import xml.etree.ElementTree as ET
++    from app.book_io import _has_block_children
++
++    # 1. Deeply nested <p> inside <div> and <section>
++    xml_with_nested_block = "<section><div><p>Deep paragraph</p></div></section>"
++    element = ET.fromstring(xml_with_nested_block)
++    assert _has_block_children(element) is True
++
++    # 2. Only inline tags (e.g. <span>, <em>)
++    xml_with_inline_only = "<p>Hello <span>world</span> <em>!</em></p>"
++    inline_element = ET.fromstring(xml_with_inline_only)
++    assert _has_block_children(inline_element) is False
++
++    # 3. Plain text leaf
++    plain_element = ET.fromstring("<p>Simple text</p>")
++    assert _has_block_children(plain_element) is False
++
++
++def test_chapter_title_translations_maps_file_title_and_first_paragraph_source() -> None:
++    from app.book_io import _chapter_title_translations
++    from app.models import Book, Chapter, Paragraph
++
++    p1 = Paragraph(
++        id="p1",
++        index=0,
++        chapter_id="c1",
++        source="第一章 序幕",
++        translated="第一章 序幕（中文）",
++        metadata={"epub": {"node_tag": "h1"}},
++    )
++    p2 = Paragraph(
++        id="p2",
++        index=1,
++        chapter_id="c1",
++        source="正文内容",
++        translated="正文内容（中文）",
++        metadata={"epub": {"node_tag": "p"}},
++    )
++    chapter = Chapter(
++        id="c1",
++        index=0,
++        title="chapter01.xhtml",
++        source_path=Path("chapter01.xhtml"),
++        paragraphs=[p1, p2],
++    )
++    book = Book(
++        id="test-book",
++        title="测试书",
++        source_file=Path("test.epub"),
++        source_type="epub",
++        chapters=[chapter],
++    )
++
++    mapping = _chapter_title_translations(book)
++    assert mapping.get("chapter01.xhtml") == "第一章 序幕（中文）"
++    assert mapping.get("第一章 序幕") == "第一章 序幕（中文）"
++
 -- 
 2.55.0
 

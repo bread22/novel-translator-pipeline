@@ -6,80 +6,14 @@ translation_policy = "docs/prompts/erotic-novel-policy.md"
 primary_translator = "nemotron"
 fallback_translators = [
     "gemini_lite",
+    "deepseek",
 ]
 fallback_translator = "gemini_lite"
-secondary_fallback_translator = ""
+secondary_fallback_translator = "deepseek"
 reviewer = "nemotron"
 secondary_reviewer = "gemini_lite"
 dual_review = true
 fallback_reviewers = []
-
-[providers.opencode]
-type = "opencode"
-binary = "opencode"
-model = "opencode/muse-spark-1.2-contributor-free"
-agent = ""
-timeout = 600
-
-[providers.opencode_reviewer]
-type = "opencode"
-binary = "opencode"
-model = "opencode/muse-spark-1.2-contributor-free"
-agent = ""
-timeout = 600
-
-[providers.gemini]
-type = "antigravity"
-agy = "agy"
-model = "gemini-3.7-flash"
-effort = "low"
-timeout = 600
-concurrency = 1
-context_tokens = 1048576
-
-[providers.muse]
-type = "opencode"
-binary = "opencode"
-model = "opencode/muse-spark-1.2-contributor-free"
-agent = ""
-timeout = 600
-
-[providers.mimo]
-type = "opencode"
-binary = "opencode"
-model = "opencode/mimo-v2.5-free"
-agent = ""
-timeout = 600
-
-[providers.hy3]
-type = "opencode"
-binary = "opencode"
-model = "opencode/hy3-free"
-agent = ""
-timeout = 600
-
-[providers.antigravity]
-type = "antigravity"
-agy = "agy"
-model = "gemini-3.7-flash"
-effort = "low"
-timeout = 600
-concurrency = 1
-context_tokens = 1048576
-
-[providers.lmstudio]
-type = "openai"
-base_url = "http://127.0.0.1:1234/v1"
-model = "murasaki-14b-v0.2"
-api_key = "lm-studio"
-context_tokens = 8192
-timeout = 600
-
-[providers.codex]
-type = "codex"
-binary = "codex"
-model = ""
-timeout = 600
 
 [providers.nemotron]
 type = "openai"
@@ -102,14 +36,6 @@ context_tokens = 1048576
 timeout = 600
 
 [providers.deepseek]
-type = "openai"
-base_url = "https://integrate.api.nvidia.com/v1"
-model = "deepseek-ai/deepseek-v4-flash-0731"
-api_key = "$DEEPSEEK_API_KEY"
-context_tokens = 131072
-timeout = 600
-
-[providers.online_api]
 type = "openai"
 base_url = "https://integrate.api.nvidia.com/v1"
 model = "deepseek-ai/deepseek-v4-flash-0731"

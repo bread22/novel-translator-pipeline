@@ -11,7 +11,9 @@ import { api } from './lib/api';
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>('library');
   const [books, setBooks] = useState<BookSummary[]>([]);
-  const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
+  const [selectedBookId, setSelectedBookId] = useState<string | null>(() => {
+    return localStorage.getItem('selected_book_id') || null;
+  });
   const [activeTask, setActiveTask] = useState<TaskStatusResponse | null>(null);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
@@ -21,13 +23,22 @@ export const App: React.FC = () => {
     try {
       const data = await api.getBooks();
       setBooks(data);
-      if (!selectedBookId && data.length > 0) {
-        setSelectedBookId(data[0].id);
+      if (data.length > 0) {
+        setSelectedBookId((prev) => {
+          if (prev && data.some((b) => b.id === prev)) {
+            return prev;
+          }
+          const saved = localStorage.getItem('selected_book_id');
+          if (saved && data.some((b) => b.id === saved)) {
+            return saved;
+          }
+          return data[0].id;
+        });
       }
     } catch (err) {
       console.error('Failed to fetch books:', err);
     }
-  }, [selectedBookId]);
+  }, []);
 
   // Refresh active task status
   const refreshTask = useCallback(async () => {
@@ -46,13 +57,25 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (selectedBookId) {
+      localStorage.setItem('selected_book_id', selectedBookId);
       refreshTask();
     }
   }, [selectedBookId, refreshTask]);
 
   // Global SSE Subscription
   useEffect(() => {
+    setStreamEvents([]); // Clear stale event history when book changes
     const unsubscribe = api.subscribeEvents((evt) => {
+      // Filter out connect events or data events from other books
+      if (selectedBookId) {
+        if (evt.event === 'connect' && evt.data?.book_id && evt.data.book_id !== selectedBookId) {
+          return;
+        }
+        if (evt.data?.book_id && evt.data.book_id !== selectedBookId) {
+          return;
+        }
+      }
+
       if (evt.event === 'connect') {
         setSseConnected(true);
       }
@@ -90,6 +113,8 @@ export const App: React.FC = () => {
 
   const handleSelectBook = (bookId: string, targetTab?: string) => {
     setSelectedBookId(bookId);
+    localStorage.setItem('selected_book_id', bookId);
+    setStreamEvents([]);
     if (targetTab) {
       setCurrentTab(targetTab);
     }

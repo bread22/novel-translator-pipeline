@@ -91,22 +91,34 @@ def retranslate_paragraph(request: RetranslateParagraphRequest) -> dict[str, Any
     provider_name = request.provider or primary_translator_name(config)
 
     # Use ProviderTranslator for single paragraph targeted translation
-    provider_inst = create_provider(provider_name, config)
-    translator = ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=path, provider=provider_inst)
-
-    result = translator.translate_paragraphs([request.paragraph_id])
-    if result.get("status") != "ok" or not result.get("items"):
+    translator = ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=path)
+    source_chars = len(str(target_para.get("source", "")))
+    result = translator(
+        provider_name,
+        request.book_id,
+        [request.paragraph_id],
+        source_chars=source_chars,
+        max_tokens=1500,
+    )
+    if result.get("status") != "ok":
         raise HTTPException(status_code=500, detail=f"重新翻译失败: {result}")
 
-    translated_text = result["items"][0].get("text", "")
-    target_para["translated"] = translated_text
-    write_json(path, manifest)
+    # Re-read manifest to get updated translated text
+    manifest_after = read_json(path, default={})
+    updated_text = ""
+    for ch in manifest_after.get("chapters", []):
+        for p in ch.get("paragraphs", []):
+            if p.get("id") == request.paragraph_id:
+                updated_text = p.get("translated", "")
+                break
+        if updated_text:
+            break
 
     return {
         "status": "ok",
         "book_id": request.book_id,
         "paragraph_id": request.paragraph_id,
         "provider": provider_name,
-        "translated": translated_text,
+        "translated": updated_text,
     }
 

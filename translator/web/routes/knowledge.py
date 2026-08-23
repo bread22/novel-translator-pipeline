@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from translator.core.config import load_config
-from translator.core.workspace import BookWorkspace, read_json, write_json
+from translator.core.workspace import BookWorkspace, read_json, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.web.models import (
     BookMemoryResponse,

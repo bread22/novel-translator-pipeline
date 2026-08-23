@@ -308,6 +308,108 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(res_del.status_code, 200)
 
 
+    @patch("translator.web.routes.knowledge.load_config")
+    @patch("translator.web.routes.knowledge.manifest_path")
+    def test_memory_and_reports_api(self, mock_manifest_path: MagicMock, mock_load_config: MagicMock) -> None:
+        mock_load_config.return_value = self.config_mock
+        mock_manifest_path.return_value = self.book_dir / "manifest.json"
+
+        # 1. Setup mock memory with entries
+        memory_payload = {
+            "book": self.book_id,
+            "entries": [
+                {
+                    "key": "莲见翔子",
+                    "value": "名门预备校女教师，身材丰满性格温柔",
+                    "category": "character",
+                    "note": "第1章登场",
+                    "first_seen_chapter": "c0001",
+                },
+                {
+                    "key": "代代木预备校",
+                    "value": "东京都内知名升学指导机构",
+                    "category": "location",
+                    "note": "故事主要发生地",
+                    "first_seen_chapter": "c0001",
+                },
+            ],
+        }
+        write_json(self.workspace.book_memory_path, memory_payload)
+
+        # 2. Get memory
+        res_mem = self.client.get(f"/api/v1/knowledge/{self.book_id}/memory")
+        self.assertEqual(res_mem.status_code, 200)
+        mem_data = res_mem.json()
+        self.assertEqual(len(mem_data["characters"]), 1)
+        self.assertEqual(mem_data["characters"][0]["name"], "莲见翔子")
+        self.assertEqual(len(mem_data["world_settings"]), 1)
+        self.assertEqual(mem_data["world_settings"][0]["term"], "代代木预备校")
+
+        # 3. Setup mock reports
+        report_payload = {
+            "book": self.book_id,
+            "chapter_id": "c0001",
+            "reviewed_at": "2026-08-23T00:00:00Z",
+            "checked_paragraphs": 2,
+            "reported_issues": 1,
+            "applied_fixes": 1,
+            "approved_fixes": [
+                {
+                    "id": "p0001",
+                    "category": "mistranslation",
+                    "severity": "major",
+                    "confidence": 0.95,
+                    "reason": "措辞更地道",
+                    "replacement": "破晓时分，天色已明。",
+                    "auto_apply": True,
+                }
+            ],
+        }
+        write_json(self.workspace.reports_dir / "c0001.json", report_payload)
+
+        # 4. List reports
+        res_reports = self.client.get(f"/api/v1/knowledge/{self.book_id}/reports")
+        self.assertEqual(res_reports.status_code, 200)
+        reports_list = res_reports.json()
+        self.assertEqual(len(reports_list), 1)
+        self.assertEqual(reports_list[0]["chapter_id"], "c0001")
+
+        # 5. Get single chapter review
+        res_single_rev = self.client.get(f"/api/v1/knowledge/{self.book_id}/reviews/c0001")
+        self.assertEqual(res_single_rev.status_code, 200)
+        self.assertEqual(res_single_rev.json()["status"], "ok")
+
+    @patch("translator.web.routes.tasks.load_config")
+    @patch("translator.web.routes.tasks.manifest_path")
+    @patch("translator.providers.translator.get_provider")
+    def test_retranslate_paragraph_endpoint(self, mock_get_provider: MagicMock, mock_manifest_path: MagicMock, mock_load_config: MagicMock) -> None:
+        mock_load_config.return_value = self.config_mock
+        mock_manifest_path.return_value = self.book_dir / "manifest.json"
+
+        mock_provider_inst = MagicMock()
+        mock_provider_inst.translate.return_value = (
+            [{"id": "p0002", "text": "崭新的冒险拉开帷幕。"}],
+            {"status": "ok"},
+        )
+        mock_get_provider.return_value = mock_provider_inst
+
+        payload = {
+            "book_id": self.book_id,
+            "chapter_id": "c0001",
+            "paragraph_id": "p0002",
+            "provider": "mock_primary",
+        }
+        res = self.client.post("/api/v1/tasks/retranslate-paragraph", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["translated"], "崭新的冒险拉开帷幕。")
+
+        # Check manifest update
+        updated_manifest = json.loads((self.book_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(updated_manifest["chapters"][0]["paragraphs"][1]["translated"], "崭新的冒险拉开帷幕。")
+
+
 if __name__ == "__main__":
     unittest.main()
 

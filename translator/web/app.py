@@ -54,7 +54,8 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     # 4. Mount Frontend Static Files if available
     dist_path = static_dir or (Path(__file__).resolve().parents[2] / "frontend" / "dist")
     if dist_path.exists() and (dist_path / "index.html").exists():
-        app.mount("/assets", StaticFiles(directory=str(dist_path / "assets")), name="assets")
+        if (dist_path / "assets").exists():
+            app.mount("/assets", StaticFiles(directory=str(dist_path / "assets")), name="assets")
 
         @app.get("/{full_path:path}")
         async def serve_spa(request: Request, full_path: str):

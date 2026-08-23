@@ -82,6 +82,10 @@ class BookWorkspace:
         return self.data_dir / "novel-translator-terms.json"
 
     @property
+    def terms_path(self) -> Path:
+        return self.novel_translator_terms_path
+
+    @property
     def progress_path(self) -> Path:
         return self.data_dir / "progress.json"
 
@@ -140,6 +144,46 @@ class BookWorkspace:
             )
         if not self.book_memory_path.exists():
             write_json(self.book_memory_path, empty_book_memory(book_id))
+
+    def reset(self, book_id: str = "") -> None:
+        """Completely reset all runtime progress, memory, glossary, reports, reviews, snapshots, and generated artifacts."""
+        if self.data_dir.exists():
+            write_json(
+                self.progress_path,
+                {"book": book_id, "state": "initialized", "completed_cycles": 0, "last_chunk": "", "updated_at": utc_now()},
+            )
+            write_json(
+                self.book_memory_path,
+                empty_book_memory(book_id),
+            )
+            write_json(
+                self.glossary_path,
+                {"book": book_id, "updated_at": utc_now(), "terms": [], "conflicts": []},
+            )
+            write_json(
+                self.novel_translator_terms_path,
+                {"terms": []},
+            )
+            write_json(
+                self.data_dir / "translation-provenance.json",
+                {},
+            )
+            write_json(
+                self.data_dir / "provider-diagnostics.json",
+                {},
+            )
+            if self.chapter_states_dir.exists():
+                for p in self.chapter_states_dir.glob("*.json"):
+                    p.unlink(missing_ok=True)
+
+        for dir_to_clean in (self.reviews_dir, self.reports_dir, self.snapshots_dir):
+            if dir_to_clean.exists():
+                for p in dir_to_clean.glob("*"):
+                    if p.is_file():
+                        p.unlink(missing_ok=True)
+
+        if self.epub_path.exists():
+            self.epub_path.unlink(missing_ok=True)
 
 
 def merge_term_updates(
@@ -222,6 +266,10 @@ def empty_book_memory(book: str = "") -> dict[str, Any]:
         "version": 1,
         "entries": [],
         "conflicts": [],
+        "characters": [],
+        "world_settings": [],
+        "timeline": [],
+        "chapter_states": [],
         "updated_at": utc_now(),
     }
 

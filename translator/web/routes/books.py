@@ -376,33 +376,19 @@ def reset_book(book_id: str) -> dict[str, Any]:
     title = manifest.get("title", book_id)
     workspace = BookWorkspace.at(output_root, title)
 
-    # 1. Call novel-translator reset-translations
+    # 1. Reset manifest paragraphs directly (100% reliable)
+    for ch in manifest.get("chapters", []):
+        for p in ch.get("paragraphs", []):
+            p["translated"] = ""
+    write_json(manifest_path(book_id), manifest)
+
+    # Also try calling external CLI if available
     try:
         call_novel_translator("reset-translations", "--book", book_id, "--all")
     except Exception:
-        # Fallback: reset manifest chapters directly
-        for ch in manifest.get("chapters", []):
-            for p in ch.get("paragraphs", []):
-                p["translated"] = ""
-        write_json(manifest_path(book_id), manifest)
+        pass
 
-    # 2. Reset workspace progress & memory
-    if workspace.data_dir.exists():
-        write_json(
-            workspace.progress_path,
-            {"book": book_id, "state": "initialized", "completed_cycles": 0, "last_chunk": "", "updated_at": utc_now()},
-        )
-        if workspace.book_memory_path.exists():
-            write_json(
-                workspace.book_memory_path,
-                {"book": book_id, "characters": [], "world_settings": [], "timeline": [], "chapter_states": []},
-            )
-        if workspace.chapter_states_dir.exists():
-            for p in workspace.chapter_states_dir.glob("*.json"):
-                p.unlink(missing_ok=True)
+    # 2. Reset ALL workspace files (progress, memory, glossary, reports, reviews, snapshots)
+    workspace.reset(book_id=book_id)
 
-    # 3. Remove output EPUB
-    if workspace.epub_path.exists():
-        workspace.epub_path.unlink(missing_ok=True)
-
-    return {"status": "ok", "message": f"书籍 '{title}' 翻译进度与记忆已重置"}
+    return {"status": "ok", "message": f"书籍 '{title}' 翻译进度、长期记忆、术语库与质检报告已全部清空重置"}

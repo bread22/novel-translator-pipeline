@@ -10,7 +10,7 @@ import {
   Split,
   Terminal,
 } from 'lucide-react';
-import { BookSummary, PromptItem, StreamEvent, TaskStatusResponse } from '../types/api';
+import { BookSummary, PromptItem, StreamEvent, SystemConfig, TaskStatusResponse } from '../types/api';
 import { api } from '../lib/api';
 
 interface LiveStudioViewProps {
@@ -28,6 +28,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   onRefreshTask,
   onRefreshBooks,
 }) => {
+  const [config, setConfig] = useState<SystemConfig | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [applyFixes, setApplyFixes] = useState(true);
   const [autonomous, setAutonomous] = useState(true);
@@ -45,6 +46,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   }, [streamEvents]);
 
   useEffect(() => {
+    api.getConfig().then(setConfig).catch(() => {});
     api.getPrompts().then((list) => {
       setPrompts(list);
       const defaultTranslation = list.find((p) => p.type === 'translation');
@@ -201,111 +203,225 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         </div>
       </div>
 
-      {/* Progress & Live Topology */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Cols: Fallback Topology Graphic Widget */}
-        <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 p-6 rounded-2xl flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-4">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-400" />
-              <h3 className="text-sm font-bold text-slate-200">两级降级容灾流向拓扑 (Fallback Topology)</h3>
-            </div>
-            <span className="text-[11px] text-slate-500 font-mono">100% 自动闭环调度</span>
-          </div>
+      {(() => {
+        // Dynamic Role & Provider Resolution from real config
+        const primaryName = config?.roles?.primary_translator || 'nemotron';
+        const primaryProvider = config?.providers?.[primaryName];
+        const primaryModel = primaryProvider?.model || primaryName;
 
-          {/* Visual Topology DAG */}
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-center py-4 text-center">
-            {/* Node 1: Primary */}
-            <div className={`p-4 rounded-xl border transition-all ${
-              isRunning ? 'bg-indigo-950/60 border-indigo-500 glow-primary' : 'bg-slate-950/60 border-slate-800'
-            }`}>
-              <div className="text-[10px] text-indigo-400 font-mono font-medium">PRIMARY</div>
-              <div className="font-bold text-xs text-slate-100 mt-1">主译模型</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Gemini / Nemotron</div>
-            </div>
+        const fallbackList = config?.roles?.fallback_translators || ['gemini_lite', 'deepseek'];
+        const fb1Name = fallbackList[0] || 'gemini_lite';
+        const fb1Provider = config?.providers?.[fb1Name];
+        const fb1Model = fb1Provider?.model || fb1Name;
 
-            {/* Split Icon */}
-            <div className="flex justify-center text-slate-600">
-              <div className="flex flex-col items-center">
-                <Split className="w-4 h-4 text-amber-500 animate-pulse" />
-                <span className="text-[9px] text-amber-500/80 font-mono mt-0.5">敏感词拦截</span>
+        const fb2Name = fallbackList[1] || (fallbackList.length > 1 ? fallbackList[1] : 'deepseek');
+        const fb2Provider = config?.providers?.[fb2Name];
+        const fb2Model = fb2Provider?.model || fb2Name;
+
+        const rev1Name = config?.roles?.reviewer || primaryName;
+        const rev1Model = config?.providers?.[rev1Name]?.model || rev1Name;
+        const isDualReview = config?.roles?.dual_review ?? true;
+        const rev2Name = config?.roles?.secondary_reviewer || fb1Name;
+        const rev2Model = config?.providers?.[rev2Name]?.model || rev2Name;
+
+        const latestEvent = streamEvents[streamEvents.length - 1];
+        const isFallbackActive = latestEvent?.event === 'fallback_triggered' || latestEvent?.event?.includes('fallback');
+        const isReviewActive = latestEvent?.event?.includes('review') || activeTask?.message?.includes('审阅') || activeTask?.message?.includes('一致性');
+        const hasRecovered = (activeTask?.recovered_paragraphs || 0) > 0;
+
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Left 2 Cols: Fallback Topology Graphic Widget */}
+            <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 p-6 rounded-2xl flex flex-col justify-between shadow-xl">
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-amber-400" />
+                  <h3 className="text-sm font-bold text-slate-200">两级降级容灾流向拓扑 (Fallback Topology)</h3>
+                </div>
+                <span className="text-[11px] text-emerald-400 font-mono flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  100% 自动闭环容灾调度
+                </span>
+              </div>
+
+              {/* Visual Topology DAG */}
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-center py-4 text-center">
+                {/* Node 1: Primary */}
+                <div
+                  className={`p-3.5 rounded-xl border transition-all text-left ${
+                    isRunning && !isFallbackActive && !isReviewActive
+                      ? 'bg-indigo-950/80 border-indigo-500 shadow-lg shadow-indigo-500/20 ring-1 ring-indigo-400/60'
+                      : isRunning && isFallbackActive
+                      ? 'bg-amber-950/40 border-amber-500/80'
+                      : 'bg-slate-950/70 border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                    <span className="text-indigo-400 font-bold">PRIMARY (主译)</span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[9px] ${
+                        isRunning && !isFallbackActive && !isReviewActive
+                          ? 'bg-indigo-900/90 text-indigo-200 font-bold animate-pulse'
+                          : 'bg-slate-900 text-slate-500'
+                      }`}
+                    >
+                      {isRunning && !isFallbackActive && !isReviewActive ? '● TRANSLATING' : 'READY'}
+                    </span>
+                  </div>
+                  <div className="font-bold text-xs text-white truncate" title={primaryName}>
+                    {primaryName}
+                  </div>
+                  <div className="text-[10px] text-indigo-300 font-mono truncate mt-0.5" title={primaryModel}>
+                    {primaryModel}
+                  </div>
+                </div>
+
+                {/* Split Icon */}
+                <div className="flex justify-center text-slate-600">
+                  <div className="flex flex-col items-center">
+                    <Split
+                      className={`w-4 h-4 transition-colors ${
+                        isFallbackActive ? 'text-amber-400 animate-bounce' : 'text-slate-600'
+                      }`}
+                    />
+                    <span className="text-[9px] text-slate-400 font-mono mt-0.5 text-center">
+                      {hasRecovered ? `已救回 ${activeTask?.recovered_paragraphs} 段` : '容灾/敏感词自动分流'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Node 2: Fallback 1 */}
+                <div
+                  className={`p-3.5 rounded-xl border transition-all text-left ${
+                    isRunning && isFallbackActive
+                      ? 'bg-emerald-950/80 border-emerald-500 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/60 animate-pulse'
+                      : hasRecovered
+                      ? 'bg-slate-950/90 border-emerald-800/60'
+                      : 'bg-slate-950/70 border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                    <span className="text-emerald-400 font-bold">FALLBACK #1 (一级备用)</span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[9px] ${
+                        isRunning && isFallbackActive
+                          ? 'bg-emerald-900 text-emerald-200 font-bold'
+                          : 'bg-slate-900 text-slate-500'
+                      }`}
+                    >
+                      {isRunning && isFallbackActive ? '⚡ RECOVERING' : 'STANDBY'}
+                    </span>
+                  </div>
+                  <div className="font-bold text-xs text-white truncate" title={fb1Name}>
+                    {fb1Name}
+                  </div>
+                  <div className="text-[10px] text-emerald-300 font-mono truncate mt-0.5" title={fb1Model}>
+                    {fb1Model}
+                  </div>
+                </div>
+
+                {/* Arrow */}
+                <div className="flex justify-center text-slate-600">
+                  <ArrowRight className="w-4 h-4 text-slate-600" />
+                </div>
+
+                {/* Node 3: Fallback 2 */}
+                <div className="p-3.5 rounded-xl border bg-slate-950/70 border-slate-800 text-left">
+                  <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                    <span className="text-rose-400 font-bold">FALLBACK #2 (二级备用)</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-slate-900 text-slate-500 font-mono">
+                      STANDBY
+                    </span>
+                  </div>
+                  <div className="font-bold text-xs text-white truncate" title={fb2Name}>
+                    {fb2Name}
+                  </div>
+                  <div className="text-[10px] text-rose-300 font-mono truncate mt-0.5" title={fb2Model}>
+                    {fb2Model}
+                  </div>
+                </div>
+              </div>
+
+              {/* Chapter Consistency Reviewer Bar */}
+              <div
+                className={`mt-4 p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs ${
+                  isReviewActive
+                    ? 'bg-purple-950/80 border-purple-500 ring-1 ring-purple-400/50 shadow-lg shadow-purple-900/30 animate-pulse'
+                    : 'bg-purple-950/30 border-purple-800/40'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                  <span className="font-bold text-purple-200">
+                    {isDualReview ? '双模型独立全量审阅 (Dual Review)' : '长程一致性审阅 (Reviewer)'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 font-mono text-[11px] text-purple-300 flex-wrap">
+                  <span className="px-2 py-0.5 rounded bg-purple-900/60 border border-purple-700/50">
+                    主审: {rev1Name} ({rev1Model})
+                  </span>
+                  {isDualReview && (
+                    <>
+                      <span>+</span>
+                      <span className="px-2 py-0.5 rounded bg-purple-900/60 border border-purple-700/50">
+                        次审: {rev2Name} ({rev2Model})
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Node 2: Fallback 1 */}
-            <div className="p-4 rounded-xl border bg-slate-950/60 border-slate-800">
-              <div className="text-[10px] text-emerald-400 font-mono font-medium">FALLBACK #1</div>
-              <div className="font-bold text-xs text-slate-100 mt-1">一级备用</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">OpenCode / Muse</div>
-            </div>
-
-            {/* Arrow */}
-            <div className="flex justify-center text-slate-600">
-              <ArrowRight className="w-4 h-4 text-slate-500" />
-            </div>
-
-            {/* Node 3: Fallback 2 */}
-            <div className="p-4 rounded-xl border bg-slate-950/60 border-slate-800">
-              <div className="text-[10px] text-rose-400 font-mono font-medium">FALLBACK #2</div>
-              <div className="font-bold text-xs text-slate-100 mt-1">二级备用</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">LM Studio 本地无审查</div>
-            </div>
-          </div>
-
-          {/* Chapter Consistency Reviewer Bar */}
-          <div className="mt-4 p-3 rounded-xl bg-purple-950/30 border border-purple-800/40 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-purple-400" />
-              <span className="font-semibold text-purple-200">章节长程一致性审阅 (Consistency Reviewer)</span>
-            </div>
-            <span className="text-[11px] text-purple-300 font-mono">100% ID 校验 · 动态术语记忆提取 · 客观缺陷自动写回</span>
-          </div>
-        </div>
-
-        {/* Right Col: Progress Gauge & Summary */}
-        <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-slate-200">执行进度指标</h3>
-              <span className={`text-xs font-mono px-2 py-0.5 rounded-full ${
-                isRunning ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-slate-800 text-slate-400'
-              }`}>
-                {isRunning ? 'RUNNING' : isPaused ? 'PAUSED' : 'IDLE'}
-              </span>
-            </div>
-
-            <div className="space-y-4">
+            {/* Right Col: Progress Gauge & Summary */}
+            <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl flex flex-col justify-between shadow-xl">
               <div>
-                <div className="flex justify-between text-xs mb-1.5">
-                  <span className="text-slate-400">全书翻译完成度</span>
-                  <span className="font-bold text-slate-200 font-mono">{progressPercent}%</span>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-bold text-slate-200">执行进度指标</h3>
+                  <span
+                    className={`text-xs font-mono px-2 py-0.5 rounded-full ${
+                      isRunning
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                        : isPaused
+                        ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {isRunning ? 'RUNNING' : isPaused ? 'PAUSED' : 'IDLE'}
+                  </span>
                 </div>
-                <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${progressPercent}%` }}
-                  />
+
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1.5">
+                      <span className="text-slate-400">全书翻译完成度</span>
+                      <span className="font-bold text-slate-200 font-mono">{progressPercent}%</span>
+                    </div>
+                    <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${progressPercent}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-xs">
+                    <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+                      <span className="text-slate-500 text-[10px]">当前章节</span>
+                      <p className="font-mono font-bold text-slate-200 mt-0.5">
+                        {activeTask?.current_chapter_index || 0} / {activeTask?.total_chapters || book.total_chapters}
+                      </p>
+                    </div>
+                    <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+                      <span className="text-slate-500 text-[10px]">容灾救回段落</span>
+                      <p className="font-mono font-bold text-emerald-400 mt-0.5">
+                        {activeTask?.recovered_paragraphs || 0} 段
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-xs">
-                <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
-                  <span className="text-slate-500 text-[10px]">当前章节</span>
-                  <p className="font-mono font-bold text-slate-200 mt-0.5">
-                    {activeTask?.current_chapter_index || 0} / {activeTask?.total_chapters || book.total_chapters}
-                  </p>
-                </div>
-                <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
-                  <span className="text-slate-500 text-[10px]">容灾救回段落</span>
-                  <p className="font-mono font-bold text-emerald-400 mt-0.5">
-                    {activeTask?.recovered_paragraphs || 0} 段
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Config options */}
+              {/* Config options */}
           <div className="mt-4 pt-4 border-t border-slate-800/80 space-y-2 text-xs">
             <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
               <input
@@ -356,6 +472,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           </div>
         </div>
       </div>
+    );
+  })()}
 
       {/* Live SSE Stream Waterfall Feed */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">

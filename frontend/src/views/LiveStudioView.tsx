@@ -555,8 +555,20 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
               } else if (evt.event === 'chapter_completed') {
                 const chIndex = evt.data?.chapter_index ?? evt.data?.current_chapter_index;
                 const chId = evt.data?.chapter_id ?? evt.data?.current_chapter;
-                const issues = evt.data?.result?.issues || 0;
-                const fixes = evt.data?.result?.fixes || 0;
+                const issues =
+                  evt.data?.issues ??
+                  evt.data?.result?.issues ??
+                  evt.data?.result?.review?.issues ??
+                  evt.data?.result?.review?.reported_issues ??
+                  evt.data?.result?.reported_issues ??
+                  0;
+                const fixes =
+                  evt.data?.fixes ??
+                  evt.data?.result?.fixes ??
+                  evt.data?.result?.review?.fixes ??
+                  evt.data?.result?.review?.applied_fixes ??
+                  evt.data?.result?.applied_fixes ??
+                  0;
                 content = (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-sans">
                     <span className="text-emerald-300 font-medium">

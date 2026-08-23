@@ -238,6 +238,8 @@ class TaskManager:
                 result = pipeline.run_chapter(chapter_id, cycle=idx)
 
                 # Emit chapter complete event
+                issues_cnt = result.get("issues") if result.get("issues") is not None else result.get("review", {}).get("issues", 0)
+                fixes_cnt = result.get("fixes") if result.get("fixes") is not None else result.get("review", {}).get("fixes", 0)
                 broadcaster.broadcast_sync(
                     "chapter_completed",
                     {
@@ -245,6 +247,8 @@ class TaskManager:
                         "chapter_id": chapter_id,
                         "chapter_index": idx,
                         "total_chapters": task.total_chapters,
+                        "issues": issues_cnt,
+                        "fixes": fixes_cnt,
                         "result": result,
                     },
                     book_id=task.book_id,

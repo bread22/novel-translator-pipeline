@@ -548,6 +548,8 @@ class IterativePipeline:
             "chapter_id": chapter_id,
             "translated": translated_summary["translated_paragraphs"],
             "reviewed": reviewed_summary["checked_paragraphs"],
+            "issues": reviewed_summary.get("issues", 0),
+            "fixes": reviewed_summary.get("fixes", 0),
             "translation": translated_summary,
             "review": reviewed_summary,
         }

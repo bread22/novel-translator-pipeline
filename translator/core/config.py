@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 import re
 import stat
 import tempfile
+from datetime import datetime, timezone
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -206,6 +208,51 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     with path.expanduser().resolve().open("rb") as stream:
         value = tomllib.load(stream)
     return validate_config_data(value)
+
+
+def config_sha256(path: Path = CONFIG_PATH) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.expanduser().resolve().read_bytes()).hexdigest()
+
+
+def create_config_backup(path: Path = CONFIG_PATH) -> Path:
+    """Create an immutable, timestamped sibling backup of a valid config."""
+    source = path.expanduser().resolve()
+    load_config(source)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    backup = source.with_name(f"{source.name}.bak.{stamp}")
+    shutil.copy2(source, backup)
+    return backup
+
+
+def list_config_backups(path: Path = CONFIG_PATH) -> list[Path]:
+    target = path.expanduser().resolve()
+    return sorted(target.parent.glob(f"{target.name}.bak.*"), reverse=True)
+
+
+def restore_config_backup(backup: Path, path: Path = CONFIG_PATH) -> dict[str, Any]:
+    """Validate a sibling timestamped backup and atomically restore it."""
+    target = path.expanduser().resolve()
+    source = backup.expanduser().resolve()
+    expected_prefix = f"{target.name}.bak."
+    if source.parent != target.parent or not source.name.startswith(expected_prefix):
+        raise ValueError(f"备份必须是 {target.parent / (expected_prefix + '<timestamp>')}")
+    restored = load_config(source)
+    if target.exists():
+        create_config_backup(target)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.restore.", dir=target.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(source.read_bytes())
+            stream.flush()
+            os.fsync(stream.fileno())
+        load_config(temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return restored
 
 
 def config_value(config: dict[str, Any], dotted: str) -> Any:

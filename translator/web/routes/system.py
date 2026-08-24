@@ -4,7 +4,6 @@ import concurrent.futures
 import copy
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import time
 from typing import Any
@@ -14,6 +13,7 @@ import tomli_w
 
 from translator.core.config import (
     _load_dotenv,
+    create_config_backup,
     dual_review_enabled,
     fallback_translators_names,
     load_config,
@@ -110,8 +110,7 @@ def save_system_config(config_data: dict[str, Any]) -> dict[str, Any]:
             os.fsync(stream.fileno())
             temporary_path = Path(stream.name)
         validated = load_config(temporary_path)
-        if config_file.exists():
-            shutil.copy2(config_file, config_file.with_name(f"{config_file.name}.bak"))
+        backup_path = create_config_backup(config_file) if config_file.exists() else None
         os.replace(temporary_path, config_file)
         temporary_path = None
         replaced = True
@@ -129,7 +128,7 @@ def save_system_config(config_data: dict[str, Any]) -> dict[str, Any]:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"保存配置文件失败: {e}")
-    return {"status": "ok", "config": validated}
+    return {"status": "ok", "config": validated, "backup": str(backup_path) if backup_path else None}
 
 
 def get_prompts_dir() -> Path:

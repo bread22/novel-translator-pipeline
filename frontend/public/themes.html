@@ -3,392 +3,626 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Novel Translator Studio — UI 主题与视觉风格选型工作台</title>
+  <title>Novel Translator Studio — 14 种全维度 UI 风格与视觉范式实验室</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700;800&family=Noto+Serif+SC:wght@400;600;700&family=Zen+Old+Mincho:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&family=Noto+Serif+JP:wght@400;600;900&family=Noto+Serif+SC:wght@400;600;900&family=Press+Start+2P&family=Space+Grotesk:wght@400;600;700&family=VT323&family=Zen+Old+Mincho:wght@400;600;900&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest"></script>
+
   <style>
-    /* Global smooth transitions */
-    * {
-      transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
-    }
-    
     /* -------------------------------------------------------------
-       THEME 1: 极简和纸 · Wabi-Sabi / Kyoto Ink (京都和风 & 书卷典雅)
+       14 种截然不同的视觉范式 (Paradigm Styles)
+       每一套不仅变色，还包含：圆角/直角、阴影/硬边、边框粗细、
+       排版网格、装饰线、字体族系、组件质感等全维度结构变化！
        ------------------------------------------------------------- */
-    body.theme-wabi-sabi {
-      --bg-base: #F8F5EE;
-      --bg-surface: #EFEAE0;
+
+    /* 1. 昭和文库 · 传统活字 (Traditional Japanese Book) */
+    body.style-showa-bunko {
+      --bg-main: #F5EFEB;
+      --bg-panel: #EAE2D8;
+      --bg-card: #FAF6F0;
+      --border-color: #C8B9A6;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 2px;
+      --radius-card: 2px;
+      --radius-btn: 2px;
+      --shadow-card: 2px 3px 0px rgba(120, 100, 80, 0.15);
+      --font-heading: 'Zen Old Mincho', 'Noto Serif SC', serif;
+      --font-body: 'Noto Serif JP', 'Noto Serif SC', serif;
+      --font-mono: 'Fira Code', monospace;
+      --text-main: #231C16;
+      --text-sub: #5C4F43;
+      --text-dim: #948575;
+      --accent: #9E2A2B; /* 朱印赤红 */
+      --accent-bg: #FBECEB;
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: double 3px #C8B9A6;
+      --badge-style: border border-[#9E2A2B] text-[#9E2A2B] bg-[#FAF6F0];
+    }
+
+    /* 2. 新粗野主义 · 硬朗黑白线框 (Neo-Brutalism) */
+    body.style-neo-brutalism {
+      --bg-main: #FFFDF0;
+      --bg-panel: #FFFDF0;
       --bg-card: #FFFFFF;
-      --bg-card-hover: #FAF7F0;
-      --border-subtle: #DCD4C4;
-      --border-strong: #C4B9A3;
-      --text-primary: #2C2621;
-      --text-secondary: #6B6255;
-      --text-muted: #9E9484;
-      --accent-primary: #A8382B; /* 和风朱砂红 */
-      --accent-hover: #8F2B20;
-      --accent-subtle: #FBECE9;
-      --accent-text: #FFFFFF;
-      --badge-bg: #EAE2D2;
-      --badge-text: #5A4E3E;
-      --font-body: 'Inter', -apple-system, sans-serif;
-      --font-title: 'Zen Old Mincho', 'Noto Serif SC', serif;
-      --font-mono: 'Fira Code', monospace;
-      --status-success: #3F6212;
-      --status-warn: #B45309;
-      --shadow-card: 0 4px 20px -2px rgba(90, 78, 62, 0.08);
+      --border-color: #000000;
+      --border-style: solid;
+      --border-width: 2.5px;
+      --radius-panel: 0px;
+      --radius-card: 0px;
+      --radius-btn: 0px;
+      --shadow-card: 4px 4px 0px #000000;
+      --font-heading: 'Space Grotesk', sans-serif;
+      --font-body: 'Space Grotesk', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --text-main: #000000;
+      --text-sub: #111111;
+      --text-dim: #555555;
+      --accent: #FF5E00; /* 粗野鲜橙 */
+      --accent-bg: #FFE5D9;
+      --accent-contrast: #000000;
+      --card-border-extra: 2.5px solid #000000;
+      --badge-style: bg-[#FFE600] border-2 border-black text-black font-black uppercase;
     }
 
-    /* -------------------------------------------------------------
-       THEME 2: 黑曜石暖金 · Obsidian & Warm Amber (深邃黑曜 · 沉浸暖金)
-       ------------------------------------------------------------- */
-    body.theme-obsidian-amber {
-      --bg-base: #0C0D10;
-      --bg-surface: #14161B;
-      --bg-card: #1B1E26;
-      --bg-card-hover: #222631;
-      --border-subtle: #292E3B;
-      --border-strong: #3D4456;
-      --text-primary: #F1F3F9;
-      --text-secondary: #9DA6B8;
-      --text-muted: #626B7E;
-      --accent-primary: #F59E0B; /* 暖琥珀金 */
-      --accent-hover: #D97706;
-      --accent-subtle: rgba(245, 158, 11, 0.12);
-      --accent-text: #000000;
-      --badge-bg: #232734;
-      --badge-text: #FBBF24;
+    /* 3. 博朗工业拟物 · 硬件调音台 (Braun Dieter Rams Skeuomorphic) */
+    body.style-braun-hifi {
+      --bg-main: #D8D8D8;
+      --bg-panel: #E3E3E3;
+      --bg-card: #ECECEC;
+      --border-color: #B8B8B8;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 6px;
+      --radius-card: 4px;
+      --radius-btn: 4px;
+      --shadow-card: inset 1px 1px 0px #FFFFFF, inset -1px -1px 0px #CCCCCC, 0 4px 10px rgba(0,0,0,0.1);
+      --font-heading: 'Inter', sans-serif;
       --font-body: 'Inter', sans-serif;
-      --font-title: 'Inter', sans-serif;
-      --font-mono: 'Fira Code', monospace;
-      --status-success: #10B981;
-      --status-warn: #F59E0B;
-      --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.5);
+      --font-mono: 'JetBrains Mono', monospace;
+      --text-main: #1A1A1A;
+      --text-sub: #4A4A4A;
+      --text-dim: #777777;
+      --accent: #0072CE; /* 经典博朗工业蓝 */
+      --accent-bg: #DCEAF5;
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: 1px solid #B0B0B0;
+      --badge-style: bg-[#D4D4D4] border border-[#A0A0A0] text-[#222222] shadow-inner font-mono;
     }
 
-    /* -------------------------------------------------------------
-       THEME 3: 钛灰工业 · Swiss Titanium (北欧极简 · 瑞士版面工程)
-       ------------------------------------------------------------- */
-    body.theme-swiss-titanium {
-      --bg-base: #111215;
-      --bg-surface: #181A1F;
-      --bg-card: #20232A;
-      --bg-card-hover: #282C35;
-      --border-subtle: #2E333D;
-      --border-strong: #414856;
-      --text-primary: #FFFFFF;
-      --text-secondary: #A0A6B2;
-      --text-muted: #6B7280;
-      --accent-primary: #3B82F6; /* 瑞士钴蓝 */
-      --accent-hover: #2563EB;
-      --accent-subtle: rgba(59, 130, 246, 0.14);
-      --accent-text: #FFFFFF;
-      --badge-bg: #282D37;
-      --badge-text: #60A5FA;
+    /* 4. 绿屏赛博终端 · CRT 字符界面 (Cyberdeck CRT Terminal) */
+    body.style-crt-terminal {
+      --bg-main: #050B05;
+      --bg-panel: #0A140A;
+      --bg-card: #081108;
+      --border-color: #1F4D1F;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 0px;
+      --radius-card: 0px;
+      --radius-btn: 0px;
+      --shadow-card: 0 0 12px rgba(34, 197, 94, 0.15), inset 0 0 8px rgba(34, 197, 94, 0.05);
+      --font-heading: 'VT323', monospace;
+      --font-body: 'JetBrains Mono', monospace;
+      --font-mono: 'VT323', monospace;
+      --text-main: #4ADE80;
+      --text-sub: #22C55E;
+      --text-dim: #15803D;
+      --accent: #4ADE80; /* 荧光翠绿 */
+      --accent-bg: rgba(74, 222, 128, 0.15);
+      --accent-contrast: #050B05;
+      --card-border-extra: 1px solid #166534;
+      --badge-style: bg-[#052E16] border border-[#22C55E] text-[#4ADE80] font-mono tracking-widest;
+    }
+
+    /* 5. 液态微光毛玻璃 · iOS 极简拟态 (Liquid Glassmorphism) */
+    body.style-glass-aurora {
+      --bg-main: #0A0C16;
+      --bg-panel: rgba(22, 27, 46, 0.65);
+      --bg-card: rgba(30, 36, 62, 0.55);
+      --border-color: rgba(255, 255, 255, 0.12);
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 24px;
+      --radius-card: 18px;
+      --radius-btn: 14px;
+      --shadow-card: 0 8px 32px 0 rgba(0, 0, 0, 0.37), inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+      --font-heading: 'Inter', sans-serif;
       --font-body: 'Inter', sans-serif;
-      --font-title: 'Inter', sans-serif;
       --font-mono: 'Fira Code', monospace;
-      --status-success: #10B981;
-      --status-warn: #EAB308;
-      --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.35);
+      --text-main: #FFFFFF;
+      --text-sub: #CBD5E1;
+      --text-dim: #64748B;
+      --accent: #818CF8; /* 极光紫蓝 */
+      --accent-bg: rgba(129, 140, 248, 0.2);
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: 1px solid rgba(255, 255, 255, 0.12);
+      --badge-style: bg-white/10 backdrop-blur-md border border-white/20 text-indigo-200;
     }
 
-    /* -------------------------------------------------------------
-       THEME 4: 日系赛博 · Tokyo Midnight (东京霓虹夜巡 · 终端质感)
-       ------------------------------------------------------------- */
-    body.theme-tokyo-night {
-      --bg-base: #0B0C14;
-      --bg-surface: #121324;
-      --bg-card: #181A30;
-      --bg-card-hover: #1F223F;
-      --border-subtle: #292C52;
-      --border-strong: #3F447D;
-      --text-primary: #EDF1FD;
-      --text-secondary: #969EC2;
-      --text-muted: #5A628B;
-      --accent-primary: #06B6D4; /* 霓虹青蓝 */
-      --accent-hover: #0891B2;
-      --accent-subtle: rgba(6, 182, 212, 0.15);
-      --accent-text: #000000;
-      --badge-bg: #202444;
-      --badge-text: #38BDF8;
-      --font-body: 'Inter', sans-serif;
-      --font-title: 'Inter', sans-serif;
-      --font-mono: 'Fira Code', monospace;
-      --status-success: #22C55E;
-      --status-warn: #F43F5E;
-      --shadow-card: 0 8px 30px rgba(6, 182, 212, 0.08);
-    }
-
-    /* -------------------------------------------------------------
-       THEME 5: 北欧雾蓝 · Nord Frost & Slate (极地冰霜 · 舒缓护眼)
-       ------------------------------------------------------------- */
-    body.theme-nord-frost {
-      --bg-base: #1E222A;
-      --bg-surface: #252A34;
-      --bg-card: #2E3440;
-      --bg-card-hover: #373E4D;
-      --border-subtle: #3E4656;
-      --border-strong: #4C566A;
-      --text-primary: #ECEFF4;
-      --text-secondary: #D8DEE9;
-      --text-muted: #818D9D;
-      --accent-primary: #88C0D0; /* 极地冰青 */
-      --accent-hover: #81A1C1;
-      --accent-subtle: rgba(136, 192, 208, 0.16);
-      --accent-text: #2E3440;
-      --badge-bg: #353D4C;
-      --badge-text: #88C0D0;
-      --font-body: 'Inter', sans-serif;
-      --font-title: 'Inter', sans-serif;
-      --font-mono: 'Fira Code', monospace;
-      --status-success: #A3BE8C;
-      --status-warn: #EBCB8B;
-      --shadow-card: 0 6px 24px rgba(0, 0, 0, 0.3);
-    }
-
-    /* -------------------------------------------------------------
-       THEME 6: 现代文库 · Bauhaus Editorial Light (明亮出版物 · 干净纯粹)
-       ------------------------------------------------------------- */
-    body.theme-editorial-light {
-      --bg-base: #F8FAFC;
-      --bg-surface: #F1F5F9;
+    /* 6. 瑞士国际主义 · 栅格色块 (Swiss International Style) */
+    body.style-swiss-grid {
+      --bg-main: #EFEFEF;
+      --bg-panel: #E5E5E5;
       --bg-card: #FFFFFF;
-      --bg-card-hover: #F8FAFC;
-      --border-subtle: #E2E8F0;
-      --border-strong: #CBD5E1;
-      --text-primary: #0F172A;
-      --text-secondary: #475569;
-      --text-muted: #94A3B8;
-      --accent-primary: #2563EB; /* 现代克莱因蓝 */
-      --accent-hover: #1D4ED8;
-      --accent-subtle: #EFF6FF;
-      --accent-text: #FFFFFF;
-      --badge-bg: #E2E8F0;
-      --badge-text: #1E293B;
+      --border-color: #111111;
+      --border-style: solid;
+      --border-width: 1.5px;
+      --radius-panel: 0px;
+      --radius-card: 0px;
+      --radius-btn: 0px;
+      --shadow-card: 0 0 0 0 transparent;
+      --font-heading: 'Space Grotesk', sans-serif;
       --font-body: 'Inter', sans-serif;
-      --font-title: 'Noto Serif SC', serif;
-      --font-mono: 'Fira Code', monospace;
-      --status-success: #16A34A;
-      --status-warn: #D97706;
-      --shadow-card: 0 4px 20px -2px rgba(15, 23, 42, 0.06);
+      --font-mono: 'Space Grotesk', monospace;
+      --text-main: #111111;
+      --text-sub: #333333;
+      --text-dim: #777777;
+      --accent: #E63946; /* 瑞士红 */
+      --accent-bg: #FFE5E8;
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: 1.5px solid #111111;
+      --badge-style: bg-[#111111] text-white font-bold tracking-tighter;
     }
 
-    /* Dynamic CSS Application */
+    /* 7. 8-Bit 像素 JRPG · 游戏任务板 (Pixel Quest JRPG) */
+    body.style-pixel-jrpg {
+      --bg-main: #181425;
+      --bg-panel: #26203A;
+      --bg-card: #3B3253;
+      --border-color: #E2B258;
+      --border-style: solid;
+      --border-width: 3px;
+      --radius-panel: 0px;
+      --radius-card: 0px;
+      --radius-btn: 0px;
+      --shadow-card: 4px 4px 0px #100C1B;
+      --font-heading: 'Press Start 2P', cursive;
+      --font-body: 'JetBrains Mono', monospace;
+      --font-mono: 'Press Start 2P', cursive;
+      --text-main: #FEE761;
+      --text-sub: #D77643;
+      --text-dim: #8A6F9E;
+      --accent: #E2B258; /* 像素金币黄 */
+      --accent-bg: #4B3D60;
+      --accent-contrast: #181425;
+      --card-border-extra: 3px solid #E2B258;
+      --badge-style: bg-[#D77643] border-2 border-white text-white font-bold;
+    }
+
+    /* 8. Linear 工匠黑曜 · 精致微光 (Linear Obsidian Craftsman) */
+    body.style-linear-obsidian {
+      --bg-main: #0B0C0E;
+      --bg-panel: #111317;
+      --bg-card: #171A1F;
+      --border-color: #242832;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 12px;
+      --radius-card: 8px;
+      --radius-btn: 6px;
+      --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.45);
+      --font-heading: 'Inter', sans-serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --text-main: #F3F4F6;
+      --text-sub: #9CA3AF;
+      --text-dim: #4B5563;
+      --accent: #F59E0B; /* 暖琥珀微光 */
+      --accent-bg: rgba(245, 158, 11, 0.12);
+      --accent-contrast: #000000;
+      --card-border-extra: 1px solid #242832;
+      --badge-style: bg-[#20242D] border border-[#313745] text-amber-300 font-medium;
+    }
+
+    /* 9. 独立出版杂志 · 现代高阶排版 (Modern Editorial Magazine) */
+    body.style-editorial-mag {
+      --bg-main: #FAF9F6;
+      --bg-panel: #F2EFE9;
+      --bg-card: #FFFFFF;
+      --border-color: #E5E0D8;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 0px;
+      --radius-card: 0px;
+      --radius-btn: 0px;
+      --shadow-card: 0 10px 30px -10px rgba(0, 0, 0, 0.05);
+      --font-heading: 'Noto Serif SC', serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'Space Grotesk', monospace;
+      --text-main: #1A1A1A;
+      --text-sub: #4A4A4A;
+      --text-dim: #888888;
+      --accent: #1D4ED8; /* 深邃宝蓝 */
+      --accent-bg: #EFF6FF;
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: 1px solid #E5E0D8;
+      --badge-style: border border-black bg-white text-black font-serif italic;
+    }
+
+    /* 10. 中世纪炼金手稿 · 羊皮古卷 (Medieval Alchemist Parchment) */
+    body.style-medieval-grimoire {
+      --bg-main: #221C16;
+      --bg-panel: #2C241D;
+      --bg-card: #382E25;
+      --border-color: #8C7355;
+      --border-style: solid;
+      --border-width: 1.5px;
+      --radius-panel: 4px;
+      --radius-card: 4px;
+      --radius-btn: 4px;
+      --shadow-card: 0 4px 15px rgba(0, 0, 0, 0.6);
+      --font-heading: 'Cinzel', serif;
+      --font-body: 'Noto Serif SC', serif;
+      --font-mono: 'Cinzel', serif;
+      --text-main: #EADBC8;
+      --text-sub: #BAA68F;
+      --text-dim: #7C6D5D;
+      --accent: #C5A059; /* 古董鎏金 */
+      --accent-bg: #4A3D30;
+      --accent-contrast: #221C16;
+      --card-border-extra: 1px solid #8C7355;
+      --badge-style: bg-[#4E3E2F] border border-[#C5A059] text-[#EADBC8] font-serif;
+    }
+
+    /* 11. 金融高密监控 · 彭博终端 (Bloomberg Mission Control) */
+    body.style-bloomberg-dense {
+      --bg-main: #0A0A0A;
+      --bg-panel: #141414;
+      --bg-card: #1C1C1C;
+      --border-color: #333333;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 0px;
+      --radius-card: 0px;
+      --radius-btn: 0px;
+      --shadow-card: none;
+      --font-heading: 'JetBrains Mono', monospace;
+      --font-body: 'JetBrains Mono', monospace;
+      --font-mono: 'JetBrains Mono', monospace;
+      --text-main: #FFA500; /* 彭博琥珀橙 */
+      --text-sub: #CCCCCC;
+      --text-dim: #666666;
+      --accent: #00E5FF; /* 高亮电青 */
+      --accent-bg: #00333D;
+      --accent-contrast: #000000;
+      --card-border-extra: 1px solid #333333;
+      --badge-style: bg-[#2A2A2A] text-[#FFA500] border border-[#FFA500] font-mono uppercase text-[10px];
+    }
+
+    /* 12. 无印纯白呼吸 · 极简和光 (Muji Breathing Minimal) */
+    body.style-muji-minimal {
+      --bg-main: #FAF8F5;
+      --bg-panel: #FFFFFF;
+      --bg-card: #FFFFFF;
+      --border-color: #ECE7E1;
+      --border-style: solid;
+      --border-width: 1px;
+      --radius-panel: 16px;
+      --radius-card: 12px;
+      --radius-btn: 8px;
+      --shadow-card: 0 4px 20px -2px rgba(100, 90, 80, 0.05);
+      --font-heading: 'Noto Serif JP', serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'Fira Code', monospace;
+      --text-main: #2C2825;
+      --text-sub: #7A726B;
+      --text-dim: #B5ADA5;
+      --accent: #7C6A59; /* 亚麻和茶褐 */
+      --accent-bg: #F2EEE9;
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: 1px solid #ECE7E1;
+      --badge-style: bg-[#F2EEE9] text-[#7C6A59] font-medium;
+    }
+
+    /* 13. 80年代合成波 · 霓虹夕阳 (Synthwave 80s Grid) */
+    body.style-synthwave-80s {
+      --bg-main: #130924;
+      --bg-panel: #1F1038;
+      --bg-card: #2B154D;
+      --border-color: #EC4899;
+      --border-style: solid;
+      --border-width: 1.5px;
+      --radius-panel: 8px;
+      --radius-card: 6px;
+      --radius-btn: 4px;
+      --shadow-card: 0 0 15px rgba(236, 72, 153, 0.25), inset 0 0 10px rgba(168, 85, 247, 0.15);
+      --font-heading: 'Space Grotesk', sans-serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --text-main: #F472B6;
+      --text-sub: #C084FC;
+      --text-dim: #6B21A8;
+      --accent: #06B6D4; /* 激光电青 */
+      --accent-bg: rgba(6, 182, 212, 0.2);
+      --accent-contrast: #000000;
+      --card-border-extra: 1.5px solid #A855F7;
+      --badge-style: bg-[#4C1D95] border border-[#EC4899] text-[#F472B6] font-bold tracking-wider;
+    }
+
+    /* 14. 便签折纸 · 白板工坊 (Sticky Papercraft Studio) */
+    body.style-papercraft-notes {
+      --bg-main: #EAE6DF;
+      --bg-panel: #DFDAD1;
+      --bg-card: #FFFBEA; /* 便签黄 */
+      --border-color: #D3CABA;
+      --border-style: dashed;
+      --border-width: 1.5px;
+      --radius-panel: 8px;
+      --radius-card: 4px;
+      --radius-btn: 6px;
+      --shadow-card: 3px 4px 12px rgba(80, 70, 60, 0.12), -1px -1px 0px rgba(255,255,255,0.8);
+      --font-heading: 'Noto Serif SC', serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'Fira Code', monospace;
+      --text-main: #332B24;
+      --text-sub: #665A4E;
+      --text-dim: #998C7E;
+      --accent: #2E6F40; /* 复古邮戳绿 */
+      --accent-bg: #E3EEDD;
+      --accent-contrast: #FFFFFF;
+      --card-border-extra: 1.5px dashed #D3CABA;
+      --badge-style: bg-[#FFF1B8] border border-[#D4B106] text-[#614700] font-mono;
+    }
+
+    /* Global Dynamic Class Mappings */
     body {
-      background-color: var(--bg-base);
-      color: var(--text-primary);
+      background-color: var(--bg-main);
+      color: var(--text-main);
       font-family: var(--font-body);
     }
-    .custom-title {
-      font-family: var(--font-title);
+    .custom-heading { font-family: var(--font-heading); }
+    .custom-mono { font-family: var(--font-mono); }
+    
+    .dyn-panel {
+      background-color: var(--bg-panel);
+      border-color: var(--border-color);
+      border-style: var(--border-style);
+      border-width: var(--border-width);
+      border-radius: var(--radius-panel);
     }
-    .custom-mono {
-      font-family: var(--font-mono);
+    .dyn-card {
+      background-color: var(--bg-card);
+      border: var(--card-border-extra);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-card);
     }
-    .bg-theme-base { background-color: var(--bg-base); }
-    .bg-theme-surface { background-color: var(--bg-surface); }
-    .bg-theme-card { background-color: var(--bg-card); }
-    .bg-theme-card-hover:hover { background-color: var(--bg-card-hover); }
-    .border-theme-subtle { border-color: var(--border-subtle); }
-    .border-theme-strong { border-color: var(--border-strong); }
-    .text-theme-primary { color: var(--text-primary); }
-    .text-theme-secondary { color: var(--text-secondary); }
-    .text-theme-muted { color: var(--text-muted); }
-    .bg-theme-accent { background-color: var(--accent-primary); }
-    .bg-theme-accent-hover:hover { background-color: var(--accent-hover); }
-    .bg-theme-accent-subtle { background-color: var(--accent-subtle); }
-    .text-theme-accent { color: var(--accent-primary); }
-    .text-theme-accent-contrast { color: var(--accent-text); }
-    .border-theme-accent { border-color: var(--accent-primary); }
-    .bg-theme-badge { background-color: var(--badge-bg); }
-    .text-theme-badge { color: var(--badge-text); }
-    .shadow-theme-card { box-shadow: var(--shadow-card); }
+    .dyn-btn-accent {
+      background-color: var(--accent);
+      color: var(--accent-contrast);
+      border-radius: var(--radius-btn);
+    }
+    .dyn-btn-subtle {
+      background-color: var(--bg-panel);
+      color: var(--text-main);
+      border: var(--border-width) var(--border-style) var(--border-color);
+      border-radius: var(--radius-btn);
+    }
+    .dyn-badge {
+      border-radius: var(--radius-btn);
+    }
   </style>
 </head>
-<body class="theme-obsidian-amber min-h-screen flex flex-col antialiased">
+<body class="style-linear-obsidian min-h-screen flex flex-col antialiased">
 
-  <!-- ================= TOP THEME SELECTOR & CONTROLS ================= -->
-  <header className="sticky top-0 z-50 bg-theme-surface border-b border-theme-subtle backdrop-blur-md px-6 py-3.5 shadow-md">
-    <div class="max-w-[1600px] mx-auto flex flex-col lg:flex-row items-center justify-between gap-4">
+  <!-- ================= TOP THEME SELECTION MATRIX (14 STYLES) ================= -->
+  <header class="sticky top-0 z-50 dyn-panel border-b px-4 py-3 shadow-lg backdrop-blur-md">
+    <div class="max-w-[1700px] mx-auto flex flex-col gap-3">
       
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl bg-theme-accent flex items-center justify-center text-theme-accent-contrast font-bold shadow-md">
-          <i data-lucide="palette" class="w-5 h-5"></i>
+      <!-- Header Title & Action -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded dyn-btn-accent flex items-center justify-center font-bold">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h1 class="text-sm font-bold tracking-tight custom-heading">14 种全维度设计范式实验室 (Design Paradigm Lab)</h1>
+            <p class="text-[11px] opacity-75">不仅是调色板，更彻底改变网格、边框厚度、直角/圆角、阴影质感与字体灵魂</p>
+          </div>
         </div>
-        <div>
-          <h1 class="text-sm font-bold text-theme-primary tracking-tight">视觉风格与配色方案选型</h1>
-          <p class="text-[11px] text-theme-secondary">实时切换预览 Novel Translator Studio 的 6 种设计主题</p>
+
+        <div class="flex items-center gap-3">
+          <button onclick="openApplyModal()" class="px-4 py-1.5 dyn-btn-accent text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer">
+            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+            <span>应用当前选中的范式</span>
+          </button>
         </div>
       </div>
 
-      <!-- Theme Selector Buttons -->
-      <div class="flex items-center gap-1.5 p-1 rounded-xl bg-theme-base border border-theme-subtle overflow-x-auto max-w-full">
+      <!-- 14 Style Buttons Grid -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5">
         
-        <button onclick="setTheme('wabi-sabi')" id="btn-wabi-sabi" class="theme-btn px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 cursor-pointer transition-all">
-          <span class="w-3 h-3 rounded-full bg-[#A8382B] border border-amber-900/30"></span>
-          <span>1. 极简和纸</span>
+        <button onclick="setStyle('showa-bunko')" id="btn-showa-bunko" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">1. 昭和文库</div>
+          <div class="text-[9px] opacity-70 truncate">传统双线 · 宣纸活字</div>
         </button>
 
-        <button onclick="setTheme('obsidian-amber')" id="btn-obsidian-amber" class="theme-btn px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 cursor-pointer transition-all">
-          <span class="w-3 h-3 rounded-full bg-[#F59E0B] border border-amber-400/50"></span>
-          <span>2. 黑曜暖金</span>
+        <button onclick="setStyle('neo-brutalism')" id="btn-neo-brutalism" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">2. 新粗野主义</div>
+          <div class="text-[9px] opacity-70 truncate">2.5px 粗黑硬边 · 鲜橙</div>
         </button>
 
-        <button onclick="setTheme('swiss-titanium')" id="btn-swiss-titanium" class="theme-btn px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 cursor-pointer transition-all">
-          <span class="w-3 h-3 rounded-full bg-[#3B82F6] border border-blue-400/50"></span>
-          <span>3. 钛灰工业</span>
+        <button onclick="setStyle('braun-hifi')" id="btn-braun-hifi" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">3. 博朗工业拟物</div>
+          <div class="text-[9px] opacity-70 truncate">拉丝铝板 · 硬件调音</div>
         </button>
 
-        <button onclick="setTheme('tokyo-night')" id="btn-tokyo-night" class="theme-btn px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 cursor-pointer transition-all">
-          <span class="w-3 h-3 rounded-full bg-[#06B6D4] border border-cyan-400/50"></span>
-          <span>4. 日系赛博</span>
+        <button onclick="setStyle('crt-terminal')" id="btn-crt-terminal" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">4. 绿屏赛博终端</div>
+          <div class="text-[9px] opacity-70 truncate">CRT 荧光绿 · 极客 HUD</div>
         </button>
 
-        <button onclick="setTheme('nord-frost')" id="btn-nord-frost" class="theme-btn px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 cursor-pointer transition-all">
-          <span class="w-3 h-3 rounded-full bg-[#88C0D0] border border-teal-300/50"></span>
-          <span>5. 北欧雾蓝</span>
+        <button onclick="setStyle('glass-aurora')" id="btn-glass-aurora" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">5. 液态微光玻璃</div>
+          <div class="text-[9px] opacity-70 truncate">毛玻璃拟态 · 极光微光</div>
         </button>
 
-        <button onclick="setTheme('editorial-light')" id="btn-editorial-light" class="theme-btn px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 cursor-pointer transition-all">
-          <span class="w-3 h-3 rounded-full bg-[#2563EB] border border-slate-300"></span>
-          <span>6. 现代文库</span>
+        <button onclick="setStyle('swiss-grid')" id="btn-swiss-grid" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">6. 瑞士国际主义</div>
+          <div class="text-[9px] opacity-70 truncate">栅格色块 · 粗黑线律动</div>
         </button>
+
+        <button onclick="setStyle('pixel-jrpg')" id="btn-pixel-jrpg" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">7. 8-Bit 像素 JRPG</div>
+          <div class="text-[9px] opacity-70 truncate">像素金币边框 · 任务看板</div>
+        </button>
+
+        <button onclick="setStyle('linear-obsidian')" id="btn-linear-obsidian" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">8. Linear 黑曜工匠</div>
+          <div class="text-[9px] opacity-70 truncate">哑光暗黑 · 琥珀微光</div>
+        </button>
+
+        <button onclick="setStyle('editorial-mag')" id="btn-editorial-mag" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">9. 独立出版杂志</div>
+          <div class="text-[9px] opacity-70 truncate">精装报刊 · 优雅宋体</div>
+        </button>
+
+        <button onclick="setStyle('medieval-grimoire')" id="btn-medieval-grimoire" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">10. 炼金手稿古卷</div>
+          <div class="text-[9px] opacity-70 truncate">羊皮纸 · 鎏金雕花</div>
+        </button>
+
+        <button onclick="setStyle('bloomberg-dense')" id="btn-bloomberg-dense" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">11. 彭博极密终端</div>
+          <div class="text-[9px] opacity-70 truncate">极限信息密度 · 纯数据</div>
+        </button>
+
+        <button onclick="setStyle('muji-minimal')" id="btn-muji-minimal" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">12. 无印和光纯白</div>
+          <div class="text-[9px] opacity-70 truncate">大留白 · 自然亚麻色</div>
+        </button>
+
+        <button onclick="setStyle('synthwave-80s')" id="btn-synthwave-80s" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">13. 80s 霓虹合成波</div>
+          <div class="text-[9px] opacity-70 truncate">紫粉电光 · 激光网格</div>
+        </button>
+
+        <button onclick="setStyle('papercraft-notes')" id="btn-papercraft-notes" class="style-btn text-left p-2 rounded border border-transparent hover:border-black/30 transition-all cursor-pointer">
+          <div class="text-[11px] font-bold truncate">14. 虚线便签折纸</div>
+          <div class="text-[9px] opacity-70 truncate">虚线剪纸 · 手作白板</div>
+        </button>
+
       </div>
 
-      <!-- Action: Choose theme -->
-      <div class="flex items-center gap-2">
-        <button onclick="openExportModal()" class="px-3.5 py-1.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-theme-accent-contrast font-semibold text-xs shadow transition-all cursor-pointer flex items-center gap-1.5">
-          <i data-lucide="check" class="w-3.5 h-3.5"></i>
-          <span>选用当前主题</span>
-        </button>
-      </div>
     </div>
   </header>
 
-  <!-- ================= THEME DESCRIPTION BANNER ================= -->
-  <div class="bg-theme-surface border-b border-theme-subtle px-6 py-4">
-    <div class="max-w-[1600px] mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-      <div class="space-y-1">
+  <!-- ================= PARADIGM EXPLANATION STRIP ================= -->
+  <div class="dyn-panel border-b px-6 py-3.5">
+    <div class="max-w-[1700px] mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+      <div class="space-y-0.5">
         <div class="flex items-center gap-2">
-          <span id="theme-tag" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-theme-accent-subtle text-theme-accent border border-theme-accent">
-            方案 2 · 黑曜石暖金
+          <span id="current-tag" class="px-2 py-0.5 text-xs font-bold dyn-btn-accent">
+            8. Linear 黑曜工匠
           </span>
-          <span id="theme-mood" class="text-xs text-theme-secondary">沉浸深邃 · 哑光黑曜 · 温暖琥珀金高亮 · 零视觉疲劳</span>
+          <span id="current-name" class="text-xs font-bold custom-heading">Linear Obsidian Craftsman</span>
         </div>
-        <p id="theme-desc" class="text-xs text-theme-muted max-w-3xl">
-          专为高强度夜间长文本工作打造。摒弃刺眼的泛紫渐变，采用类似 Linear / Raycast 的哑光黑曜背景与温暖的琥珀暖金点缀，层次极度分明且护眼。
+        <p id="current-desc" class="text-xs opacity-80 max-w-4xl">
+          专为高强度夜间长文本工作打造。摒弃刺眼高饱和渐变，采用类似 Linear / Raycast 的 1px 微边框、哑光暗黑与暖琥珀金点缀，信息层级极度清晰。
         </p>
       </div>
 
-      <!-- Color Swatches -->
-      <div id="palette-swatches" class="flex items-center gap-2 bg-theme-base p-2 rounded-xl border border-theme-subtle">
-        <!-- populated by JS -->
+      <div class="flex items-center gap-2 text-xs">
+        <span class="opacity-60 text-[11px]">范式特性：</span>
+        <span id="feature-1" class="px-2 py-0.5 dyn-badge text-[11px]">1px 微边框</span>
+        <span id="feature-2" class="px-2 py-0.5 dyn-badge text-[11px]">8px 倒角</span>
+        <span id="feature-3" class="px-2 py-0.5 dyn-badge text-[11px]">Inter + Mono</span>
       </div>
     </div>
   </div>
 
-  <!-- ================= VIEW TABS FOR TESTING LIVE PAGES ================= -->
-  <div class="bg-theme-base border-b border-theme-subtle px-6 pt-3">
-    <div class="max-w-[1600px] mx-auto flex items-center gap-2 overflow-x-auto">
-      <button onclick="setView('queue')" id="tab-queue" class="view-tab px-4 py-2 text-xs font-bold border-b-2 border-theme-accent text-theme-accent flex items-center gap-2 cursor-pointer">
+  <!-- ================= VIEW NAVIGATION (Queue / Studio / Reader / Settings) ================= -->
+  <div class="border-b px-6 pt-2" style="border-color: var(--border-color);">
+    <div class="max-w-[1700px] mx-auto flex items-center gap-2">
+      <button onclick="switchView('queue')" id="vtab-queue" class="px-4 py-2 text-xs font-bold border-b-2 border-current flex items-center gap-1.5 cursor-pointer">
         <i data-lucide="layers" class="w-3.5 h-3.5"></i>
         <span>1. 任务调度与队列 (Queue Hub)</span>
       </button>
-      <button onclick="setView('studio')" id="tab-studio" class="view-tab px-4 py-2 text-xs font-bold border-b-2 border-transparent text-theme-secondary hover:text-theme-primary flex items-center gap-2 cursor-pointer">
+      <button onclick="switchView('studio')" id="vtab-studio" class="px-4 py-2 text-xs font-bold border-b-2 border-transparent opacity-60 hover:opacity-100 flex items-center gap-1.5 cursor-pointer">
         <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
         <span>2. 翻译控制台 (Live Studio)</span>
       </button>
-      <button onclick="setView('reader')" id="tab-reader" class="view-tab px-4 py-2 text-xs font-bold border-b-2 border-transparent text-theme-secondary hover:text-theme-primary flex items-center gap-2 cursor-pointer">
+      <button onclick="switchView('reader')" id="vtab-reader" class="px-4 py-2 text-xs font-bold border-b-2 border-transparent opacity-60 hover:opacity-100 flex items-center gap-1.5 cursor-pointer">
         <i data-lucide="book-open" class="w-3.5 h-3.5"></i>
         <span>3. 双语阅读器 (Bilingual Reader)</span>
       </button>
-      <button onclick="setView('settings')" id="tab-settings" class="view-tab px-4 py-2 text-xs font-bold border-b-2 border-transparent text-theme-secondary hover:text-theme-primary flex items-center gap-2 cursor-pointer">
-        <i data-lucide="cpu" class="w-3.5 h-3.5"></i>
-        <span>4. 模型路由与预检 (Model Routing)</span>
+      <button onclick="switchView('compare')" id="vtab-compare" class="px-4 py-2 text-xs font-bold border-b-2 border-transparent opacity-60 hover:opacity-100 flex items-center gap-1.5 cursor-pointer">
+        <i data-lucide="layout-grid" class="w-3.5 h-3.5"></i>
+        <span>4. 14 套风格并排大对比 (Matrix Compare)</span>
       </button>
     </div>
   </div>
 
-  <!-- ================= MAIN LIVE DEMO AREA ================= -->
-  <main class="flex-1 max-w-[1600px] w-full mx-auto p-6 space-y-6">
+  <!-- ================= MAIN DEMO CONTAINER ================= -->
+  <main class="flex-1 max-w-[1700px] w-full mx-auto p-6 space-y-6">
 
     <!-- ================= VIEW 1: QUEUE HUB ================= -->
-    <div id="view-queue" class="demo-view space-y-6">
+    <div id="view-queue" class="live-view space-y-6">
       
-      <!-- Top Drop Zone Banner -->
-      <div class="relative overflow-hidden rounded-2xl border border-theme-strong bg-theme-surface p-6 shadow-theme-card">
-        <div class="relative z-10 flex flex-col md:flex-row items-center justify-between gap-4">
-          <div class="space-y-1.5 text-center md:text-left">
-            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-theme-accent-subtle text-theme-accent text-xs font-semibold">
-              <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
-              任务调度工作台 · 多书籍批量队列
-            </div>
-            <h2 class="text-xl font-bold tracking-tight text-theme-primary custom-title">
-              日文小说批量翻译与队列调度
-            </h2>
-            <p class="text-theme-secondary text-xs max-w-2xl">
-              支持多书籍批量排队、自由拖拽调整执行次序、动态并发槽位与断点续译。
-            </p>
+      <!-- Top Banner -->
+      <div class="dyn-card p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div class="space-y-1">
+          <div class="inline-flex items-center gap-2 px-2.5 py-0.5 text-xs dyn-badge font-bold">
+            <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+            批量调度流水线 · 多书籍并行排队
           </div>
+          <h2 class="text-xl font-bold tracking-tight custom-heading">小说批量翻译与队列调度中心</h2>
+          <p class="text-xs opacity-75">支持多书籍自由拖拽调序、动态并发槽位、两级降级容灾与长程断点记忆。</p>
+        </div>
 
-          <div class="flex items-center gap-3">
-            <button class="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-theme-accent-contrast font-bold text-xs shadow transition-all cursor-pointer">
-              <i data-lucide="upload-cloud" class="w-4 h-4"></i>
-              <span>上传并加入队列</span>
-            </button>
-            <button class="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-theme-card hover:bg-theme-card-hover border border-theme-subtle text-theme-primary text-xs font-medium transition-all cursor-pointer">
-              <i data-lucide="zap" class="w-4 h-4 text-theme-accent"></i>
-              <span>全部未完结入队</span>
-            </button>
-          </div>
+        <div class="flex items-center gap-2">
+          <button class="px-4 py-2.5 dyn-btn-accent text-xs font-bold flex items-center gap-2 shadow cursor-pointer">
+            <i data-lucide="upload-cloud" class="w-4 h-4"></i>
+            <span>上传并加入队列</span>
+          </button>
+          <button class="px-4 py-2.5 dyn-btn-subtle text-xs font-bold flex items-center gap-1.5 cursor-pointer">
+            <i data-lucide="zap" class="w-4 h-4 text-amber-500"></i>
+            <span>全部未完结入队</span>
+          </button>
         </div>
       </div>
 
-      <!-- Dual-Pane Layout -->
+      <!-- Dual Pane -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        <!-- Left: Book Pool (5 cols) -->
-        <div class="lg:col-span-5 space-y-4">
-          <div class="flex items-center justify-between bg-theme-surface border border-theme-subtle p-4 rounded-xl">
+        <!-- Left: Books Pool (5 cols) -->
+        <div class="lg:col-span-5 space-y-3">
+          <div class="flex items-center justify-between dyn-panel p-3">
             <div class="flex items-center gap-2">
-              <i data-lucide="book" class="w-4 h-4 text-theme-accent"></i>
-              <h3 class="text-sm font-bold text-theme-primary">已注册书籍资产池</h3>
-              <span class="text-xs custom-mono px-2 py-0.5 rounded bg-theme-badge text-theme-badge font-semibold">3 本</span>
+              <i data-lucide="book" class="w-4 h-4"></i>
+              <span class="text-xs font-bold custom-heading">已注册书籍资产池</span>
             </div>
+            <span class="text-[10px] custom-mono font-bold px-2 py-0.5 dyn-badge">3 本已就绪</span>
           </div>
 
           <!-- Book Card 1 -->
-          <div class="bg-theme-card hover:bg-theme-card-hover border border-theme-subtle rounded-xl p-4 space-y-3 shadow-theme-card transition-all">
+          <div class="dyn-card p-4 space-y-3">
             <div class="flex items-start justify-between gap-2">
               <div>
-                <h4 class="font-bold text-theme-primary text-sm custom-title">若妻・由香利</h4>
-                <p class="text-[11px] text-theme-muted mt-0.5">EPUB 原版 · 17 章节 · 共 14,280 段落</p>
+                <h4 class="font-bold text-sm custom-heading">若妻・由香利</h4>
+                <p class="text-[11px] opacity-70 mt-0.5">EPUB 原版 · 17 章节 · 14,280 段落</p>
               </div>
-              <span class="text-[10px] px-2 py-0.5 rounded bg-theme-badge text-theme-badge custom-mono font-semibold">
-                排队中 #1
-              </span>
+              <span class="text-[10px] dyn-badge px-2 py-0.5 custom-mono font-bold">排队中 #1</span>
             </div>
-            
+
             <div class="space-y-1">
-              <div class="flex items-center justify-between text-[11px] text-theme-secondary custom-mono">
-                <span>翻译进度</span>
+              <div class="flex items-center justify-between text-[11px] custom-mono opacity-80">
+                <span>翻译推进</span>
                 <span>0/17 章 (0%)</span>
               </div>
-              <div class="w-full bg-theme-surface rounded-full h-1.5 overflow-hidden border border-theme-subtle">
-                <div class="h-full bg-theme-accent" style="width: 0%"></div>
+              <div class="w-full h-1.5 dyn-panel overflow-hidden">
+                <div class="h-full bg-current opacity-80" style="width: 0%"></div>
               </div>
             </div>
 
-            <div class="flex items-center justify-between pt-2 border-t border-theme-subtle">
-              <div class="flex items-center gap-2">
-                <button class="text-xs text-theme-secondary hover:text-theme-primary transition-colors">详情</button>
-                <button class="text-xs text-theme-secondary hover:text-theme-primary transition-colors">重置</button>
+            <div class="flex items-center justify-between pt-2 border-t" style="border-color: var(--border-color);">
+              <div class="flex items-center gap-2 text-xs">
+                <button class="opacity-70 hover:opacity-100">详情</button>
+                <button class="opacity-70 hover:opacity-100">重置</button>
               </div>
-              <button class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-theme-accent-subtle text-theme-accent border border-theme-accent text-xs font-semibold hover:bg-theme-accent hover:text-theme-accent-contrast transition-all cursor-pointer">
+              <button class="px-3 py-1 text-xs dyn-btn-accent font-bold flex items-center gap-1 cursor-pointer">
                 <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
                 <span>加入队列</span>
               </button>
@@ -396,550 +630,416 @@
           </div>
 
           <!-- Book Card 2 -->
-          <div class="bg-theme-card hover:bg-theme-card-hover border border-theme-subtle rounded-xl p-4 space-y-3 shadow-theme-card transition-all">
+          <div class="dyn-card p-4 space-y-3">
             <div class="flex items-start justify-between gap-2">
               <div>
-                <h4 class="font-bold text-theme-primary text-sm custom-title">美人講師 汚辱の特別講座</h4>
-                <p class="text-[11px] text-theme-muted mt-0.5">EPUB 原版 · 13 章节 · 共 11,040 段落</p>
+                <h4 class="font-bold text-sm custom-heading">美人講師 汚辱の特別講座</h4>
+                <p class="text-[11px] opacity-70 mt-0.5">EPUB 原版 · 13 章节 · 11,040 段落</p>
               </div>
-              <span class="text-[10px] px-2 py-0.5 rounded bg-theme-badge text-theme-badge custom-mono font-semibold">
-                排队中 #2
-              </span>
+              <span class="text-[10px] dyn-badge px-2 py-0.5 custom-mono font-bold">已完结</span>
             </div>
-            
+
             <div class="space-y-1">
-              <div class="flex items-center justify-between text-[11px] text-theme-secondary custom-mono">
-                <span>翻译进度</span>
+              <div class="flex items-center justify-between text-[11px] custom-mono opacity-80">
+                <span>翻译推进</span>
                 <span>13/13 章 (100%)</span>
               </div>
-              <div class="w-full bg-theme-surface rounded-full h-1.5 overflow-hidden border border-theme-subtle">
+              <div class="w-full h-1.5 dyn-panel overflow-hidden">
                 <div class="h-full bg-emerald-500" style="width: 100%"></div>
               </div>
             </div>
 
-            <div class="flex items-center justify-between pt-2 border-t border-theme-subtle">
-              <div class="flex items-center gap-2">
-                <button class="text-xs text-theme-secondary hover:text-theme-primary transition-colors">在线阅读</button>
-                <button class="text-xs text-theme-secondary hover:text-theme-primary transition-colors">导出EPUB</button>
+            <div class="flex items-center justify-between pt-2 border-t" style="border-color: var(--border-color);">
+              <div class="flex items-center gap-2 text-xs">
+                <button class="opacity-70 hover:opacity-100">在线阅读</button>
+                <button class="opacity-70 hover:opacity-100">导出EPUB</button>
               </div>
-              <span class="text-xs text-emerald-500 font-semibold flex items-center gap-1">
+              <span class="text-xs text-emerald-500 font-bold flex items-center gap-1">
                 <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>
-                已完结
+                双盲审阅完毕
               </span>
             </div>
           </div>
+
         </div>
 
         <!-- Right: Execution Queue (7 cols) -->
-        <div class="lg:col-span-7 space-y-4">
+        <div class="lg:col-span-7 space-y-3">
           
-          <!-- Queue Status Header -->
-          <div class="flex items-center justify-between bg-theme-surface border border-theme-subtle p-4 rounded-xl">
-            <div class="flex items-center gap-3">
+          <div class="flex items-center justify-between dyn-panel p-3">
+            <div class="flex items-center gap-2">
               <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-              <div>
-                <h3 class="text-sm font-bold text-theme-primary">队列调度中心</h3>
-                <p class="text-[11px] text-theme-secondary">并发槽位: 1 · 当前状态: 待命暂停 (点击启动)</p>
-              </div>
+              <span class="text-xs font-bold custom-heading">执行队列调度器 (待命模式)</span>
             </div>
-
-            <div class="flex items-center gap-2">
-              <button class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow flex items-center gap-1.5 cursor-pointer">
-                <i data-lucide="play" class="w-3.5 h-3.5 fill-white"></i>
-                <span>启动队列</span>
-              </button>
-            </div>
+            <button class="px-3.5 py-1.5 dyn-btn-accent text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer">
+              <i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i>
+              <span>启动队列</span>
+            </button>
           </div>
 
-          <!-- Pending Queue Hint -->
-          <div class="flex items-center justify-between gap-3 p-3 rounded-xl bg-theme-accent-subtle border border-theme-accent text-theme-accent text-xs">
-            <div class="flex items-center gap-2">
-              <i data-lucide="clock" class="w-4 h-4 shrink-0"></i>
-              <span>队列处于待命暂停状态，已加入 2 本书。可任意拖拽调序，准备就绪后点击「启动队列」。</span>
-            </div>
-          </div>
-
-          <!-- Pending Items List -->
+          <!-- Pending Items -->
           <div class="space-y-2">
             
-            <!-- Item 1 (Draggable) -->
-            <div class="flex items-center justify-between gap-3 bg-theme-card border border-theme-subtle rounded-xl p-3 shadow-theme-card">
+            <div class="dyn-card p-3 flex items-center justify-between gap-3">
               <div class="flex items-center gap-3 min-w-0 flex-1">
-                <div class="cursor-grab text-theme-muted hover:text-theme-primary">
+                <div class="cursor-grab opacity-50 hover:opacity-100">
                   <i data-lucide="grip-vertical" class="w-4 h-4"></i>
                 </div>
-                <span class="text-xs custom-mono font-bold px-2 py-0.5 rounded bg-theme-badge text-theme-badge">
-                  #1
-                </span>
+                <span class="text-xs custom-mono font-bold px-2 py-0.5 dyn-badge">#1</span>
                 <div class="min-w-0 flex-1">
-                  <h4 class="text-xs font-bold text-theme-primary truncate">若妻・由香利</h4>
-                  <p class="text-[10px] text-theme-muted custom-mono truncate">已加入待办队列，点击「启动队列」开始调度...</p>
+                  <h5 class="text-xs font-bold truncate custom-heading">若妻・由香利</h5>
+                  <p class="text-[10px] custom-mono opacity-70 truncate">已加入待办队列，点击「启动队列」开始调度...</p>
                 </div>
               </div>
               <div class="flex items-center gap-1">
-                <button class="p-1 rounded bg-theme-surface hover:bg-theme-card text-theme-secondary hover:text-theme-primary">
-                  <i data-lucide="arrow-down" class="w-3.5 h-3.5"></i>
-                </button>
-                <button class="p-1 rounded bg-theme-surface hover:bg-rose-900/30 text-theme-secondary hover:text-rose-400">
-                  <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                </button>
+                <button class="p-1 dyn-btn-subtle"><i data-lucide="arrow-down" class="w-3.5 h-3.5"></i></button>
+                <button class="p-1 dyn-btn-subtle hover:text-rose-500"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
               </div>
             </div>
 
-            <!-- Item 2 (Draggable) -->
-            <div class="flex items-center justify-between gap-3 bg-theme-card border border-theme-subtle rounded-xl p-3 shadow-theme-card">
+            <div class="dyn-card p-3 flex items-center justify-between gap-3">
               <div class="flex items-center gap-3 min-w-0 flex-1">
-                <div class="cursor-grab text-theme-muted hover:text-theme-primary">
+                <div class="cursor-grab opacity-50 hover:opacity-100">
                   <i data-lucide="grip-vertical" class="w-4 h-4"></i>
                 </div>
-                <span class="text-xs custom-mono font-bold px-2 py-0.5 rounded bg-theme-badge text-theme-badge">
-                  #2
-                </span>
+                <span class="text-xs custom-mono font-bold px-2 py-0.5 dyn-badge">#2</span>
                 <div class="min-w-0 flex-1">
-                  <h4 class="text-xs font-bold text-theme-primary truncate">女銀行員・美樹 (フランス書院文庫)</h4>
-                  <p class="text-[10px] text-theme-muted custom-mono truncate">已加入待办队列，等待调度...</p>
+                  <h5 class="text-xs font-bold truncate custom-heading">女銀行員・美樹 (フランス書院文庫)</h5>
+                  <p class="text-[10px] custom-mono opacity-70 truncate">已加入待办队列，等待调度...</p>
                 </div>
               </div>
               <div class="flex items-center gap-1">
-                <button class="p-1 rounded bg-theme-surface hover:bg-theme-card text-theme-secondary hover:text-theme-primary">
-                  <i data-lucide="arrow-up" class="w-3.5 h-3.5"></i>
-                </button>
-                <button class="p-1 rounded bg-theme-surface hover:bg-rose-900/30 text-theme-secondary hover:text-rose-400">
-                  <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                </button>
+                <button class="p-1 dyn-btn-subtle"><i data-lucide="arrow-up" class="w-3.5 h-3.5"></i></button>
+                <button class="p-1 dyn-btn-subtle hover:text-rose-500"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
               </div>
             </div>
 
           </div>
+
         </div>
 
       </div>
+
     </div>
 
     <!-- ================= VIEW 2: LIVE STUDIO ================= -->
-    <div id="view-studio" class="demo-view space-y-6 hidden">
+    <div id="view-studio" class="live-view space-y-6 hidden">
       
-      <!-- Studio Header -->
-      <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-theme-surface border border-theme-subtle p-6 rounded-2xl shadow-theme-card">
+      <div class="dyn-card p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-2">
-            <span class="text-xs custom-mono px-2 py-0.5 rounded bg-theme-accent-subtle text-theme-accent font-bold">
-              Live Pipeline
-            </span>
-            <h2 class="text-xl font-bold text-theme-primary tracking-tight custom-title">若妻・由香利</h2>
+            <span class="text-xs dyn-badge px-2 py-0.5 custom-mono font-bold">PIPELINE ACTIVE</span>
+            <h3 class="text-lg font-bold custom-heading">若妻・由香利</h3>
           </div>
-          <p class="text-xs text-theme-secondary mt-1 flex items-center gap-2">
-            <span>总章节: 17 章 (1 章已完成)</span>
-            <span>·</span>
-            <span>总段落: 14,280 段 (840 段已译)</span>
-            <span>·</span>
-            <span class="text-theme-accent font-medium">正在处理第 2/17 章：第二章 秘密の逢瀬</span>
-          </p>
+          <p class="text-xs opacity-75 mt-1">正在处理第 2/17 章 · 实时批次 1/3 (15 段落) · 提取专有名词 3 条</p>
         </div>
 
         <div class="flex items-center gap-2">
-          <button class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow cursor-pointer">
-            <i data-lucide="pause" class="w-4 h-4 fill-white"></i>
-            <span>暂停</span>
+          <button class="px-4 py-2 dyn-btn-subtle text-xs font-bold flex items-center gap-1.5">
+            <i data-lucide="pause" class="w-4 h-4"></i> 暂停
           </button>
-          <button class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow cursor-pointer">
-            <i data-lucide="square" class="w-4 h-4 fill-white"></i>
-            <span>终止</span>
+          <button class="px-4 py-2 dyn-btn-subtle text-xs font-bold text-rose-500 flex items-center gap-1.5">
+            <i data-lucide="square" class="w-4 h-4"></i> 终止
           </button>
         </div>
       </div>
 
-      <!-- Model Topology Cards -->
+      <!-- Models Topology -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        
-        <!-- Primary -->
-        <div class="bg-theme-card border-2 border-theme-accent rounded-xl p-4 space-y-2 shadow-theme-card">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-theme-accent font-bold flex items-center gap-1">
-              <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> 主翻译器 (Primary)
-            </span>
-            <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-mono">在线 245ms</span>
-          </div>
-          <div class="font-bold text-theme-primary text-sm custom-mono">nvidia/nemotron-3-ultra</div>
-          <p class="text-[11px] text-theme-secondary">超长上下文、精准信达雅翻译策略</p>
+        <div class="dyn-card p-4 space-y-1">
+          <div class="text-[11px] font-bold opacity-75">主翻译器 (Primary)</div>
+          <div class="text-sm font-bold custom-mono">nvidia/nemotron-3-ultra</div>
+          <div class="text-[10px] text-emerald-500 custom-mono">在线 220ms · 双向信达雅</div>
         </div>
-
-        <!-- Fallback 1 -->
-        <div class="bg-theme-card border border-theme-subtle rounded-xl p-4 space-y-2 shadow-theme-card">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-theme-secondary font-bold flex items-center gap-1">
-              <i data-lucide="shield" class="w-3.5 h-3.5 text-amber-500"></i> 第一降级 (Fallback 1)
-            </span>
-            <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-mono">在线 180ms</span>
-          </div>
-          <div class="font-bold text-theme-primary text-sm custom-mono">gemini-3.5-flash-lite</div>
-          <p class="text-[11px] text-theme-secondary">高速并发容灾、自动二阶兜底</p>
+        <div class="dyn-card p-4 space-y-1">
+          <div class="text-[11px] font-bold opacity-75">第一降级 (Fallback 1)</div>
+          <div class="text-sm font-bold custom-mono">gemini-3.5-flash-lite</div>
+          <div class="text-[10px] text-emerald-500 custom-mono">在线 140ms · 极速容灾</div>
         </div>
-
-        <!-- Fallback 2 / Reviewer -->
-        <div class="bg-theme-card border border-theme-subtle rounded-xl p-4 space-y-2 shadow-theme-card">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-theme-secondary font-bold flex items-center gap-1">
-              <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-blue-500"></i> 双盲审阅器 (Reviewer)
-            </span>
-            <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-mono">在线 310ms</span>
-          </div>
-          <div class="font-bold text-theme-primary text-sm custom-mono">deepseek-ai/deepseek-v4-flash</div>
-          <p class="text-[11px] text-theme-secondary">一致性校验、错译与术语漂移审计</p>
+        <div class="dyn-card p-4 space-y-1">
+          <div class="text-[11px] font-bold opacity-75">双盲审阅器 (Reviewer)</div>
+          <div class="text-sm font-bold custom-mono">deepseek-ai/deepseek-v4-flash</div>
+          <div class="text-[10px] text-emerald-500 custom-mono">在线 310ms · 错译审计</div>
         </div>
-
       </div>
 
-      <!-- Real-Time SSE Stream Waterfall Feed -->
-      <div class="bg-theme-card border border-theme-subtle rounded-2xl overflow-hidden shadow-theme-card">
-        <div class="px-6 py-3.5 border-b border-theme-subtle flex items-center justify-between bg-theme-surface">
-          <div class="flex items-center gap-2">
-            <i data-lucide="terminal" class="w-4 h-4 text-theme-accent"></i>
-            <h3 class="text-xs font-bold text-theme-primary">实时事件瀑布流 (SSE Stream)</h3>
-            <span class="text-[10px] custom-mono px-2 py-0.5 rounded bg-theme-badge text-theme-badge font-semibold">18 events</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-[11px] text-theme-muted">自动滚动</span>
-          </div>
+      <!-- SSE Stream Feed -->
+      <div class="dyn-card overflow-hidden">
+        <div class="dyn-panel px-4 py-2.5 border-b flex items-center justify-between text-xs">
+          <span class="font-bold custom-mono flex items-center gap-1.5">
+            <i data-lucide="terminal" class="w-4 h-4"></i>
+            实时事件瀑布流 (SSE Stream)
+          </span>
+          <span class="opacity-60 custom-mono text-[10px]">4 events</span>
         </div>
-
-        <div class="p-4 max-h-[280px] overflow-y-auto space-y-2 font-mono text-xs custom-mono bg-theme-base">
-          <div class="flex items-start gap-2 text-theme-secondary">
-            <span class="text-theme-muted">21:05:12</span>
-            <span class="text-theme-accent">[PIPELINE]</span>
-            <span>加载章节 c0002 元数据，共 42 个段落待翻译...</span>
-          </div>
-          <div class="flex items-start gap-2 text-theme-secondary">
-            <span class="text-theme-muted">21:05:14</span>
-            <span class="text-emerald-500">[TRANSLATOR:nemotron]</span>
-            <span>批次 1/3 (15 段) 完成，耗时 1.8s，提取专有名词 3 条</span>
-          </div>
-          <div class="flex items-start gap-2 text-theme-secondary">
-            <span class="text-theme-muted">21:05:17</span>
-            <span class="text-blue-400">[REVIEWER:deepseek]</span>
-            <span>审阅通过，发现 1 处代词指代歧义并已自动高置信修正</span>
-          </div>
-          <div class="flex items-start gap-2 text-theme-secondary">
-            <span class="text-theme-muted">21:05:20</span>
-            <span class="text-emerald-500">[TRANSLATOR:nemotron]</span>
-            <span>批次 2/3 (15 段) 正在调用 API 翻译中...</span>
-          </div>
+        <div class="p-4 space-y-2 text-xs custom-mono" style="background-color: var(--bg-main);">
+          <div class="opacity-75">[21:10:01] <span class="text-indigo-400 font-bold">[PIPELINE]</span> 开始翻译章节 c0002，共 42 段落...</div>
+          <div class="opacity-75">[21:10:03] <span class="text-emerald-400 font-bold">[TRANSLATOR:nemotron]</span> 批次 1/3 (15 段) 完成，耗时 1.7s</div>
+          <div class="opacity-75">[21:10:05] <span class="text-blue-400 font-bold">[REVIEWER:deepseek]</span> 审阅完成，置信度 0.98，自动修复 1 处指代</div>
+          <div class="opacity-75">[21:10:08] <span class="text-emerald-400 font-bold">[TRANSLATOR:nemotron]</span> 批次 2/3 (15 段) 正在请求 API...</div>
         </div>
       </div>
 
     </div>
 
     <!-- ================= VIEW 3: BILINGUAL READER ================= -->
-    <div id="view-reader" class="demo-view space-y-6 hidden">
+    <div id="view-reader" class="live-view space-y-6 hidden">
       
-      <!-- Reader Toolbar -->
-      <div class="flex items-center justify-between bg-theme-surface border border-theme-subtle p-4 rounded-xl shadow-theme-card">
-        <div class="flex items-center gap-3">
-          <i data-lucide="book-open" class="w-4 h-4 text-theme-accent"></i>
-          <div>
-            <h3 class="text-sm font-bold text-theme-primary custom-title">第一章 新婚の甘い罠</h3>
-            <p class="text-[11px] text-theme-muted">段落对照模式 · 原文 (日) vs 译文 (中)</p>
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <button class="px-3 py-1 rounded bg-theme-card border border-theme-subtle text-xs text-theme-secondary">导出 EPUB</button>
-        </div>
+      <div class="dyn-panel p-4 flex items-center justify-between">
+        <h3 class="text-sm font-bold custom-heading">第一章 新婚の甘い罠 (段落对照模式)</h3>
+        <button class="px-3 py-1 dyn-btn-accent text-xs font-bold">导出 EPUB</button>
       </div>
 
-      <!-- Dual Column Reading View -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         
-        <!-- Left: Japanese Source -->
-        <div class="bg-theme-card border border-theme-subtle rounded-2xl p-6 space-y-4 shadow-theme-card">
-          <div class="flex items-center justify-between pb-3 border-b border-theme-subtle">
-            <span class="text-xs font-bold text-theme-muted custom-mono">原文 (日本語)</span>
-            <span class="text-xs text-theme-muted">c0001-p0001</span>
-          </div>
-          <div class="text-sm leading-relaxed text-theme-secondary space-y-4 font-serif">
-            <p>夕暮れの光が差し込むリビングで、由香利は静かにエプロンの紐を結び直した。新婚生活が始まってまだ三ヶ月、夫の帰りを待つこの時間が、彼女にとって最も平穏なひとときのはずだった。</p>
-            <p>しかし、テーブルの上に置かれた一通の見慣れぬ封筒が、その平穏を音もなく揺るがしていた。差出人の欄には、かつて彼女が忘れたはずの名前が記されている。</p>
-          </div>
+        <div class="dyn-card p-6 space-y-3">
+          <div class="text-xs opacity-60 pb-2 border-b custom-mono" style="border-color: var(--border-color);">原文 (日本語) · c0001-p0001</div>
+          <p class="text-sm leading-relaxed opacity-85 custom-heading">
+            夕暮れの光が差し込むリビングで、由香利は静かにエプロンの紐を結び直した。新婚生活が始まってまだ三ヶ月、夫の帰りを待つこの時間が、彼女にとって最も平穏なひとときのはずだった。
+          </p>
+          <p class="text-sm leading-relaxed opacity-85 custom-heading">
+            しかし、テーブルの上に置かれた一通の見慣れぬ封筒が、その平穏を音もなく揺るがしていた。差出人の欄には、かつて彼女が忘れたはずの名前が記されている。
+          </p>
         </div>
 
-        <!-- Right: Chinese Target -->
-        <div class="bg-theme-card border border-theme-strong rounded-2xl p-6 space-y-4 shadow-theme-card">
-          <div class="flex items-center justify-between pb-3 border-b border-theme-subtle">
-            <span class="text-xs font-bold text-theme-accent custom-mono">精校译文 (中文)</span>
-            <span class="text-xs text-emerald-500 font-semibold">100% 置信审阅</span>
-          </div>
-          <div class="text-sm leading-relaxed text-theme-primary space-y-4 custom-title">
-            <p>黄昏的余晖斜照在客厅里，由香利悄悄系紧了围裙的系带。新婚生活才刚刚过去三个月，等待丈夫归家的这段时光，本该是她一天中最安宁的时刻。</p>
-            <p>然而，静静躺在餐桌上的那一封陌生信封，却悄无声息地打破了这份宁静。寄件人一栏里，赫然写着一个她原本以为早已遗忘的名字。</p>
-          </div>
+        <div class="dyn-card p-6 space-y-3">
+          <div class="text-xs text-emerald-500 font-bold pb-2 border-b custom-mono" style="border-color: var(--border-color);">精校译文 (中文) · 100% 置信审阅</div>
+          <p class="text-sm leading-relaxed custom-heading">
+            黄昏的余晖斜照在客厅里，由香利悄悄系紧了围裙的系带。新婚生活才刚刚过去三个月，等待丈夫归家的这段时光，本该是她一天中最安宁的时刻。
+          </p>
+          <p class="text-sm leading-relaxed custom-heading">
+            然而，静静躺在餐桌上的那一封陌生信封，却悄无声息地打破了这份宁静。寄件人一栏里，赫然写着一个她原本以为早已遗忘的名字。
+          </p>
         </div>
 
       </div>
 
     </div>
 
-    <!-- ================= VIEW 4: MODEL ROUTING & SETTINGS ================= -->
-    <div id="view-settings" class="demo-view space-y-6 hidden">
+    <!-- ================= VIEW 4: MATRIX COMPARE (14 STYLES SIDE BY SIDE) ================= -->
+    <div id="view-compare" class="live-view space-y-6 hidden">
       
-      <div class="bg-theme-surface border border-theme-subtle p-6 rounded-2xl shadow-theme-card space-y-4">
-        <div>
-          <h3 class="text-base font-bold text-theme-primary">AI 模型路由与全链路预检</h3>
-          <p class="text-xs text-theme-secondary">配置主翻译器、多阶降级容灾模型与审阅器密钥</p>
-        </div>
+      <div class="dyn-panel p-4">
+        <h3 class="text-sm font-bold custom-heading">14 种范式风格实时横向大比对</h3>
+        <p class="text-xs opacity-75">点击任意卡片即可直接切换为主视图体验</p>
+      </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-          
-          <!-- Config Card 1 -->
-          <div class="bg-theme-card border border-theme-subtle p-4 rounded-xl space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-bold text-theme-primary">NVIDIA API Key</span>
-              <span class="text-[10px] text-emerald-500 font-mono">已配置 (有效)</span>
-            </div>
-            <input type="password" value="nvapi-xxxxxxxxxxxxxxxx" class="w-full bg-theme-base border border-theme-subtle rounded-lg px-3 py-2 text-xs text-theme-primary custom-mono" readonly />
-          </div>
-
-          <!-- Config Card 2 -->
-          <div class="bg-theme-card border border-theme-subtle p-4 rounded-xl space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-bold text-theme-primary">Google Gemini API Key</span>
-              <span class="text-[10px] text-emerald-500 font-mono">已配置 (有效)</span>
-            </div>
-            <input type="password" value="AIzaSyxxxxxxxxxxxxxxxx" class="w-full bg-theme-base border border-theme-subtle rounded-lg px-3 py-2 text-xs text-theme-primary custom-mono" readonly />
-          </div>
-
-        </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" id="compare-cards-container">
+        <!-- populated by JS -->
       </div>
 
     </div>
 
   </main>
 
-  <!-- ================= EXPORT / SELECT MODAL ================= -->
-  <div id="export-modal" class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden items-center justify-center p-4">
-    <div class="bg-theme-surface border border-theme-strong rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+  <!-- ================= MODAL FOR APPLYING STYLE ================= -->
+  <div id="apply-modal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="dyn-panel max-w-lg w-full p-6 shadow-2xl space-y-4">
       <div class="flex items-center justify-between">
-        <h3 class="text-base font-bold text-theme-primary" id="modal-title">选用此主题</h3>
-        <button onclick="closeExportModal()" class="text-theme-muted hover:text-theme-primary">
+        <h3 class="text-base font-bold custom-heading" id="modal-style-title">应用所选范式</h3>
+        <button onclick="closeApplyModal()" class="opacity-60 hover:opacity-100">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
-      
-      <p class="text-xs text-theme-secondary" id="modal-desc">
-        你已选择该视觉风格。复制下方配置或直接确认应用，我们将立即将此主题注入主界面代码。
+
+      <p class="text-xs opacity-80">
+        你选择了该设计范式。确定后，主系统的 HTML、Tailwind 配置、边框圆角与排版系统将全面更新为此风格。
       </p>
 
       <div class="space-y-1">
-        <span class="text-[11px] font-bold text-theme-primary">主题参数配置 (CSS Tokens):</span>
-        <textarea id="tokens-json" class="w-full h-40 bg-theme-base border border-theme-subtle rounded-xl p-3 text-xs custom-mono text-theme-primary focus:outline-none" readonly></textarea>
+        <span class="text-[11px] font-bold">范式核心 CSS 变量：</span>
+        <textarea id="modal-css-box" class="w-full h-36 dyn-panel p-2.5 text-xs custom-mono focus:outline-none" readonly></textarea>
       </div>
 
-      <div class="flex items-center justify-end gap-3 pt-2">
-        <button onclick="closeExportModal()" class="px-4 py-2 rounded-xl text-xs text-theme-secondary hover:text-theme-primary transition-colors">
-          取消
-        </button>
-        <button onclick="copyTokens()" id="btn-copy" class="px-5 py-2 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-theme-accent-contrast font-bold text-xs shadow transition-all flex items-center gap-1.5 cursor-pointer">
+      <div class="flex items-center justify-end gap-2 pt-2">
+        <button onclick="closeApplyModal()" class="px-4 py-1.5 dyn-btn-subtle text-xs">取消</button>
+        <button onclick="copyAndConfirm()" class="px-4 py-1.5 dyn-btn-accent text-xs font-bold flex items-center gap-1">
           <i data-lucide="copy" class="w-3.5 h-3.5"></i>
-          <span id="copy-text">复制主题参数</span>
+          <span id="copy-btn-text">复制并确认</span>
         </button>
       </div>
     </div>
   </div>
 
   <script>
-    // Theme Definitions & Meta
-    const themes = {
-      'wabi-sabi': {
-        name: '极简和纸 (Kyoto Wabi-Sabi)',
-        tag: '方案 1 · 极简和纸',
-        mood: '京都和风 · 书卷典雅 · 暖米宣纸 · 朱砂红印 · 传统出版质感',
-        desc: '以日本文库本和传统和纸为灵感，采用温暖的米色宣纸背景搭配深炭黑与朱砂红印，带有禅意书卷气，非常适合文学小说翻译与阅读。',
-        swatches: ['#F8F5EE', '#EFEAE0', '#FFFFFF', '#A8382B', '#2C2621'],
-        tokens: {
-          bgBase: '#F8F5EE',
-          bgSurface: '#EFEAE0',
-          bgCard: '#FFFFFF',
-          border: '#DCD4C4',
-          textPrimary: '#2C2621',
-          textSecondary: '#6B6255',
-          accent: '#A8382B',
-          accentText: '#FFFFFF',
-          fontTitle: 'Zen Old Mincho, serif',
-          fontBody: 'Inter, sans-serif'
-        }
+    const paradigms = {
+      'showa-bunko': {
+        name: '昭和文库 · 传统活字 (Showa Paperback)',
+        tag: '1. 昭和文库',
+        desc: '以昭和日本文库本和传统木刻为蓝本。双线边框、暖宣纸底色、朱砂印章与禅意明朝体，浓郁的纯正文学书卷氛围。',
+        feat: ['双线木刻边框', '米宣纸质感', 'Zen Old Mincho']
       },
-      'obsidian-amber': {
-        name: '黑曜石暖金 (Obsidian & Amber)',
-        tag: '方案 2 · 黑曜石暖金 (推荐)',
-        mood: '沉浸深邃 · 哑光黑曜 · 温暖琥珀金高亮 · 零视觉疲劳',
-        desc: '专为高强度夜间长文本工作打造。摒弃刺眼的泛紫色彩，采用类似 Linear / Raycast 的哑光黑曜背景与温暖的琥珀金点缀，层次极度分明且护眼。',
-        swatches: ['#0C0D10', '#14161B', '#1B1E26', '#F59E0B', '#F1F3F9'],
-        tokens: {
-          bgBase: '#0C0D10',
-          bgSurface: '#14161B',
-          bgCard: '#1B1E26',
-          border: '#292E3B',
-          textPrimary: '#F1F3F9',
-          textSecondary: '#9DA6B8',
-          accent: '#F59E0B',
-          accentText: '#000000',
-          fontTitle: 'Inter, sans-serif',
-          fontBody: 'Inter, sans-serif'
-        }
+      'neo-brutalism': {
+        name: '新粗野主义 · 硬朗黑白线框 (Neo-Brutalism)',
+        tag: '2. 新粗野主义',
+        desc: '纯直角 0px 倒角、2.5px 极粗黑色实线边框、4px 硬实体黑投影与大撞色鲜橙，硬核醒目、工业极简、视觉张力极强。',
+        feat: ['2.5px 粗黑边框', '4px 实体黑投影', 'Space Grotesk']
       },
-      'swiss-titanium': {
-        name: '钛灰工业 (Swiss Titanium)',
-        tag: '方案 3 · 钛灰工业',
-        mood: '北欧极简 · 瑞士版面工程 · 钛金哑灰 · 钴蓝点缀 · 专业精工',
-        desc: '类似 Apple Pro / Stripe 工程师控制台的高精细度界面。深灰色阶与精准微边框，高对比度信息呈现，适合注重效率的工匠型用户。',
-        swatches: ['#111215', '#181A1F', '#20232A', '#3B82F6', '#FFFFFF'],
-        tokens: {
-          bgBase: '#111215',
-          bgSurface: '#181A1F',
-          bgCard: '#20232A',
-          border: '#2E333D',
-          textPrimary: '#FFFFFF',
-          textSecondary: '#A0A6B2',
-          accent: '#3B82F6',
-          accentText: '#FFFFFF',
-          fontTitle: 'Inter, sans-serif',
-          fontBody: 'Inter, sans-serif'
-        }
+      'braun-hifi': {
+        name: '博朗工业拟物 · 调音台 (Braun Dieter Rams Hi-Fi)',
+        tag: '3. 博朗工业拟物',
+        desc: '致敬 Dieter Rams 经典博朗工业设计。精密拉丝铝面板质感、物理内凹凹槽阴影、实体按钮反馈与经典博朗工控蓝。',
+        feat: ['铝质拟物阴影', '4px 倒角工控', 'Inter + JetBrains']
       },
-      'tokyo-night': {
-        name: '日系赛博 (Tokyo Midnight)',
-        tag: '方案 4 · 日系赛博',
-        mood: '东京霓虹夜巡 · 霓虹青蓝 · 暗夜电光 · 终端质感',
-        desc: '具有强烈未来感的日系赛博夜巡风格。深靛蓝夜色底调，搭配极光青蓝与粉紫高光，带给翻译流水线如黑客终端般的沉浸律动感。',
-        swatches: ['#0B0C14', '#121324', '#181A30', '#06B6D4', '#EDF1FD'],
-        tokens: {
-          bgBase: '#0B0C14',
-          bgSurface: '#121324',
-          bgCard: '#181A30',
-          border: '#292C52',
-          textPrimary: '#EDF1FD',
-          textSecondary: '#969EC2',
-          accent: '#06B6D4',
-          accentText: '#000000',
-          fontTitle: 'Inter, sans-serif',
-          fontBody: 'Inter, sans-serif'
-        }
+      'crt-terminal': {
+        name: '绿屏赛博终端 · CRT 字符界面 (Cyberdeck CRT Terminal)',
+        tag: '4. 绿屏赛博终端',
+        desc: '复古黑客终端 HUD。纯黑背景上的翠绿荧光文字、字符级点阵标题、发光边框，将小说翻译流水线化为硬核黑客监控台。',
+        feat: ['CRT 荧光绿', '纯直角字符块', 'VT323 像素体']
       },
-      'nord-frost': {
-        name: '北欧雾蓝 (Nord Frost & Slate)',
-        tag: '方案 5 · 北欧雾蓝',
-        mood: '极地冰霜 · 冷雾石板灰 · 柔和低饱和 · 舒缓宁静',
-        desc: '经典 Nord 配色体系。冰霜蓝与石板深灰的优雅结合，低饱和度对比，长时间阅读与审阅极为舒适，心平气和。',
-        swatches: ['#1E222A', '#252A34', '#2E3440', '#88C0D0', '#ECEFF4'],
-        tokens: {
-          bgBase: '#1E222A',
-          bgSurface: '#252A34',
-          bgCard: '#2E3440',
-          border: '#3E4656',
-          textPrimary: '#ECEFF4',
-          textSecondary: '#D8DEE9',
-          accent: '#88C0D0',
-          accentText: '#2E3440',
-          fontTitle: 'Inter, sans-serif',
-          fontBody: 'Inter, sans-serif'
-        }
+      'glass-aurora': {
+        name: '液态微光毛玻璃 · iOS 拟态 (Liquid Glassmorphism)',
+        tag: '5. 液态微光毛玻璃',
+        desc: '极致的现代毛玻璃拟态。深邃暗底上的高斯模糊玻璃卡片、1px 细微光边缘反射、24px 极度柔和圆角与极光紫蓝微光。',
+        feat: ['24px 柔和圆角', '毛玻璃高斯模糊', '极光紫蓝']
       },
-      'editorial-light': {
-        name: '现代文库 (Bauhaus Editorial Light)',
-        tag: '方案 6 · 现代文库 (明亮模式)',
-        mood: '明亮出版物 · 包豪斯极简 · 纸墨纯净 · 高清印刷感',
-        desc: '高质感明亮主题。纯净白纸与微灰卡片底色，搭配典雅宋体衬线标题与现代克莱因蓝，如同翻阅一本装帧精良的现代精装书刊。',
-        swatches: ['#F8FAFC', '#F1F5F9', '#FFFFFF', '#2563EB', '#0F172A'],
-        tokens: {
-          bgBase: '#F8FAFC',
-          bgSurface: '#F1F5F9',
-          bgCard: '#FFFFFF',
-          border: '#E2E8F0',
-          textPrimary: '#0F172A',
-          textSecondary: '#475569',
-          accent: '#2563EB',
-          accentText: '#FFFFFF',
-          fontTitle: 'Noto Serif SC, serif',
-          fontBody: 'Inter, sans-serif'
-        }
+      'swiss-grid': {
+        name: '瑞士国际主义 · 栅格色块 (Swiss International Style)',
+        tag: '6. 瑞士国际主义',
+        desc: '包豪斯与瑞士版面工程学。纯粹严格的直角栅格、高对比度粗黑横线、大数字编号与纯色瑞士红块，极具现代设计感。',
+        feat: ['严格直角栅格', '粗黑横线分割', '瑞士红高亮']
+      },
+      'pixel-jrpg': {
+        name: '8-Bit 像素 JRPG · 任务板 (Pixel Quest JRPG)',
+        tag: '7. 8-Bit 像素 JRPG',
+        desc: '经典 JRPG 像素冒险游戏风格。双色像素金币边框、点阵任务板、金黄荧光字，将翻译每章小说做成通关打怪的乐趣。',
+        feat: ['像素双色边框', 'Press Start 2P', '金币黄高亮']
+      },
+      'linear-obsidian': {
+        name: 'Linear 黑曜工匠 (Linear Obsidian Craftsman)',
+        tag: '8. Linear 黑曜工匠 (推荐)',
+        desc: '专为高强度夜间长文本工作打造。摒弃刺眼泛紫渐变，采用类似 Linear / Raycast 的 1px 微边框、哑光暗黑与暖琥珀金，极其护眼。',
+        feat: ['1px 精致微边框', '8px 黄金倒角', '暖琥珀护眼金']
+      },
+      'editorial-mag': {
+        name: '独立出版杂志 · 现代高阶排版 (Modern Editorial Magazine)',
+        tag: '9. 独立出版杂志',
+        desc: '高质感明亮精装期刊。纯白纸张、典雅宋体大标题、极细发丝线分割与深邃宝蓝点缀，如同阅读一本现代精装文学杂志。',
+        feat: ['纯白精装纸张', '宋体大标题', '宝蓝雅致']
+      },
+      'medieval-grimoire': {
+        name: '中世纪炼金手稿 · 羊皮古卷 (Medieval Alchemist Parchment)',
+        tag: '10. 炼金手稿古卷',
+        desc: '仿古羊皮纸卷与鎏金雕花。深褐色陈旧羊皮纸、古罗马 Cinzel 衬线体、鎏金边框与蜡封印记，充满神秘学魔导书典雅。',
+        feat: ['古董鎏金边框', 'Cinzel 衬线', '羊皮纸深褐']
+      },
+      'bloomberg-dense': {
+        name: '金融高密监控 · 彭博终端 (Bloomberg Mission Control)',
+        tag: '11. 彭博极密终端',
+        desc: '极限信息密度与效率第一。零多余留白、纯等宽字体、彭博琥珀橙与高亮电青数据，为追求最高生产力的极客打造。',
+        feat: ['极限紧凑密度', '纯等宽排版', '彭博琥珀橙']
+      },
+      'muji-minimal': {
+        name: '无印纯白呼吸 · 极简和光 (Muji Breathing Minimal)',
+        tag: '12. 无印和光纯白',
+        desc: '极简日式留白美学。柔和纯白、温润亚麻茶褐与 16px 舒展圆角，给界面带来宁静而通透的呼吸感。',
+        feat: ['16px 舒展大圆角', '大留白呼吸感', '亚麻和茶褐']
+      },
+      'synthwave-80s': {
+        name: '80年代合成波 · 霓虹夕阳 (Synthwave 80s Grid)',
+        tag: '13. 80s 霓虹合成波',
+        desc: '复古 80 年代迈阿密夜色。深紫底色搭配霓虹粉紫发光边框与激光电青，充满怀旧复古与动感。',
+        feat: ['发光霓虹粉紫', '激光电青', '复古合成波']
+      },
+      'papercraft-notes': {
+        name: '便签折纸 · 白板工坊 (Sticky Papercraft Studio)',
+        tag: '14. 虚线便签折纸',
+        desc: '手作实体感折纸。虚线裁切边、便签明黄底色、邮戳绿印与自然物理叠层阴影，充满手工作坊的人情味。',
+        feat: ['虚线剪纸边框', '便签纸质感', '复古邮戳绿']
       }
     };
 
-    let currentTheme = 'obsidian-amber';
+    let currentStyle = 'linear-obsidian';
 
-    function setTheme(themeKey) {
-      currentTheme = themeKey;
-      document.body.className = `theme-${themeKey} min-h-screen flex flex-col antialiased`;
-      
-      const meta = themes[themeKey];
-      document.getElementById('theme-tag').textContent = meta.tag;
-      document.getElementById('theme-mood').textContent = meta.mood;
-      document.getElementById('theme-desc').textContent = meta.desc;
+    function setStyle(styleKey) {
+      currentStyle = styleKey;
+      document.body.className = `style-${styleKey} min-h-screen flex flex-col antialiased`;
 
-      // Update button active states
-      document.querySelectorAll('.theme-btn').forEach(btn => {
-        btn.classList.remove('bg-theme-accent', 'text-theme-accent-contrast', 'shadow-sm', 'font-bold');
-        btn.classList.add('text-theme-secondary', 'hover:text-theme-primary');
+      const meta = paradigms[styleKey];
+      document.getElementById('current-tag').textContent = meta.tag;
+      document.getElementById('current-name').textContent = meta.name;
+      document.getElementById('current-desc').textContent = meta.desc;
+      document.getElementById('feature-1').textContent = meta.feat[0];
+      document.getElementById('feature-2').textContent = meta.feat[1];
+      document.getElementById('feature-3').textContent = meta.feat[2];
+
+      // Update button active state
+      document.querySelectorAll('.style-btn').forEach(b => {
+        b.classList.remove('dyn-btn-accent', 'shadow-md', 'font-bold');
       });
-      const activeBtn = document.getElementById(`btn-${themeKey}`);
+      const activeBtn = document.getElementById(`btn-${styleKey}`);
       if (activeBtn) {
-        activeBtn.classList.remove('text-theme-secondary', 'hover:text-theme-primary');
-        activeBtn.classList.add('bg-theme-accent', 'text-theme-accent-contrast', 'shadow-sm', 'font-bold');
+        activeBtn.classList.add('dyn-btn-accent', 'shadow-md', 'font-bold');
       }
 
-      // Update Swatches
-      const swatchesContainer = document.getElementById('palette-swatches');
-      swatchesContainer.innerHTML = meta.swatches.map(color => `
-        <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-theme-surface border border-theme-subtle text-[10px] custom-mono">
-          <span class="w-3.5 h-3.5 rounded border border-black/20" style="background-color: ${color}"></span>
-          <span class="text-theme-secondary">${color}</span>
+      lucide.createIcons();
+    }
+
+    function switchView(viewKey) {
+      document.querySelectorAll('.live-view').forEach(v => v.classList.add('hidden'));
+      const active = document.getElementById(`view-${viewKey}`);
+      if (active) active.classList.remove('hidden');
+
+      ['queue', 'studio', 'reader', 'compare'].forEach(k => {
+        const tab = document.getElementById(`vtab-${k}`);
+        if (k === viewKey) {
+          tab.classList.remove('border-transparent', 'opacity-60');
+          tab.classList.add('border-current', 'opacity-100');
+        } else {
+          tab.classList.remove('border-current', 'opacity-100');
+          tab.classList.add('border-transparent', 'opacity-60');
+        }
+      });
+
+      if (viewKey === 'compare') {
+        renderCompareCards();
+      }
+
+      lucide.createIcons();
+    }
+
+    function renderCompareCards() {
+      const container = document.getElementById('compare-cards-container');
+      container.innerHTML = Object.entries(paradigms).map(([key, item]) => `
+        <div onclick="setStyle('${key}'); switchView('queue')" class="dyn-card p-4 space-y-2.5 cursor-pointer hover:scale-[1.02] transition-all">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold custom-heading">${item.tag}</span>
+            <span class="text-[10px] custom-mono opacity-60">点击应用</span>
+          </div>
+          <p class="text-[11px] opacity-75 line-clamp-2">${item.desc}</p>
+          <div class="flex items-center gap-1.5 flex-wrap pt-1">
+            ${item.feat.map(f => `<span class="text-[9px] px-1.5 py-0.5 dyn-badge">${f}</span>`).join('')}
+          </div>
         </div>
       `).join('');
-
-      lucide.createIcons();
     }
 
-    function setView(viewKey) {
-      document.querySelectorAll('.demo-view').forEach(el => el.classList.add('hidden'));
-      const activeView = document.getElementById(`view-${viewKey}`);
-      if (activeView) activeView.classList.remove('hidden');
-
-      document.querySelectorAll('.view-tab').forEach(tab => {
-        tab.classList.remove('border-theme-accent', 'text-theme-accent');
-        tab.classList.add('border-transparent', 'text-theme-secondary');
-      });
-      const activeTab = document.getElementById(`tab-${viewKey}`);
-      if (activeTab) {
-        activeTab.classList.remove('border-transparent', 'text-theme-secondary');
-        activeTab.classList.add('border-theme-accent', 'text-theme-accent');
-      }
-      lucide.createIcons();
+    function openApplyModal() {
+      const meta = paradigms[currentStyle];
+      document.getElementById('modal-style-title').textContent = `选用范式：${meta.name}`;
+      document.getElementById('modal-css-box').value = `/* Selected Paradigm: ${meta.name} */\nstyleKey: "${currentStyle}"\nfeatures: ${JSON.stringify(meta.feat, null, 2)}`;
+      document.getElementById('apply-modal').classList.remove('hidden');
+      document.getElementById('apply-modal').classList.add('flex');
     }
 
-    function openExportModal() {
-      const meta = themes[currentTheme];
-      document.getElementById('modal-title').textContent = `选用主题：${meta.name}`;
-      document.getElementById('tokens-json').value = JSON.stringify(meta.tokens, null, 2);
-      document.getElementById('export-modal').classList.remove('hidden');
-      document.getElementById('export-modal').classList.add('flex');
+    function closeApplyModal() {
+      document.getElementById('apply-modal').classList.add('hidden');
+      document.getElementById('apply-modal').classList.remove('flex');
     }
 
-    function closeExportModal() {
-      document.getElementById('export-modal').classList.add('hidden');
-      document.getElementById('export-modal').classList.remove('flex');
-    }
-
-    function copyTokens() {
-      const tokens = document.getElementById('tokens-json').value;
-      navigator.clipboard.writeText(tokens).then(() => {
-        document.getElementById('copy-text').textContent = '已复制到剪贴板！';
+    function copyAndConfirm() {
+      const txt = document.getElementById('modal-css-box').value;
+      navigator.clipboard.writeText(txt).then(() => {
+        document.getElementById('copy-btn-text').textContent = '已复制！请将心仪编号发给助手';
         setTimeout(() => {
-          document.getElementById('copy-text').textContent = '复制主题参数';
-          closeExportModal();
-        }, 1500);
+          document.getElementById('copy-btn-text').textContent = '复制并确认';
+          closeApplyModal();
+        }, 1800);
       });
     }
 
-    // Initialize
-    setTheme('obsidian-amber');
+    // Init
+    setStyle('linear-obsidian');
     lucide.createIcons();
   </script>
 </body>

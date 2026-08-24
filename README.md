@@ -166,6 +166,7 @@ npm run typecheck && npm run lint && npm test && npm run build && npm run test:e
 - 配置保存采用校验后原子替换；成功替换前保留 `config.toml.bak.<UTC timestamp>`，`.env` 始终以 `0600` 权限写入。Provider 密钥仅在配置中使用 `$ENV_NAME` 引用。
 - 配置运维命令：`python scripts/config.py validate`、`python scripts/config.py list-backups`、`python scripts/config.py restore --backup config.toml.bak.<timestamp>`。
 - Glossary v1 → v2 默认先 dry-run：`python scripts/migrate_glossary_v2.py --output-root output`；确认报告后追加 `--apply`，每本书会生成 `glossary.json.v1.bak`。
+- Queue、Memory、Review 同样先 dry-run：分别运行 `scripts/migrate_queue_state_v2.py`、`scripts/migrate_memory_v2.py`、`scripts/migrate_review_v2.py`；检查 hash、冲突与 warning 后追加 `--apply`。旧文件会按状态文件或每本书独立备份，校验失败的 review 保持原样并在 API 中返回 `migration_warning`。
 - 队列状态保存在 `output/jobs/job_state.v2.json`；重启时活动任务转为 `recovery_pending` 并重新调度。回退旧版本前先备份整个 `output/jobs/`。
 - 前端 `dist/` 是构建产物，不纳入 Git；正式发布包由 `python scripts/build_release_archive.py` 在校验引用后生成。
 

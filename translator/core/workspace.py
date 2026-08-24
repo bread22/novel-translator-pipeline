@@ -300,15 +300,77 @@ def novel_translator_terms(glossary: dict[str, Any]) -> dict[str, list[dict[str,
 
 def empty_book_memory(book: str = "") -> dict[str, Any]:
     return {
+        "schema_version": "2.0",
         "book": book,
-        "version": 1,
         "entries": [],
         "conflicts": [],
-        "characters": [],
-        "world_settings": [],
         "timeline": [],
         "chapter_states": [],
         "updated_at": utc_now(),
+    }
+
+
+def normalize_book_memory_v2(memory: dict[str, Any], book: str = "") -> tuple[dict[str, Any], dict[str, int]]:
+    """Convert legacy character/world-setting collections to the canonical entry list."""
+    current = memory if isinstance(memory, dict) else {}
+    entries = [dict(item) for item in current.get("entries", []) if isinstance(item, dict)]
+    conflicts = [dict(item) for item in current.get("conflicts", []) if isinstance(item, dict)]
+    by_key = {str(item.get("key", "")).strip(): item for item in entries if str(item.get("key", "")).strip()}
+    added = modified = conflicted = 0
+
+    def ingest(raw: Any, *, category: str, key_field: str, value_field: str) -> None:
+        nonlocal added, modified, conflicted
+        if not isinstance(raw, dict):
+            return
+        key = str(raw.get(key_field, "")).strip()
+        value = str(raw.get(value_field, "")).strip()
+        if not key or not value:
+            return
+        candidate = {
+            "key": key,
+            "value": value,
+            "category": str(raw.get("category") or category),
+            "note": str(raw.get("note") or raw.get("role") or ""),
+            "confidence": float(raw.get("confidence", 1.0)),
+            "first_seen_chapter": raw.get("first_seen") or raw.get("first_seen_chapter") or "",
+            "last_seen_chapter": raw.get("last_seen") or raw.get("last_seen_chapter") or "",
+        }
+        existing = by_key.get(key)
+        if existing is None:
+            entries.append(candidate)
+            by_key[key] = candidate
+            added += 1
+        elif str(existing.get("value", "")) != value:
+            conflicts.append({
+                "key": key,
+                "existing_value": str(existing.get("value", "")),
+                "proposed_value": value,
+                "note": "legacy memory migration conflict",
+            })
+            conflicted += 1
+        else:
+            modified += 1
+
+    for character in current.get("characters", []) if isinstance(current.get("characters"), list) else []:
+        ingest(character, category="character", key_field="name", value_field="summary")
+    for setting in current.get("world_settings", []) if isinstance(current.get("world_settings"), list) else []:
+        ingest(setting, category="fact", key_field="term", value_field="explanation")
+
+    known = {"schema_version", "version", "book", "entries", "conflicts", "characters", "world_settings", "timeline", "chapter_states", "updated_at"}
+    normalized = {
+        "schema_version": "2.0",
+        "book": str(current.get("book") or book),
+        "entries": sorted(entries, key=lambda item: str(item.get("key", ""))),
+        "conflicts": conflicts,
+        "timeline": list(current.get("timeline", [])) if isinstance(current.get("timeline"), list) else [],
+        "chapter_states": list(current.get("chapter_states", [])) if isinstance(current.get("chapter_states"), list) else [],
+        "updated_at": str(current.get("updated_at") or utc_now()),
+    }
+    return normalized, {
+        "added": added,
+        "modified": modified,
+        "conflicts": conflicted,
+        "unknown_fields": len(set(current) - known),
     }
 
 
@@ -320,7 +382,7 @@ def merge_memory_delta(
     threshold: float = 0.9,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Merge structured long-term memory without allowing a model to replace it wholesale."""
-    current = dict(memory or empty_book_memory())
+    current, _migration = normalize_book_memory_v2(memory or empty_book_memory(), str((memory or {}).get("book", "")))
     entries = [dict(item) for item in current.get("entries", []) if isinstance(item, dict)]
     conflicts = [dict(item) for item in current.get("conflicts", []) if isinstance(item, dict)]
     by_key = {str(item.get("key", "")).strip(): item for item in entries if str(item.get("key", "")).strip()}

@@ -11,6 +11,12 @@ from typing import Any
 from translator.core.workspace import utc_now, write_json
 
 
+FORMAL_TERM_FIELDS = {
+    "source", "target", "category", "confidence", "note", "first_seen_chunk",
+    "last_seen_chunk", "occurrences", "sample_ids",
+}
+
+
 def normalize_term(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     term = dict(raw)
     changes: list[str] = []
@@ -23,7 +29,7 @@ def normalize_term(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     term.setdefault("last_seen_chunk", term.get("first_seen_chunk"))
     term.setdefault("occurrences", 0)
     term.setdefault("sample_ids", [])
-    return term, changes
+    return {key: value for key, value in term.items() if key in FORMAL_TERM_FIELDS}, changes
 
 
 def migrate(path: Path, *, apply: bool = False) -> dict[str, Any]:
@@ -32,19 +38,26 @@ def migrate(path: Path, *, apply: bool = False) -> dict[str, Any]:
     terms = payload.get("terms", []) if isinstance(payload, dict) else []
     migrated: list[Any] = []
     changes: list[dict[str, Any]] = []
+    unknown_fields = 0
     for index, raw in enumerate(terms):
         if not isinstance(raw, dict):
             changes.append({"index": index, "warning": "non-object term preserved"})
             migrated.append(raw)
             continue
         term, term_changes = normalize_term(raw)
+        unknown_fields += len(set(raw) - FORMAL_TERM_FIELDS - {"notes", "first_chapter"})
         migrated.append(term)
         if term_changes:
             changes.append({"index": index, "source": term.get("source"), "changes": term_changes})
-    updated = dict(payload)
-    updated["schema_version"] = "2.0"
-    updated["terms"] = migrated
-    updated["updated_at"] = payload.get("updated_at") or utc_now()
+    known_top_level = {"schema_version", "version", "book", "terms", "conflicts", "updated_at"}
+    unknown_fields += len(set(payload) - known_top_level)
+    updated = {
+        "schema_version": "2.0",
+        "book": payload.get("book", ""),
+        "terms": migrated,
+        "conflicts": list(payload.get("conflicts", [])) if isinstance(payload.get("conflicts"), list) else [],
+        "updated_at": payload.get("updated_at") or utc_now(),
+    }
     before_hash = hashlib.sha256(original).hexdigest()
     rendered = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     after_hash = hashlib.sha256(rendered).hexdigest()
@@ -56,6 +69,10 @@ def migrate(path: Path, *, apply: bool = False) -> dict[str, Any]:
         "path": str(path),
         "mode": "apply" if apply else "dry-run",
         "terms": len(migrated),
+        "added": 0,
+        "modified": len(changes),
+        "conflicts": len(updated["conflicts"]),
+        "unknown_fields": unknown_fields,
         "changes": changes,
         "before_sha256": before_hash,
         "after_sha256": after_hash,

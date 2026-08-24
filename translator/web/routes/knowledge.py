@@ -10,6 +10,7 @@ from translator.core.config import load_config
 from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, read_json, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path
+from translator.review.models import normalize_review_for_display
 from translator.web.models import (
     BookMemoryResponse,
     GlossaryCreateRequest,
@@ -158,7 +159,8 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
 
     for ch_id in all_ch_ids:
         rep = read_json(report_files.get(ch_id, Path("nonexistent")), default={})
-        rev = read_json(review_output_files.get(ch_id, Path("nonexistent")), default={})
+        raw_review = read_json(review_output_files.get(ch_id, Path("nonexistent")), default={})
+        rev, migration_warning = normalize_review_for_display(raw_review)
         approved = read_json(approved_fix_files.get(ch_id, Path("nonexistent")), default={})
         st = read_json(state_files.get(ch_id, Path("nonexistent")), default={})
 
@@ -182,6 +184,7 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
             "memory_delta": rev.get("memory_delta", {"add": [], "update": [], "conflicts": []}),
             "chapter_state": st or rev.get("chapter_state", {}),
             "dual_review": rev.get("dual_review", {}),
+            "migration_warning": migration_warning,
         })
 
     return reports
@@ -195,7 +198,8 @@ def get_chapter_review(book_id: str, chapter_id: str) -> dict[str, Any]:
     report_file = workspace.reports_dir / f"{chapter_id}.json"
     state_file = workspace.chapter_states_dir / f"{chapter_id}.json"
 
-    output_data = read_json(review_output_file, default=None)
+    raw_output_data = read_json(review_output_file, default=None)
+    output_data, migration_warning = normalize_review_for_display(raw_output_data) if raw_output_data is not None else (None, None)
     approved_data = read_json(approved_fixes_file, default=None)
     report_data = read_json(report_file, default=None)
     state_data = read_json(state_file, default=None)
@@ -217,4 +221,5 @@ def get_chapter_review(book_id: str, chapter_id: str) -> dict[str, Any]:
         "review_output": output_data,
         "fixes": fixes,
         "chapter_state": state_data or (output_data.get("chapter_state") if output_data else {}),
+        "migration_warning": migration_warning,
     }

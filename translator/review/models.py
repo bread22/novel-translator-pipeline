@@ -135,3 +135,13 @@ class GlobalReviewOutput(StrictModel):
     checked_chapters: list[str] = Field(default_factory=list)
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: list[dict[str, Any] | str] = Field(default_factory=list)
+
+
+def normalize_review_for_display(payload: Any) -> tuple[Any, str | None]:
+    """Upgrade legacy review data in memory while retaining invalid input for display."""
+    try:
+        normalized = ChapterReviewOutput.model_validate(payload).model_dump()
+    except Exception as exc:
+        error_count = exc.error_count() if hasattr(exc, "error_count") else 1
+        return payload, f"review schema migration warning: {error_count} validation error(s)"
+    return normalized, None

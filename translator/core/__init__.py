@@ -15,6 +15,7 @@ from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
     empty_book_memory,
+    normalize_book_memory_v2,
     merge_chapter_state,
     merge_memory_delta,
     merge_term_updates,
@@ -34,6 +35,7 @@ __all__ = [
     "call_novel_translator",
     "config_value",
     "empty_book_memory",
+    "normalize_book_memory_v2",
     "generate_work_report",
     "load_config",
     "merge_chapter_state",

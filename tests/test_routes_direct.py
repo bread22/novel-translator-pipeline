@@ -248,7 +248,11 @@ def test_knowledge_memory_reports_and_invalid_review_warning(tmp_path: Path, mon
     workspace.initialize(book_id="book")
     write_json(workspace.book_memory_path, {
         "characters": [{"name": "Legacy", "summary": "old"}],
-        "entries": [{"key": "Alice", "value": "hero", "category": "character"}],
+        "entries": [
+            {"key": "Alice", "value": "hero", "category": "character"},
+            {"key": "Profiles", "value": "chapter characters", "category": "character_profile"},
+            {"key": "Relations", "value": "character graph", "category": "relationship_graph"},
+        ],
         "timeline": [{"event": "start"}],
     })
     write_json(workspace.reviews_dir / "c1-output.json", {"checked_ids": [], "unexpected": True})
@@ -256,7 +260,7 @@ def test_knowledge_memory_reports_and_invalid_review_warning(tmp_path: Path, mon
     monkeypatch.setattr(knowledge, "get_workspace_for_book", lambda _book: workspace)
 
     memory = knowledge.get_book_memory("book")
-    assert {item["name"] for item in memory.characters} == {"Legacy", "Alice"}
+    assert {item["name"] for item in memory.characters} == {"Legacy", "Alice", "Profiles", "Relations"}
     reports = knowledge.list_chapter_reports("book")
     assert reports[0]["migration_warning"]
     review = knowledge.get_chapter_review("book", "c1")

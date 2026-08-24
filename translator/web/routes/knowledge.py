@@ -109,9 +109,14 @@ def get_book_memory(book_id: str) -> BookMemoryResponse:
         if not key or not val:
             continue
 
-        if cat in ("character", "relationship", "person", "role"):
+        # Reviewers historically emitted both the canonical v2 categories
+        # (``character``/``relationship``) and the descriptive categories
+        # (``character_profile``/``relationship_graph``).  Treat both forms
+        # as character records so the Knowledge Hub does not hide them under
+        # world settings.
+        if cat in ("character", "character_profile", "relationship", "relationship_graph", "person", "role"):
             if not any(c.get("name") == key for c in characters):
-                role_tag = "角色档案" if cat == "character" else "人物关系"
+                role_tag = "角色档案" if cat in ("character", "character_profile", "person", "role") else "人物关系"
                 summary_text = val
                 if note:
                     summary_text = f"{val}\n\n【出处与备注】: {note}"

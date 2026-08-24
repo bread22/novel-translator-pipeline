@@ -249,6 +249,10 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 这是章节级一致性审阅。
 - 顶层必须输出一个 JSON 对象，结构必须包含：{"schema_version":"2.0", "checked_ids": [...], "fixes": [...], "glossary_delta": {"add":[], "update":[], "conflicts":[]}, "memory_delta": {"add":[], "update":[], "conflicts":[]}, "chapter_state": {"summary": "...", "important_changes":[], "active_entities":[], "location":"", "timeline":[]}}。
 - 【语言规范与严禁残留日文】：
+  * 对 items 中每一条 translated 字段逐字扫描平假名和片假名；这是对已有译文的硬性检查，不得只检查 fixes.replacement！
+  * translated 中只要残留一个日文假名（包括拟声词、语气词、敬称、助词或片假名词的一部分），就必须为该段输出一条 policy_violation fix。
+  * source 字段本身是日文原文，source 中的假名不算译文残留；检查对象是 translated 字段。
+  * 发现残留时，reason 必须指出具体残留文本，replacement 必须给出该段完整、无任何假名的简体中文译文，不能只替换一个词或返回空字符串。
   * 所有 fixes 里的 replacement（修正译文）必须是纯正、地道、通顺的完整简体中文段落！
   * 绝对严禁在 replacement 中残留任何日文假名（包括平假名、片假名，如 すぐそば、カタカナ、の、に 等）或未翻译的生造日文词汇！
   * 若原文中出现片假名概念词（如「カタカナ職業」），必须意译为其对应中文含义（如“时尚新潮职业”/“白领职业”），严禁直接复制日文假名！

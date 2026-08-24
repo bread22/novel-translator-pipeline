@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import re
+import unicodedata
 
 
 _IDENTIFIER = re.compile(r"^[\w][\w.-]{0,127}$", re.UNICODE)
@@ -39,6 +41,19 @@ def validate_book_id(value: str) -> str:
     if not _IDENTIFIER.fullmatch(value) or value in {".", ".."}:
         raise ValueError("书籍 ID 格式无效")
     return value
+
+
+def book_id_from_title(title: str) -> str:
+    """Create a valid, readable book ID from an uploaded file's title."""
+    normalized = unicodedata.normalize("NFKC", title).strip()
+    candidate = re.sub(r"[^\w.-]+", "-", normalized, flags=re.UNICODE).strip("._-")
+    if not candidate:
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+        candidate = f"book-{digest}"
+    elif len(candidate) > 128:
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+        candidate = f"{candidate[:119].rstrip('._-')}-{digest}"
+    return validate_book_id(candidate)
 
 
 def validate_chapter_id(value: str) -> str:

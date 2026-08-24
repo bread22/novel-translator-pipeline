@@ -26,7 +26,7 @@ from translator.web.models import (
     ParagraphItem,
     ParagraphUpdateRequest,
 )
-from translator.web.path_policy import validate_book_id
+from translator.web.path_policy import book_id_from_title, validate_book_id
 
 
 router = APIRouter(prefix="/books", tags=["Books"])
@@ -128,7 +128,7 @@ async def upload_book(file: UploadFile = File(...), replace: bool = Query(False)
 
     book_title = Path(file.filename).stem
     try:
-        book_id = validate_book_id(safe_book_name(book_title))
+        book_id = book_id_from_title(book_title)
     except ValueError as exc:
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

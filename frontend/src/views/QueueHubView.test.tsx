@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
@@ -26,5 +26,42 @@ describe('queue keyboard ordering', () => {
     await user.keyboard('{Enter}');
     expect(api.moveQueueItem).toHaveBeenCalledWith('b', 'up');
     expect(refresh).toHaveBeenCalled();
+  });
+});
+
+describe('batch book upload', () => {
+  it('selects multiple files, uploads each, and enqueues successful imports together', async () => {
+    const user = userEvent.setup();
+    const book = (id: string) => ({
+      id, name: id, source_type: 'txt', total_chapters: 1, translated_chapters: 0,
+      total_paragraphs: 1, translated_paragraphs: 0, progress_percentage: 0,
+      status: 'pending', has_output_epub: false,
+    } as const);
+    vi.spyOn(api, 'uploadBook')
+      .mockResolvedValueOnce(book('book-a'))
+      .mockResolvedValueOnce(book('book-b'));
+    vi.spyOn(api, 'enqueueBooks').mockResolvedValue({} as never);
+    const refreshBooks = vi.fn(async () => undefined);
+    const refreshQueue = vi.fn(async () => undefined);
+    const { container } = render(<QueueHubView
+      books={[]}
+      queueStatus={null}
+      onRefreshBooks={refreshBooks}
+      onRefreshQueue={refreshQueue}
+      onSelectBook={vi.fn()}
+    />);
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.multiple).toBe(true);
+    await user.upload(input, [
+      new File(['a'], '第一本.txt', { type: 'text/plain' }),
+      new File(['b'], '第二本.txt', { type: 'text/plain' }),
+    ]);
+
+    await waitFor(() => expect(api.uploadBook).toHaveBeenCalledTimes(2));
+    expect(api.enqueueBooks).toHaveBeenCalledWith({ book_ids: ['book-a', 'book-b'] });
+    expect(refreshBooks).toHaveBeenCalledOnce();
+    expect(refreshQueue).toHaveBeenCalledOnce();
+    expect(screen.getByText('成功导入 2/2 本，已加入队列。')).toBeInTheDocument();
   });
 });

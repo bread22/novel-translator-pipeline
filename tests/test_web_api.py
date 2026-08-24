@@ -137,6 +137,28 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(data["id"], self.book_id)
         self.assertEqual(data["name"], "测试小说")
 
+        call_args = mock_call_tool.call_args.args
+        self.assertEqual(call_args[call_args.index("--id") + 1], "test_novel")
+
+    @patch("translator.web.routes.books.get_output_root")
+    @patch("translator.web.routes.books.manifest_path")
+    @patch("translator.web.routes.books.call_novel_translator")
+    def test_upload_book_normalizes_title_into_valid_id(
+        self, mock_call_tool: MagicMock, mock_manifest_path: MagicMock, mock_out_root: MagicMock
+    ) -> None:
+        mock_out_root.return_value = self.output_root
+        mock_manifest_path.return_value = self.book_dir / "manifest.json"
+        mock_call_tool.return_value = {"status": "ok", "summary": {"book": self.book_id}}
+
+        response = self.client.post(
+            "/api/v1/books/upload?replace=true",
+            files={"file": ("美人講師 汚辱・特別講座.txt", "本文".encode(), "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        call_args = mock_call_tool.call_args.args
+        self.assertEqual(call_args[call_args.index("--id") + 1], "美人講師-汚辱-特別講座")
+
     @patch("translator.web.routes.books.manifest_path")
     @patch("translator.web.routes.books.get_output_root")
     def test_get_book_chapters_and_detail(self, mock_out_root: MagicMock, mock_manifest_path: MagicMock) -> None:

@@ -74,32 +74,50 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
   });
 
   // Handle file upload
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (files: File[]) => {
+    const acceptedFiles = files.filter((file) => /\.(epub|txt)$/i.test(file.name));
+    const rejectedFiles = files.filter((file) => !/\.(epub|txt)$/i.test(file.name));
+    if (acceptedFiles.length === 0) {
+      setUploadMessage('请选择 .epub 或 .txt 格式的小说');
+      return;
+    }
+
     setIsUploading(true);
-    setUploadMessage(`正在上传并解析 "${file.name}"...`);
+    const importedBooks: BookSummary[] = [];
+    const failures = rejectedFiles.map((file) => `${file.name}：格式不受支持`);
     try {
-      const newBook = await api.uploadBook(file);
-      setUploadMessage(`"${newBook.name}" 导入成功！已加入书籍库。`);
+      for (const [index, file] of acceptedFiles.entries()) {
+        setUploadMessage(`正在上传并解析 ${index + 1}/${acceptedFiles.length}："${file.name}"...`);
+        try {
+          importedBooks.push(await api.uploadBook(file));
+        } catch (err: any) {
+          failures.push(`${file.name}：${err.message}`);
+        }
+      }
+
       await onRefreshBooks();
-      await api.enqueueBooks({ book_ids: [newBook.id] });
-      await onRefreshQueue();
-    } catch (err: any) {
-      setUploadMessage(`导入失败: ${err.message}`);
+      if (importedBooks.length > 0) {
+        try {
+          await api.enqueueBooks({ book_ids: importedBooks.map((book) => book.id) });
+          await onRefreshQueue();
+        } catch (err: any) {
+          failures.push(`加入队列：${err.message}`);
+        }
+      }
+
+      const successText = `成功导入 ${importedBooks.length}/${files.length} 本`;
+      setUploadMessage(failures.length > 0 ? `${successText}；失败：${failures.join('；')}` : `${successText}，已加入队列。`);
     } finally {
       setIsUploading(false);
-      setTimeout(() => setUploadMessage(null), 4000);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setTimeout(() => setUploadMessage(null), failures.length > 0 ? 10000 : 4000);
     }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      if (file.name.endsWith('.epub') || file.name.endsWith('.txt')) {
-        handleFileUpload(file);
-      } else {
-        setUploadMessage('请上传 .epub 或 .txt 格式的小说');
-      }
+      void handleFileUpload(Array.from(e.dataTransfer.files));
     }
   };
 
@@ -324,10 +342,11 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
               type="file"
               ref={fileInputRef}
               accept=".epub,.txt"
+              multiple
               className="hidden"
               onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  handleFileUpload(e.target.files[0]);
+                if (e.target.files && e.target.files.length > 0) {
+                  void handleFileUpload(Array.from(e.target.files));
                 }
               }}
             />
@@ -337,7 +356,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
               className="flex items-center gap-2 px-5 py-2.5 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white font-semibold text-xs shadow-sm transition-all cursor-pointer rounded-sm disabled:opacity-50"
             >
               <UploadCloud className="w-4 h-4" />
-              {isUploading ? '正在上传解析...' : '上传并加入队列'}
+              {isUploading ? '正在批量上传解析...' : '批量上传并加入队列'}
             </button>
 
             <button

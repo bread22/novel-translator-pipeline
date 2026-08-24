@@ -129,7 +129,7 @@ class WebApiTests(unittest.TestCase):
         }
 
         response = self.client.post(
-            "/api/v1/books/upload",
+            "/api/v1/books/upload?replace=true",
             files={"file": ("test_novel.txt", b"\xe7\xac\xac\xe4\xb8\x80\xe7\xab\xa0", "text/plain")},
         )
         self.assertEqual(response.status_code, 200)

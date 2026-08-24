@@ -37,8 +37,12 @@ def test_batch_cli_registers_and_runs_through_job_manager(tmp_path: Path, monkey
     output = tmp_path / "output"
     translated = tmp_path / "translated"
     config = {
-        "paths": {"source_root": str(source), "output_root": str(output), "translated_root": str(translated)},
-        "queue": {"max_cycles": 2},
+        "paths": {"output_root": str(output)},
+        "queue": {
+            "source_root": str(source),
+            "translated_root": str(translated),
+            "max_cycles": 2,
+        },
     }
     monkeypatch.setattr(translation_queue, "load_config", lambda: config)
     monkeypatch.setattr(translation_queue, "JobManager", FakeManager)

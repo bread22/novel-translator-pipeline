@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from starlette.testclient import TestClient
 
-from translator.core.queue_manager import queue_manager
+from translator.core.job_manager import job_manager
 from translator.core.workspace import write_json
 from translator.web.app import create_app
 
@@ -23,11 +23,11 @@ class QueueApiTests(unittest.TestCase):
         self.output_root.mkdir(parents=True, exist_ok=True)
 
         # Reset singleton queue manager for testing
-        queue_manager.output_root = self.output_root
-        queue_manager.is_paused = True  # Keep paused during API tests
-        with queue_manager._lock:
-            queue_manager._items.clear()
-            queue_manager._pending_order.clear()
+        job_manager.output_root = self.output_root
+        job_manager.is_paused = True  # Keep paused during API tests
+        with job_manager._lock:
+            job_manager._items.clear()
+            job_manager._pending_order.clear()
 
         # Setup test books in novel translator data
         self.books_dir = self.root / "data" / "books"

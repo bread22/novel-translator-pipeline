@@ -12,7 +12,7 @@ from starlette.testclient import TestClient
 from translator.core.workspace import BookWorkspace, write_json
 from translator.web.app import create_app
 from translator.web.events import EventBroadcaster
-from translator.web.task_manager import TaskManager
+from translator.core.job_manager import job_manager
 
 
 @unittest.skipIf(sys.version_info >= (3, 14), "Python 3.14 is outside the declared compatibility range")
@@ -24,6 +24,11 @@ class WebApiTests(unittest.TestCase):
         # Create dummy output directory
         self.output_root = self.root / "output"
         self.output_root.mkdir(parents=True, exist_ok=True)
+        job_manager.output_root = self.output_root
+        job_manager.is_paused = True
+        with job_manager._lock:
+            job_manager._items.clear()
+            job_manager._pending_order.clear()
 
         # Create dummy novel-translator data books directory
         self.novel_data_books = self.root / "data" / "books"
@@ -242,8 +247,8 @@ class WebApiTests(unittest.TestCase):
         # Ensure it handles empty subscribers gracefully without exception
 
     @patch("translator.web.routes.tasks.manifest_path")
-    @patch("translator.web.task_manager.manifest_path")
-    @patch("translator.web.task_manager.ChapterPipeline")
+    @patch("translator.core.job_manager.manifest_path")
+    @patch("translator.core.job_manager.ChapterPipeline")
     def test_task_lifecycle_api(self, mock_pipeline_cls: MagicMock, mock_tm_manifest: MagicMock, mock_tasks_manifest: MagicMock) -> None:
         mock_manifest_file = self.book_dir / "manifest.json"
         mock_tm_manifest.return_value = mock_manifest_file

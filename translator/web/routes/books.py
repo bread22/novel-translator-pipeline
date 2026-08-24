@@ -15,7 +15,7 @@ from translator.core.layout import apply_horizontal_layout
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
 from translator.core.workspace import BookWorkspace, read_json, safe_book_name, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path, paragraph_map
-from translator.core.queue_manager import queue_manager
+from translator.core.job_manager import job_manager
 from translator.web.models import (
     BookSummary,
     ChapterDetail,
@@ -381,10 +381,16 @@ def download_book_epub(book_id: str) -> FileResponse:
 
 @router.delete("/{book_id}")
 def delete_book(book_id: str) -> dict[str, Any]:
+    try:
+        validate_book_id(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     manifest = read_json(manifest_path(book_id), default=None)
     output_root = get_output_root()
 
     title = manifest.get("title", book_id) if manifest else book_id
+    if not job_manager.cancel_book_and_wait(book_id):
+        raise HTTPException(status_code=409, detail="活动任务未在超时内停止；书籍与任务均保持不变")
 
     # 1. Remove output workspace
     workspace = BookWorkspace.at(output_root, title)
@@ -400,17 +406,15 @@ def delete_book(book_id: str) -> dict[str, Any]:
     if data_book_dir.exists():
         shutil.rmtree(data_book_dir, ignore_errors=True)
 
-    # Cancel any queue items for this book
-    with queue_manager._lock:
-        to_cancel = [iid for iid, item in queue_manager._items.items() if item.book_id == book_id]
-    for iid in to_cancel:
-        queue_manager.cancel_item(iid)
-
     return {"status": "ok", "message": f"书籍 '{title}' 已彻底删除"}
 
 
 @router.post("/{book_id}/reset")
 def reset_book(book_id: str) -> dict[str, Any]:
+    try:
+        validate_book_id(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     manifest = read_json(manifest_path(book_id), default=None)
     if not manifest:
         raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}")
@@ -418,6 +422,8 @@ def reset_book(book_id: str) -> dict[str, Any]:
     output_root = get_output_root()
     title = manifest.get("title", book_id)
     workspace = BookWorkspace.at(output_root, title)
+    if not job_manager.cancel_book_and_wait(book_id):
+        raise HTTPException(status_code=409, detail="活动任务未在超时内停止；书籍与任务均保持不变")
 
     # 1. Reset manifest paragraphs directly (100% reliable)
     for ch in manifest.get("chapters", []):
@@ -433,11 +439,5 @@ def reset_book(book_id: str) -> dict[str, Any]:
 
     # 2. Reset ALL workspace files (progress, memory, glossary, reports, reviews, snapshots)
     workspace.reset(book_id=book_id)
-
-    # Cancel any queue items for this book
-    with queue_manager._lock:
-        to_cancel = [iid for iid, item in queue_manager._items.items() if item.book_id == book_id]
-    for iid in to_cancel:
-        queue_manager.cancel_item(iid)
 
     return {"status": "ok", "message": f"书籍 '{title}' 翻译进度、长期记忆、术语库与质检报告已全部清空重置"}

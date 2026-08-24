@@ -1,43 +1,52 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 import logging
 from pathlib import Path
 import threading
 import time
 import traceback
-from typing import Any, Callable
+from typing import Any
 import uuid
 
 from translator.core.config import load_config
+from translator.core.job_control import CancellationToken, JobCancelled, PauseGate
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT
 from translator.core.workspace import BookWorkspace, read_json, write_json
-
-ROOT = Path(__file__).resolve().parents[2]
 from translator.pipeline.chapter_pipeline import ChapterPipeline, manifest_path
 from translator.providers.translator import ProviderTranslator
 from translator.web.events import broadcaster
 from translator.web.models import (
-    EnqueueRequest,
     PipelineStartRequest,
-    QueueClearRequest,
-    QueueConfigUpdateRequest,
     QueueItem,
-    QueueItemMoveRequest,
-    QueueReorderRequest,
     QueueStatusResponse,
     TaskStatusResponse,
 )
 
-logger = logging.getLogger("translator.core.queue_manager")
+ROOT = Path(__file__).resolve().parents[2]
+logger = logging.getLogger("translator.core.job_manager")
+
+ACTIVE_STATUSES = {"pending", "running", "pausing", "paused", "cancelling", "recovery_pending"}
+SLOT_STATUSES = {"running", "pausing", "paused", "cancelling"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+ALLOWED_TRANSITIONS = {
+    "pending": {"running", "cancelled"},
+    "recovery_pending": {"running", "cancelled"},
+    "running": {"pausing", "cancelling", "completed", "failed"},
+    "pausing": {"paused", "cancelling", "failed"},
+    "paused": {"running", "cancelling", "failed"},
+    "cancelling": {"cancelled"},
+    "failed": {"pending"},
+    "cancelled": {"pending"},
+    "completed": set(),
+}
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class QueueManager:
+class JobManager:
     """Thread-safe Queue Management and Execution Engine for multi-book batch translation."""
 
     def __init__(self, output_root: Path | None = None) -> None:
@@ -48,6 +57,8 @@ class QueueManager:
         self._stop_events: dict[str, threading.Event] = {}
         self._pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self.process_id = uuid.uuid4().hex
+        self.history_limit = 200
 
         # Config state
         config = load_config()
@@ -58,10 +69,12 @@ class QueueManager:
 
         # Load persisted state
         self._load_state()
+        if not self.is_paused:
+            self._dispatch()
 
     @property
     def state_file(self) -> Path:
-        p = self.output_root / "queue" / "queue_state.json"
+        p = self.output_root / "jobs" / "job_state.v2.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -72,26 +85,26 @@ class QueueManager:
             ordered_items: list[QueueItem] = []
 
             # 1. Running items
-            running_items = [item for item in self._items.values() if item.status == "running"]
+            running_items = [item for item in self._items.values() if item.status in SLOT_STATUSES]
             ordered_items.extend(running_items)
 
             # 2. Pending items in order
             for item_id in self._pending_order:
-                if item_id in self._items and self._items[item_id].status == "pending":
+                if item_id in self._items and self._items[item_id].status in {"pending", "recovery_pending"}:
                     ordered_items.append(self._items[item_id])
 
             # 3. Finished / failed / cancelled items (reverse chronological)
             finished = [
                 item
                 for item in self._items.values()
-                if item.status in {"completed", "failed", "cancelled", "paused"}
+                if item.status in TERMINAL_STATUSES
                 and item not in ordered_items
             ]
             finished.sort(key=lambda x: x.completed_at or x.enqueued_at, reverse=True)
             ordered_items.extend(finished)
 
-            running_cnt = sum(1 for i in self._items.values() if i.status == "running")
-            pending_cnt = sum(1 for i in self._items.values() if i.status == "pending")
+            running_cnt = sum(1 for i in self._items.values() if i.status in SLOT_STATUSES)
+            pending_cnt = sum(1 for i in self._items.values() if i.status in {"pending", "recovery_pending"})
             completed_cnt = sum(1 for i in self._items.values() if i.status == "completed")
             failed_cnt = sum(1 for i in self._items.values() if i.status in {"failed", "cancelled"})
 
@@ -106,6 +119,145 @@ class QueueManager:
                 items=ordered_items,
             )
 
+    def _find_item_locked(self, task_or_book_id: str) -> QueueItem | None:
+        item = self._items.get(task_or_book_id)
+        if item is not None:
+            return item
+        matches = [candidate for candidate in self._items.values() if candidate.book_id == task_or_book_id]
+        matches.sort(key=lambda candidate: candidate.enqueued_at, reverse=True)
+        return next((candidate for candidate in matches if candidate.status in ACTIVE_STATUSES), matches[0] if matches else None)
+
+    def _transition_locked(self, item: QueueItem, expected: set[str], target: str) -> bool:
+        if item.status not in expected or target not in ALLOWED_TRANSITIONS.get(item.status, set()):
+            return False
+        item.status = target
+        item.updated_at = utc_now()
+        return True
+
+    def transition(self, item_id: str, expected: set[str], target: str) -> bool:
+        with self._lock:
+            item = self._items.get(item_id)
+            changed = bool(item and self._transition_locked(item, expected, target))
+            if changed:
+                self._save_state()
+        if changed:
+            self._emit_queue_updated()
+        return changed
+
+    @staticmethod
+    def _as_task(item: QueueItem) -> TaskStatusResponse:
+        return TaskStatusResponse(
+            task_id=item.id,
+            book_id=item.book_id,
+            status=item.status,
+            overall_progress=item.overall_progress,
+            current_chapter=item.current_chapter,
+            current_chapter_index=item.current_chapter_index,
+            total_chapters=item.total_chapters,
+            message=item.message,
+            error_detail=item.error_detail,
+            started_at=item.started_at,
+            updated_at=item.updated_at or item.completed_at or item.started_at,
+        )
+
+    def get_task(self, task_or_book_id: str) -> TaskStatusResponse | None:
+        with self._lock:
+            item = self._find_item_locked(task_or_book_id)
+            return self._as_task(item) if item else None
+
+    def list_tasks(self) -> list[TaskStatusResponse]:
+        with self._lock:
+            return [self._as_task(item) for item in sorted(self._items.values(), key=lambda value: value.enqueued_at, reverse=True)]
+
+    def start_pipeline(self, request: PipelineStartRequest, output_root: Path | None = None) -> TaskStatusResponse:
+        if output_root is not None:
+            self.output_root = output_root
+        item = self.enqueue(request.book_id, options=request)
+        with self._lock:
+            self.is_paused = False
+            self._save_state()
+        self._dispatch()
+        return self._as_task(item)
+
+    def pause_pipeline(self, task_or_book_id: str) -> TaskStatusResponse | None:
+        with self._lock:
+            item = self._find_item_locked(task_or_book_id)
+            if item is None:
+                return None
+            if item.status == "running":
+                self._transition_locked(item, {"running"}, "pausing")
+                gate = self._pause_events.get(item.id)
+                if gate:
+                    gate.clear()
+                self._transition_locked(item, {"pausing"}, "paused")
+                item.message = "已暂停；当前 worker 槽位仍保留"
+                self._save_state()
+            response = self._as_task(item)
+        broadcaster.broadcast_sync("pipeline_paused", response.model_dump(), book_id=item.book_id)
+        self._emit_queue_updated()
+        return response
+
+    def resume_pipeline(self, task_or_book_id: str) -> TaskStatusResponse | None:
+        with self._lock:
+            item = self._find_item_locked(task_or_book_id)
+            if item is None:
+                return None
+            if item.status == "paused":
+                gate = self._pause_events.get(item.id)
+                if gate:
+                    gate.set()
+                self._transition_locked(item, {"paused"}, "running")
+                item.message = "继续推进中..."
+                self._save_state()
+            response = self._as_task(item)
+        broadcaster.broadcast_sync("pipeline_resumed", response.model_dump(), book_id=item.book_id)
+        self._emit_queue_updated()
+        return response
+
+    def stop_pipeline(self, task_or_book_id: str) -> TaskStatusResponse | None:
+        with self._lock:
+            item = self._find_item_locked(task_or_book_id)
+            if item is None:
+                return None
+            if item.status in {"pending", "recovery_pending"}:
+                if item.id in self._pending_order:
+                    self._pending_order.remove(item.id)
+                self._transition_locked(item, {item.status}, "cancelled")
+                item.completed_at = utc_now()
+                item.message = "已从等待队列取消"
+            elif item.status in {"running", "pausing", "paused"}:
+                stop_event = self._stop_events.get(item.id)
+                pause_event = self._pause_events.get(item.id)
+                if stop_event:
+                    stop_event.set()
+                if pause_event:
+                    pause_event.set()
+                self._transition_locked(item, {item.status}, "cancelling")
+                item.message = "正在安全取消..."
+            self._save_state()
+            response = self._as_task(item)
+        broadcaster.broadcast_sync("pipeline_stopped", response.model_dump(), book_id=item.book_id)
+        self._emit_queue_updated()
+        self._dispatch()
+        return response
+
+    def active_items_for_book(self, book_id: str) -> list[QueueItem]:
+        with self._lock:
+            return [item.model_copy(deep=True) for item in self._items.values() if item.book_id == book_id and item.status in ACTIVE_STATUSES]
+
+    def cancel_book_and_wait(self, book_id: str, timeout: float = 15.0) -> bool:
+        active = self.active_items_for_book(book_id)
+        for item in active:
+            self.stop_pipeline(item.id)
+        deadline = time.monotonic() + timeout
+        for item in active:
+            with self._lock:
+                thread = self._running_threads.get(item.id)
+            if thread:
+                thread.join(max(0.0, deadline - time.monotonic()))
+        with self._lock:
+            return not any(item.book_id == book_id and item.status in SLOT_STATUSES | {"cancelling"} for item in self._items.values())
+
     def enqueue(
         self,
         book_id: str,
@@ -114,9 +266,9 @@ class QueueManager:
         book_name: str | None = None,
     ) -> QueueItem:
         with self._lock:
-            # Check if book already has a running or pending item
+            # Enforce one active job per book across every entry point.
             for item in self._items.values():
-                if item.book_id == book_id and item.status in {"pending", "running"}:
+                if item.book_id == book_id and item.status in ACTIVE_STATUSES:
                     logger.info("Book %s is already in queue with status %s", book_id, item.status)
                     return item
 
@@ -136,6 +288,8 @@ class QueueManager:
                 order_index=0,
                 enqueued_at=utc_now(),
                 message="已加入待办队列，点击「启动队列」开始调度...",
+                updated_at=utc_now(),
+                process_id=self.process_id,
             )
 
             self._items[item_id] = item
@@ -162,7 +316,7 @@ class QueueManager:
             new_ids: list[str] = []
             for book_id in book_ids:
                 # Skip if already pending or running
-                if any(i.book_id == book_id and i.status in {"pending", "running"} for i in self._items.values()):
+                if any(i.book_id == book_id and i.status in ACTIVE_STATUSES for i in self._items.values()):
                     continue
 
                 manifest = read_json(manifest_path(book_id), default={})
@@ -182,6 +336,8 @@ class QueueManager:
                     order_index=0,
                     enqueued_at=utc_now(),
                     message="已加入待办队列，点击「启动队列」开始调度...",
+                    updated_at=utc_now(),
+                    process_id=self.process_id,
                 )
                 self._items[item_id] = item
                 new_ids.append(item_id)
@@ -200,38 +356,7 @@ class QueueManager:
         return added
 
     def cancel_item(self, item_id: str) -> bool:
-        with self._lock:
-            if item_id not in self._items:
-                return False
-
-            item = self._items[item_id]
-            if item.status == "running":
-                # Signal stop
-                if item_id in self._stop_events:
-                    self._stop_events[item_id].set()
-                if item_id in self._pause_events:
-                    self._pause_events[item_id].set()
-                item.status = "cancelled"
-                item.message = "已由用户取消终止"
-                item.completed_at = utc_now()
-            elif item.status == "pending":
-                if item_id in self._pending_order:
-                    self._pending_order.remove(item_id)
-                item.status = "cancelled"
-                item.message = "已移出等待队列"
-                item.completed_at = utc_now()
-            else:
-                # Already completed / failed / cancelled, delete from history
-                del self._items[item_id]
-                if item_id in self._pending_order:
-                    self._pending_order.remove(item_id)
-
-            self._recalculate_order_indexes()
-            self._save_state()
-
-        self._emit_queue_updated()
-        self._dispatch()
-        return True
+        return self.stop_pipeline(item_id) is not None
 
     def retry_item(self, item_id: str) -> QueueItem | None:
         with self._lock:
@@ -239,16 +364,20 @@ class QueueManager:
                 return None
 
             item = self._items[item_id]
-            if item.status in {"running", "pending"}:
+            if item.status in ACTIVE_STATUSES:
                 return item
-
-            item.status = "pending"
+            if item.status not in {"failed", "cancelled"}:
+                return None
+            self._transition_locked(item, {item.status}, "pending")
             item.retry_count += 1
             item.error_detail = None
             item.message = f"重新入队重试 (第 {item.retry_count} 次)"
             item.started_at = None
             item.completed_at = None
             item.enqueued_at = utc_now()
+            item.updated_at = utc_now()
+            item.recovery_reason = None
+            item.process_id = self.process_id
 
             if item_id not in self._pending_order:
                 self._pending_order.append(item_id)
@@ -264,7 +393,7 @@ class QueueManager:
         with self._lock:
             if item_id not in self._pending_order or item_id not in self._items:
                 return False
-            if self._items[item_id].status != "pending":
+            if self._items[item_id].status not in {"pending", "recovery_pending"}:
                 return False
 
             idx = self._pending_order.index(item_id)
@@ -297,11 +426,11 @@ class QueueManager:
         with self._lock:
             # Filter valid pending items in the new requested order
             valid_new_order = [
-                iid for iid in item_ids if iid in self._items and self._items[iid].status == "pending"
+                iid for iid in item_ids if iid in self._items and self._items[iid].status in {"pending", "recovery_pending"}
             ]
             # Add any pending items that were omitted to the end
             for iid in self._pending_order:
-                if iid in self._items and self._items[iid].status == "pending" and iid not in valid_new_order:
+                if iid in self._items and self._items[iid].status in {"pending", "recovery_pending"} and iid not in valid_new_order:
                     valid_new_order.append(iid)
 
             self._pending_order = valid_new_order
@@ -368,7 +497,10 @@ class QueueManager:
 
     def _save_state(self) -> None:
         try:
+            self._prune_history_locked()
             data = {
+                "schema_version": 2,
+                "process_id": self.process_id,
                 "is_paused": self.is_paused,
                 "concurrency": self.concurrency,
                 "stop_on_error": self.stop_on_error,
@@ -385,7 +517,7 @@ class QueueManager:
             return
         try:
             raw = read_json(self.state_file, default=None)
-            if not isinstance(raw, dict):
+            if not isinstance(raw, dict) or raw.get("schema_version") != 2:
                 return
 
             self.is_paused = bool(raw.get("is_paused", True))
@@ -397,9 +529,10 @@ class QueueManager:
             for item_id, item_data in raw.get("items", {}).items():
                 try:
                     item = QueueItem.model_validate(item_data)
-                    # If it was left in running state across crash/restart, reset to pending
-                    if item.status == "running":
-                        item.status = "pending"
+                    if item.status in SLOT_STATUSES | {"cancelling", "pausing"}:
+                        item.status = "recovery_pending"
+                        item.recovery_reason = f"服务重启：原状态 {item_data.get('status')}"
+                        item.process_id = self.process_id
                         item.message = "服务重启恢复待调度"
                     items_dict[item_id] = item
                 except Exception:
@@ -407,17 +540,28 @@ class QueueManager:
 
             self._items = items_dict
             self._pending_order = [
-                iid for iid in pending_raw if iid in self._items and self._items[iid].status == "pending"
+                iid for iid in pending_raw if iid in self._items and self._items[iid].status in {"pending", "recovery_pending"}
             ]
             # Also catch any pending items not in pending_order
             for iid, it in self._items.items():
-                if it.status == "pending" and iid not in self._pending_order:
+                if it.status in {"pending", "recovery_pending"} and iid not in self._pending_order:
                     self._pending_order.append(iid)
 
             self._recalculate_order_indexes()
             logger.info("Loaded queue state with %d items (%d pending)", len(self._items), len(self._pending_order))
         except Exception as exc:
             logger.warning("Failed to load queue state: %s", exc)
+
+    def _prune_history_locked(self) -> None:
+        terminal = sorted(
+            (item for item in self._items.values() if item.status in TERMINAL_STATUSES),
+            key=lambda item: item.completed_at or item.updated_at or item.enqueued_at,
+            reverse=True,
+        )
+        for item in terminal[self.history_limit :]:
+            self._items.pop(item.id, None)
+            if item.id in self._pending_order:
+                self._pending_order.remove(item.id)
 
     def _emit_queue_updated(self) -> None:
         try:
@@ -432,7 +576,7 @@ class QueueManager:
             if self.is_paused:
                 return
 
-            running_count = sum(1 for i in self._items.values() if i.status == "running")
+            running_count = sum(1 for i in self._items.values() if i.status in SLOT_STATUSES)
             available_slots = max(0, self.concurrency - running_count)
             if available_slots <= 0 or not self._pending_order:
                 return
@@ -442,10 +586,11 @@ class QueueManager:
                 if not self._pending_order:
                     break
                 next_id = self._pending_order.pop(0)
-                if next_id in self._items and self._items[next_id].status == "pending":
+                if next_id in self._items and self._items[next_id].status in {"pending", "recovery_pending"}:
                     item = self._items[next_id]
-                    item.status = "running"
+                    self._transition_locked(item, {item.status}, "running")
                     item.started_at = utc_now()
+                    item.process_id = self.process_id
                     item.message = "正在初始化流水线..."
                     items_to_start.append(item)
 
@@ -457,8 +602,6 @@ class QueueManager:
             stop_ev = threading.Event()
             pause_ev = threading.Event()
             pause_ev.set()
-            self._stop_events[item.id] = stop_ev
-            self._pause_events[item.id] = pause_ev
 
             thread = threading.Thread(
                 target=self._run_queue_worker,
@@ -466,7 +609,10 @@ class QueueManager:
                 daemon=True,
                 name=f"QueueWorker-{item.id}",
             )
-            self._running_threads[item.id] = thread
+            with self._lock:
+                self._stop_events[item.id] = stop_ev
+                self._pause_events[item.id] = pause_ev
+                self._running_threads[item.id] = thread
             thread.start()
 
             broadcaster.broadcast_sync("queue_item_started", item.model_dump(), book_id=item.book_id)
@@ -480,10 +626,18 @@ class QueueManager:
         pause_event: threading.Event,
     ) -> None:
         logger.info("Started queue worker for item %s (book: %s)", item.id, item.book_id)
-        config = load_config()
         out_root = self.output_root.resolve()
+        cancellation = CancellationToken(stop_event)
+        pause_gate = PauseGate(pause_event)
+
+        def checkpoint(boundary: str) -> None:
+            item.checkpoint = {"boundary": boundary, "chapter": item.current_chapter, "updated_at": utc_now()}
+            item.updated_at = utc_now()
+            pause_gate.wait(cancellation)
+            cancellation.check()
 
         try:
+            checkpoint("worker_started")
             # 1. Inspect manifest and workspace
             manifest = read_json(manifest_path(item.book_id))
             if not manifest:
@@ -561,20 +715,14 @@ class QueueManager:
                     manifest=manifest_path(item.book_id),
                 ),
                 on_batch_completed=handle_batch_completed,
+                cancellation_token=cancellation,
+                pause_gate=pause_gate,
             )
 
             # 3. Iterate over chapters
-            for idx, chapter in enumerate(chapters, start=1):
-                if stop_event.is_set():
-                    item.status = "cancelled"
-                    item.message = "流水线已由用户终止"
-                    item.completed_at = utc_now()
-                    self._emit_item_progress(item)
-                    return
-
-                pause_event.wait()
-                if stop_event.is_set():
-                    return
+            max_cycles = max(0, int(item.options.max_cycles))
+            for idx, chapter in enumerate(chapters[:max_cycles], start=1):
+                checkpoint("before_chapter")
 
                 chapter_id = chapter.get("id", f"c{idx:04d}")
                 chapter_title = chapter.get("title", chapter_id)
@@ -591,6 +739,7 @@ class QueueManager:
                 self._emit_item_progress(item)
 
                 result = pipeline.run_chapter(chapter_id, cycle=idx)
+                checkpoint("after_chapter")
 
                 t_p, tot_p, prog_ratio = _get_paragraph_progress()
                 item.overall_progress = prog_ratio
@@ -621,35 +770,56 @@ class QueueManager:
 
             # 4. Finalize
             if item.options.finalize:
+                checkpoint("before_finalize")
                 item.message = "全部章节翻译完成，正在导出与校验最终中文 EPUB..."
                 self._emit_item_progress(item)
                 pipeline.finalize()
+                checkpoint("after_finalize")
 
-            item.status = "completed"
-            item.overall_progress = 1.0
-            item.message = "全书翻译与审阅已完成！"
-            item.completed_at = utc_now()
+            cancellation.check()
+            with self._lock:
+                if not self._transition_locked(item, {"running"}, "completed"):
+                    raise JobCancelled("完成前任务状态已改变")
+                item.overall_progress = 1.0 if max_cycles >= len(chapters) else item.overall_progress
+                item.message = "全书翻译与审阅已完成！" if max_cycles >= len(chapters) else f"已达到 max_cycles={max_cycles} 检查点"
+                item.completed_at = utc_now()
+                self._save_state()
             broadcaster.broadcast_sync("queue_item_completed", item.model_dump(), book_id=item.book_id)
             logger.info("Queue item completed successfully: %s (%s)", item.id, item.book_name)
 
+        except JobCancelled:
+            with self._lock:
+                if item.status == "cancelling":
+                    self._transition_locked(item, {"cancelling"}, "cancelled")
+                elif item.status not in TERMINAL_STATUSES:
+                    item.status = "cancelled"
+                    item.updated_at = utc_now()
+                item.message = "流水线已安全取消"
+                item.completed_at = utc_now()
+                self._save_state()
+            broadcaster.broadcast_sync("pipeline_stopped", self._as_task(item).model_dump(), book_id=item.book_id)
         except Exception as exc:
             logger.error("Queue worker failed for item %s: %s", item.id, exc, exc_info=True)
-            item.status = "failed"
-            item.message = f"执行出错: {exc}"
-            item.error_detail = traceback.format_exc()
-            item.completed_at = utc_now()
+            with self._lock:
+                if item.status not in TERMINAL_STATUSES and item.status != "cancelling":
+                    self._transition_locked(item, {item.status}, "failed")
+                    item.message = f"执行出错: {exc}"
+                    item.error_detail = traceback.format_exc()
+                    item.completed_at = utc_now()
+                self._save_state()
             broadcaster.broadcast_sync("queue_item_failed", item.model_dump(), book_id=item.book_id)
 
             if self.stop_on_error:
-                self.is_paused = True
+                with self._lock:
+                    self.is_paused = True
+                    self._save_state()
                 broadcaster.broadcast_sync("queue_paused", {"reason": "stop_on_error", "failed_item": item.id})
 
         finally:
-            self._running_threads.pop(item.id, None)
-            self._stop_events.pop(item.id, None)
-            self._pause_events.pop(item.id, None)
-
             with self._lock:
+                self._running_threads.pop(item.id, None)
+                self._stop_events.pop(item.id, None)
+                self._pause_events.pop(item.id, None)
                 self._save_state()
 
             self._emit_queue_updated()
@@ -676,5 +846,5 @@ class QueueManager:
         )
 
 
-# Global singleton queue manager
-queue_manager = QueueManager()
+# Global singleton job manager
+job_manager = JobManager()

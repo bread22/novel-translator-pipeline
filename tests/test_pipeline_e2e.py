@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from translator.core.workspace import BookWorkspace
 from translator.pipeline.chapter_pipeline import ChapterPipeline
 from translator.web.models import PipelineStartRequest
-from translator.web.task_manager import TaskManager
+from translator.core.job_manager import JobManager
 
 
 def _dummy_manifest(book_id: str, title: str) -> dict:
@@ -145,12 +145,12 @@ class PipelineE2ETests(unittest.TestCase):
         self.assertEqual(c2_paragraphs[0]["translated"], "译文: 放課後の教室で")
 
     @patch("translator.pipeline.chapter_pipeline.run_chapter_review", side_effect=_mock_reviewer)
-    @patch("translator.web.task_manager.manifest_path")
+    @patch("translator.core.job_manager.manifest_path")
     @patch("translator.providers.openai_provider.urlopen")
-    def test_task_manager_runs_pipeline_worker_e2e(
+    def test_job_manager_runs_pipeline_worker_e2e(
         self, mock_urlopen: MagicMock, mock_manifest_path: MagicMock, mock_rev: MagicMock
     ) -> None:
-        """Test TaskManager starts worker thread and executes ChapterPipeline to completion without errors."""
+        """Test JobManager starts worker thread and executes ChapterPipeline to completion without errors."""
         mock_manifest_path.return_value = self.manifest_file
 
         def urlopen_side_effect(req, *args, **kwargs):
@@ -173,7 +173,7 @@ class PipelineE2ETests(unittest.TestCase):
 
         mock_urlopen.side_effect = urlopen_side_effect
 
-        manager = TaskManager()
+        manager = JobManager(output_root=self.output_root)
         req = PipelineStartRequest(
             book_id=self.book_id,
             apply=True,
@@ -185,10 +185,13 @@ class PipelineE2ETests(unittest.TestCase):
         self.assertEqual(task.book_id, self.book_id)
 
         # Wait for thread execution
-        running_task = manager._tasks.get(task.task_id)
+        with manager._lock:
+            worker_thread = manager._running_threads.get(task.task_id)
+        if worker_thread:
+            worker_thread.join(timeout=10.0)
+        with manager._lock:
+            running_task = manager._items.get(task.task_id)
         self.assertIsNotNone(running_task)
-        if running_task and running_task.thread:
-            running_task.thread.join(timeout=10.0)
 
         self.assertEqual(running_task.status, "completed")
         self.assertEqual(running_task.total_chapters, 2)

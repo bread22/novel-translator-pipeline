@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from translator.core.queue_manager import QueueManager
+from translator.core.job_manager import JobManager
 from translator.core.workspace import write_json
-from translator.web.models import PipelineStartRequest, QueueItem
+from translator.web.models import PipelineStartRequest
 
 
-class QueueManagerTests(unittest.TestCase):
+class JobManagerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -35,7 +37,7 @@ class QueueManagerTests(unittest.TestCase):
                 },
             )
 
-        self.qm = QueueManager(output_root=self.output_root)
+        self.qm = JobManager(output_root=self.output_root)
         self.qm.is_paused = True  # Keep paused during unit tests to control worker spawning
 
     def tearDown(self) -> None:
@@ -148,13 +150,87 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(self.qm.state_file.exists())
 
         # Create new manager instance pointing to same output_root
-        new_qm = QueueManager(output_root=self.output_root)
+        new_qm = JobManager(output_root=self.output_root)
         new_status = new_qm.get_status()
         self.assertEqual(new_status.total_items, 2)
         self.assertEqual(new_status.pending_count, 2)
         self.assertEqual([i.book_id for i in new_status.items], ["book-1", "book-2"])
 
+    def test_state_uses_v2_schema(self) -> None:
+        self.qm.enqueue("book-1")
+        state = json.loads(self.qm.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(state["schema_version"], 2)
+        self.assertIn("process_id", state)
+
+    def test_task_and_queue_entrypoints_share_one_active_job(self) -> None:
+        queued = self.qm.enqueue("book-1")
+        with patch.object(self.qm, "_dispatch"):
+            task = self.qm.start_pipeline(PipelineStartRequest(book_id="book-1"))
+        self.assertEqual(task.task_id, queued.id)
+        self.assertEqual(self.qm.get_status().total_items, 1)
+
+    def test_paused_job_keeps_concurrency_slot(self) -> None:
+        first, second = self.qm.enqueue_batch(["book-1", "book-2"])
+        with self.qm._lock:
+            self.qm._transition_locked(first, {"pending"}, "running")
+            self.qm._transition_locked(first, {"running"}, "pausing")
+            self.qm._transition_locked(first, {"pausing"}, "paused")
+        status = self.qm.get_status()
+        self.assertEqual(status.running_count, 1)
+        self.assertEqual(status.pending_count, 1)
+        self.assertEqual(second.status, "pending")
+
+    def test_restart_recovery_dispatches_when_queue_was_active(self) -> None:
+        item = self.qm.enqueue("book-1")
+        with self.qm._lock:
+            self.qm.is_paused = False
+            self.qm._transition_locked(item, {"pending"}, "running")
+            self.qm._save_state()
+        with patch.object(JobManager, "_dispatch") as dispatch:
+            recovered = JobManager(output_root=self.output_root)
+        dispatch.assert_called_once()
+        recovered_item = recovered.get_status().items[0]
+        self.assertEqual(recovered_item.status, "recovery_pending")
+        self.assertIn("服务重启", recovered_item.recovery_reason or "")
+
+    def test_cancelled_last_chapter_never_finalizes(self) -> None:
+        started = threading.Event()
+        finalized = threading.Event()
+
+        class BlockingPipeline:
+            def __init__(self, **kwargs):
+                self.token = kwargs["cancellation_token"]
+
+            def is_chapter_completed(self, _chapter_id):
+                return False
+
+            def run_chapter(self, _chapter_id, cycle):
+                started.set()
+                while not self.token.is_cancelled():
+                    time.sleep(0.01)
+                self.token.check()
+
+            def finalize(self):
+                finalized.set()
+
+        manifest = self.books_dir / "book-1" / "manifest.json"
+        write_json(manifest, {"book": "book-1", "title": "Book", "chapters": [{"id": "c1", "paragraphs": []}]})
+        manager = JobManager(output_root=self.output_root)
+        manager.is_paused = True
+        with patch("translator.core.job_manager.manifest_path", return_value=manifest), patch(
+            "translator.core.job_manager.ChapterPipeline", BlockingPipeline
+        ):
+            task = manager.start_pipeline(PipelineStartRequest(book_id="book-1", finalize=True))
+            self.assertTrue(started.wait(2))
+            stopped = manager.stop_pipeline(task.task_id)
+            self.assertEqual(stopped.status, "cancelling")
+            with manager._lock:
+                worker = manager._running_threads.get(task.task_id)
+            if worker:
+                worker.join(2)
+        self.assertFalse(finalized.is_set())
+        self.assertEqual(manager.get_task(task.task_id).status, "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()
-

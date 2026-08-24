@@ -158,7 +158,11 @@ class QueueItem(BaseModel):
     enqueued_at: str
     started_at: str | None = None
     completed_at: str | None = None
+    updated_at: str | None = None
     retry_count: int = 0
+    checkpoint: dict[str, Any] = Field(default_factory=dict)
+    process_id: str | None = None
+    recovery_reason: str | None = None
 
 
 class QueueStatusResponse(BaseModel):
@@ -193,5 +197,4 @@ class QueueClearRequest(BaseModel):
 class QueueConfigUpdateRequest(BaseModel):
     concurrency: int | None = None
     stop_on_error: bool | None = None
-
 

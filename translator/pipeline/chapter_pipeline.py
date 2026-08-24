@@ -17,6 +17,7 @@ from translator.core.config import (
     setting,
 )
 from translator.core.layout import apply_horizontal_layout
+from translator.core.job_control import CancellationToken, JobCancelled, PauseGate
 from translator.core.novel_tool import (
     NOVEL_TRANSLATOR_ROOT,
     call_novel_translator,
@@ -166,6 +167,8 @@ class IterativePipeline:
         layout: str | None = None,
         translated_root: Path | None = None,
         on_batch_completed: Callable[[dict[str, Any]], None] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        pause_gate: PauseGate | None = None,
     ) -> None:
         self.book = book
         self.workspace = workspace
@@ -221,6 +224,11 @@ class IterativePipeline:
         self.layout = layout or str(pipeline_cfg.get("layout", "preserve"))
         self.translated_root = translated_root or ROOT / "translated"
         self.on_batch_completed = on_batch_completed
+        self.cancellation_token = cancellation_token or CancellationToken()
+        self.pause_gate = pause_gate or PauseGate()
+
+    def _checkpoint(self) -> None:
+        self.pause_gate.wait(self.cancellation_token)
 
     def initialize(self) -> None:
         self.workspace.initialize(book_id=self.book)
@@ -299,23 +307,28 @@ class IterativePipeline:
         return window or paragraphs[:1]
 
     def _translate_target(self, provider: str, ids: list[str], source_chars: int) -> dict[str, Any]:
+        self._checkpoint()
         if self.targeted_translator is None:
             if provider != self.primary_translator:
                 raise RuntimeError("测试/兼容模式未配置 fallback translator")
-            return self.tool_call(
+            result = self.tool_call(
                 "translate",
                 "--book", self.book,
                 "--max-batches", "1",
                 "--workers", "1",
                 "--rpm", "30",
             )
-        return self.targeted_translator(
+            self._checkpoint()
+            return result
+        result = self.targeted_translator(
             provider,
             self.book,
             ids,
             source_chars=source_chars,
             max_tokens=self.translation_max_tokens,
         )
+        self._checkpoint()
+        return result
 
     def _translate_segment_with_recovery(
         self,
@@ -324,12 +337,15 @@ class IterativePipeline:
         attempts: list[dict[str, Any]],
         depth: int = 0,
     ) -> None:
+        self._checkpoint()
         ids = [str(item["id"]) for item in paragraphs]
         source_chars = sum(len(str(item.get("source", ""))) for item in paragraphs)
         try:
             primary_translator = self.primary_translator
             result = self._translate_target(primary_translator, ids, source_chars)
             reason = provider_failure_reason(result)
+        except JobCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             result = {"status": "error", "error": str(exc)}
             reason = provider_failure_reason(result)
@@ -370,7 +386,14 @@ class IterativePipeline:
         fallback_ids = sorted(set(ids) & remaining, key=ids.index)
         recovered = False
         for fb_idx, fb_provider in enumerate(self.fallback_translators):
-            fb_result = self._translate_target(fb_provider, fallback_ids, source_chars)
+            self._checkpoint()
+            try:
+                fb_result = self._translate_target(fb_provider, fallback_ids, source_chars)
+            except JobCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                fb_result = {"status": "error", "error": str(exc)}
+            self._checkpoint()
             fb_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
             fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
             fb_attempt = {
@@ -415,11 +438,13 @@ class IterativePipeline:
         initial_pending = self._chapter_pending_ids(chapter)
         batches = 0
         while batches < self.max_chapter_batches:
+            self._checkpoint()
             pending_paragraphs = self._chapter_pending_paragraphs(chapter_id)
             if not pending_paragraphs:
                 break
             batch_window = self._window(pending_paragraphs, self.primary_batch_max_chars)
             self._translate_segment_with_recovery(chapter_id, batch_window, attempts)
+            self._checkpoint()
             batches += 1
             if self.on_batch_completed is not None:
                 remaining_after = self._chapter_pending_paragraphs(chapter_id)
@@ -452,6 +477,7 @@ class IterativePipeline:
         }
 
     def _review_chapter(self, chapter_id: str) -> dict[str, Any]:
+        self._checkpoint()
         chapter = self._chapter(chapter_id)
         paragraphs = [p for p in chapter.get("paragraphs", []) if isinstance(p, dict) and p.get("id")]
         items = [{"id": str(p["id"]), "source": str(p.get("source", "")), "translated": str(p.get("translated", ""))} for p in paragraphs if str(p.get("translated", "")).strip()]
@@ -470,6 +496,7 @@ class IterativePipeline:
             "glossary": glossary.get("terms", []),
         })
         self.chapter_reviewer(input_path, output_path)
+        self._checkpoint()
         review = read_json(output_path)
         if not isinstance(review, dict):
             raise ValueError(f"章节审阅结果不是 JSON 对象：{output_path}")
@@ -479,6 +506,7 @@ class IterativePipeline:
                 break
             retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
             self.chapter_reviewer(input_path, retry_path)
+            self._checkpoint()
             review = read_json(retry_path)
         validate_chapter_review_payload(review, expected_ids)
         fixes = approved_fixes(review["fixes"], autonomous=self.autonomous)
@@ -486,6 +514,7 @@ class IterativePipeline:
         write_json(fixes_path, {"book": self.book, "items": fixes})
         applied_fixes = False
         if self.apply and fixes:
+            self._checkpoint()
             try:
                 applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
             except Exception:
@@ -498,6 +527,7 @@ class IterativePipeline:
                 applied_fixes = {"status": "ok", "summary": {"applied": len(fixes)}}
             manifest_after_fixes = read_json(self.manifest)
             verify_applied_fixes(manifest_after_fixes, fixes)
+        self._checkpoint()
         merged_terms, term_summary = merge_term_updates(
             glossary,
             review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []),
@@ -522,6 +552,7 @@ class IterativePipeline:
             "memory_summary": mem_summary,
             "applied": applied_fixes,
         })
+        self._checkpoint()
         return {
             "chapter_id": chapter_id,
             "reviewed": len(expected_ids),
@@ -532,6 +563,7 @@ class IterativePipeline:
         }
 
     def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
+        self._checkpoint()
         progress = read_json(self.workspace.progress_path, {
             "book": self.book,
             "state": "running",
@@ -548,7 +580,9 @@ class IterativePipeline:
             "updated_at": utc_now(),
         })
         write_json(self.workspace.progress_path, progress)
+        self._checkpoint()
         reviewed_summary = self._review_chapter(chapter_id)
+        self._checkpoint()
         progress.update({
             "state": "running",
             "completed_cycles": cycle,
@@ -569,6 +603,7 @@ class IterativePipeline:
         }
 
     def finalize(self) -> dict[str, Any]:
+        self._checkpoint()
         manifest = read_json(self.manifest)
         untranslated = [
             str(paragraph["id"])
@@ -579,14 +614,21 @@ class IterativePipeline:
         if untranslated:
             raise ValueError(f"全书尚有未翻译段落，无法导出：{', '.join(untranslated)}")
         output = self.workspace.epub_path
+        self._checkpoint()
         exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
+        self._checkpoint()
         validation = self.tool_call("validate-epub", "--path", str(output))
+        self._checkpoint()
         if self.layout == "horizontal":
             apply_horizontal_layout(output)
+            self._checkpoint()
             validation = self.tool_call("validate-epub", "--path", str(output))
+            self._checkpoint()
         self.translated_root.mkdir(parents=True, exist_ok=True)
         destination = self.translated_root / output.name
+        self._checkpoint()
         shutil.copy2(output, destination)
+        self._checkpoint()
         report_path = generate_work_report(
             workspace=self.workspace.root,
             book=self.book,
@@ -702,4 +744,3 @@ __all__ = ["ChapterPipeline", "IterativePipeline", "manifest_path", "paragraph_m
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

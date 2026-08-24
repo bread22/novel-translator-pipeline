@@ -98,3 +98,4 @@ def update_queue_config(request: QueueConfigUpdateRequest) -> QueueStatusRespons
         stop_on_error=request.stop_on_error,
     )
     return queue_manager.get_status()
+

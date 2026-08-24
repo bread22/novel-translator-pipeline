@@ -323,13 +323,13 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
           <div className="space-y-1.5 text-center md:text-left">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-900/60 border border-indigo-700/50 text-indigo-300 text-xs font-medium">
               <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              任务调度工作台 · 一站式资产与批量队列
+              任务调度工作台 · 多书籍批量队列
             </div>
             <h1 className="text-xl md:text-2xl font-bold tracking-tight text-white">
-              投放日文小说，多书籍无缝排队全自动处理
+              小说批量翻译与队列调度
             </h1>
             <p className="text-slate-400 text-xs max-w-2xl">
-              拖拽上传后自动入库与排队调度。支持动态并发槽位、排队拖拽调序、断点崩溃自愈与两级降级容灾。
+              支持多书籍批量排队、自由拖拽调整执行次序、动态并发槽位与断点续译。
             </p>
           </div>
 
@@ -572,7 +572,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                           className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 text-[11px] font-medium transition-all cursor-pointer"
                         >
                           <Play className="w-3 h-3 fill-indigo-300" />
-                          进入作战室
+                          查看控制台
                         </button>
                       ) : isPendingInQueue ? (
                         <button
@@ -739,7 +739,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                           className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition-all cursor-pointer"
                         >
                           <Play className="w-3.5 h-3.5 fill-white" />
-                          深入作战室
+                          查看控制台
                         </button>
 
                         <button
@@ -783,9 +783,25 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
               </span>
             </div>
 
+            {queueStatus?.is_paused && pendingItems.length > 0 && (
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>队列处于待命暂停状态，已加入 {pendingItems.length} 本书。可任意拖拽调序，准备就绪后点击「启动队列」。</span>
+                </div>
+                <button
+                  onClick={handleToggleQueuePause}
+                  className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow transition-all shrink-0 cursor-pointer flex items-center gap-1"
+                >
+                  <Play className="w-3 h-3 fill-white" />
+                  启动队列
+                </button>
+              </div>
+            )}
+
             {pendingItems.length === 0 ? (
               <div className="bg-slate-900/40 border border-dashed border-slate-800/80 rounded-xl p-6 text-center text-xs text-slate-500">
-                等待队列为空。在左侧书籍池中点击「加入队列」即可添加。
+                等待队列为空。在左侧书籍资产池中点击「加入队列」即可添加。
               </div>
             ) : (
               <div className="space-y-2">
@@ -882,6 +898,14 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
             <div className="space-y-2 pt-2">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
                 <span>🏁 历史完成与异常记录 ({finishedItems.length})</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleClearQueue('all_finished')}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+                  >
+                    全部清空
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
@@ -910,7 +934,9 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                             {item.book_name}
                           </h4>
                           <p className={`text-[10px] truncate ${isFailed ? 'text-rose-300' : 'text-slate-500'}`}>
-                            {item.message}
+                            {item.message.includes('均未完成')
+                              ? '所有翻译模型均未返回有效译文（请检查模型 API Key 配置后重试）'
+                              : item.message}
                           </p>
                         </div>
                       </div>
@@ -939,7 +965,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
                         <button
                           onClick={(e) => handleCancelItem(item.id, e)}
-                          className="p-1 rounded text-slate-500 hover:text-slate-300 transition-colors"
+                          className="p-1 rounded text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
                           title="删除该记录"
                         >
                           <X className="w-3.5 h-3.5" />

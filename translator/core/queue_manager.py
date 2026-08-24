@@ -54,7 +54,7 @@ class QueueManager:
         queue_cfg = config.get("queue", {})
         self.concurrency: int = max(1, min(4, int(queue_cfg.get("concurrency", 1))))
         self.stop_on_error: bool = bool(queue_cfg.get("stop_on_error", False))
-        self.is_paused: bool = False
+        self.is_paused: bool = True
 
         # Load persisted state
         self._load_state()
@@ -135,7 +135,7 @@ class QueueManager:
                 status="pending",
                 order_index=0,
                 enqueued_at=utc_now(),
-                message="已加入翻译队列，等待调度...",
+                message="已加入待办队列，点击「启动队列」开始调度...",
             )
 
             self._items[item_id] = item
@@ -181,7 +181,7 @@ class QueueManager:
                     status="pending",
                     order_index=0,
                     enqueued_at=utc_now(),
-                    message="已加入翻译队列，等待调度...",
+                    message="已加入待办队列，点击「启动队列」开始调度...",
                 )
                 self._items[item_id] = item
                 new_ids.append(item_id)
@@ -221,7 +221,7 @@ class QueueManager:
                 item.message = "已移出等待队列"
                 item.completed_at = utc_now()
             else:
-                # Already completed / failed / cancelled, just remove
+                # Already completed / failed / cancelled, delete from history
                 del self._items[item_id]
                 if item_id in self._pending_order:
                     self._pending_order.remove(item_id)
@@ -388,7 +388,7 @@ class QueueManager:
             if not isinstance(raw, dict):
                 return
 
-            self.is_paused = bool(raw.get("is_paused", False))
+            self.is_paused = bool(raw.get("is_paused", True))
             self.concurrency = max(1, min(4, int(raw.get("concurrency", 1))))
             self.stop_on_error = bool(raw.get("stop_on_error", False))
             pending_raw = raw.get("pending_order", [])

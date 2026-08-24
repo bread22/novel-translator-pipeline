@@ -118,6 +118,7 @@ export const App: React.FC = () => {
         'chapter_completed',
         'pipeline_completed',
         'pipeline_paused',
+        'pipeline_resumed',
         'pipeline_stopped',
       ];
       if (pipelineEvents.includes(evt.event)) {
@@ -193,4 +194,3 @@ export const App: React.FC = () => {
   );
 };
 export default App;
-

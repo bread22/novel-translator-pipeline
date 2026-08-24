@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +48,42 @@ def resolve_novel_translator_python(novel_root: Path | None = None) -> Path:
 
 NOVEL_TRANSLATOR_ROOT = resolve_novel_translator_root()
 NOVEL_TRANSLATOR_PYTHON = resolve_novel_translator_python(NOVEL_TRANSLATOR_ROOT)
+
+
+@dataclass
+class ToolResult:
+    status: str
+    returncode: int | None = None
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+    stdout: str = ""
+    stderr: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class NovelToolError(RuntimeError):
+    def __init__(self, message: str, result: ToolResult) -> None:
+        super().__init__(message)
+        self.result = result
+
+
+def novel_translator_diagnostic(novel_root: Path | None = None, python_bin: Path | None = None) -> dict[str, Any]:
+    root = (novel_root or resolve_novel_translator_root()).expanduser().resolve()
+    py_bin = (python_bin or resolve_novel_translator_python(root)).expanduser().resolve()
+    checks = {
+        "root_exists": root.is_dir(),
+        "main_py_exists": (root / "main.py").is_file(),
+        "python_exists": py_bin.is_file(),
+    }
+    return {
+        "status": "ok" if all(checks.values()) else "error",
+        "root": str(root),
+        "python": str(py_bin),
+        "checks": checks,
+        "setup": "设置 NOVEL_TRANSLATOR_ROOT 和 NOVEL_TRANSLATOR_PYTHON，或安装受支持的 external runtime。",
+    }
 
 
 def provider_failure_reason(result: dict[str, Any] | None) -> str:
@@ -126,9 +164,19 @@ def provider_failure_reason(result: dict[str, Any] | None) -> str:
     return "provider_error"
 
 
-def call_novel_translator(*args: str, novel_root: Path | None = None, python_bin: Path | None = None) -> dict[str, Any]:
+def call_novel_translator(
+    *args: str,
+    novel_root: Path | None = None,
+    python_bin: Path | None = None,
+    timeout: float = 600,
+    output_limit: int = 16_000,
+) -> dict[str, Any]:
     root = novel_root or resolve_novel_translator_root()
     py_bin = python_bin or resolve_novel_translator_python(root)
+    diagnostic = novel_translator_diagnostic(root, py_bin)
+    if diagnostic["status"] != "ok":
+        result = ToolResult(status="error", errors=[{"code": "dependency_missing", "message": diagnostic["setup"]}], summary=diagnostic)
+        raise NovelToolError("Novel Translator runtime 检查失败", result)
     command = [
         str(py_bin),
         str(root / "main.py"),
@@ -136,18 +184,69 @@ def call_novel_translator(*args: str, novel_root: Path | None = None, python_bin
         *args,
         "--json",
     ]
-    result = subprocess.run(
+    process = subprocess.Popen(
         command,
         cwd=root,
         text=True,
-        capture_output=True,
-        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=(os.name != "nt"),
     )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Novel Translator failed ({result.returncode}):\n{result.stderr}\n{result.stdout}"
-        )
     try:
-        return json.loads(result.stdout)
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            stdout, stderr = process.communicate()
+        result = ToolResult(
+            status="timeout",
+            returncode=process.returncode,
+            errors=[{"code": "timeout", "message": f"外部工具超过 {timeout} 秒"}],
+            stdout=stdout[-output_limit:],
+            stderr=stderr[-output_limit:],
+        )
+        raise NovelToolError("Novel Translator 执行超时", result) from exc
+    stdout = stdout[-output_limit:]
+    stderr = stderr[-output_limit:]
+    if process.returncode != 0:
+        result = ToolResult(
+            status="error",
+            returncode=process.returncode,
+            errors=[{"code": "nonzero_exit", "message": stderr or stdout or "外部工具返回非零状态"}],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        raise NovelToolError(f"Novel Translator failed ({process.returncode})", result)
+    try:
+        payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Novel Translator returned non-JSON output:\n{result.stdout}") from exc
+        result = ToolResult(
+            status="error",
+            returncode=process.returncode,
+            errors=[{"code": "invalid_json", "message": "外部工具未返回 JSON"}],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        raise NovelToolError("Novel Translator returned non-JSON output", result) from exc
+    if not isinstance(payload, dict):
+        payload = {"payload": payload}
+    normalized = ToolResult(
+        status=str(payload.get("status", "ok")),
+        returncode=process.returncode,
+        errors=list(payload.get("errors", []) or []),
+        summary=dict(payload.get("summary", {}) or {}),
+        stdout="",
+        stderr=stderr,
+    ).as_dict()
+    normalized.update(payload)
+    normalized["returncode"] = process.returncode
+    return normalized

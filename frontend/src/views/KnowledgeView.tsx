@@ -61,11 +61,11 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
       target: newTarget.trim(),
       category: newCategory,
       confidence: 1.0,
-      notes: newNotes.trim(),
+      note: newNotes.trim(),
     };
 
     try {
-      const updated = await api.updateGlossary(book.id, [...glossaryTerms, newItem]);
+      const updated = await api.updateGlossary(book.id, [newItem]);
       setGlossaryTerms(updated.terms);
       setShowAddModal(false);
       setNewSource('');
@@ -218,7 +218,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                         </span>
                       </td>
                       <td className="py-3 px-4 text-[#666666] text-[11px]">
-                        {term.notes || (term.first_chapter ? `第 ${term.first_chapter} 章` : '-')}
+                        {term.note || (term.first_seen_chunk ? `首次出现：${term.first_seen_chunk}` : '-')}
                       </td>
                     </tr>
                   ))

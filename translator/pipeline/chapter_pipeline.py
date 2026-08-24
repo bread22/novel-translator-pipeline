@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
 import sys
+import time
 from typing import Any, Callable
+import uuid
+import zipfile
 
 from translator.core.config import (
     dual_review_enabled,
@@ -262,13 +266,33 @@ class IterativePipeline:
                 return read_json(self.workspace.chapter_states_dir / f"{previous_id}.json", {}) or {}
         return {}
 
-    def _record_translation_provenance(self, ids: list[str], provider: str, reason: str = "") -> None:
+    def _record_translation_provenance(
+        self,
+        ids: list[str],
+        provider: str,
+        reason: str = "",
+        *,
+        attempt_id: str,
+        fallback_from: str | None = None,
+    ) -> None:
         path = self.workspace.data_dir / "translation-provenance.json"
         records = read_json(path, {"book": self.book, "items": {}})
         records.setdefault("book", self.book)
         items = records.setdefault("items", {})
+        paragraphs = paragraph_map(read_json(self.manifest, {}))
         for item_id in ids:
-            items[item_id] = {"provider": provider, "reason": reason, "updated_at": utc_now()}
+            paragraph = paragraphs.get(item_id, {})
+            source = str(paragraph.get("source", ""))
+            translated = str(paragraph.get("translated", ""))
+            items[item_id] = {
+                "attempt_id": attempt_id,
+                "provider": provider,
+                "recovered_at": utc_now(),
+                "fallback_from": fallback_from,
+                "reason": reason,
+                "source_hash": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "translation_hash": hashlib.sha256(translated.encode("utf-8")).hexdigest(),
+            }
         write_json(path, records)
 
     def _record_provider_attempt(self, attempt: dict[str, Any]) -> None:
@@ -339,7 +363,14 @@ class IterativePipeline:
     ) -> None:
         self._checkpoint()
         ids = [str(item["id"]) for item in paragraphs]
-        source_chars = sum(len(str(item.get("source", ""))) for item in paragraphs)
+        source_by_id = {str(item["id"]): str(item.get("source", "")) for item in paragraphs}
+        before_pending = {item_id for item_id in ids if item_id in self._chapter_pending_ids(self._chapter(chapter_id))}
+        ids = [item_id for item_id in ids if item_id in before_pending]
+        if not ids:
+            return
+        source_chars = sum(len(source_by_id[item_id]) for item_id in ids)
+        attempt_id = uuid.uuid4().hex
+        started = time.monotonic()
         try:
             primary_translator = self.primary_translator
             result = self._translate_target(primary_translator, ids, source_chars)
@@ -349,23 +380,28 @@ class IterativePipeline:
         except Exception as exc:  # noqa: BLE001
             result = {"status": "error", "error": str(exc)}
             reason = provider_failure_reason(result)
-        remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+        remaining = self._chapter_pending_ids(self._chapter(chapter_id))
+        recovered_ids = [item_id for item_id in ids if item_id in before_pending and item_id not in remaining]
         attempt = {
+            "attempt_id": attempt_id,
             "provider": primary_translator,
             "depth": depth,
-            "ids": ids,
+            "attempted_ids": ids,
+            "recovered_ids": recovered_ids,
             "source_chars": source_chars,
+            "status": "ok" if recovered_ids else "error",
+            "latency_ms": round((time.monotonic() - started) * 1000, 3),
             "result": result,
             "reason": reason,
             "remaining": sorted(remaining),
         }
         attempts.append(attempt)
         self._record_provider_attempt(attempt)
-        if self.targeted_translator is None:
-            self._record_translation_provenance(ids, primary_translator)
-            return
+        if recovered_ids:
+            self._record_translation_provenance(recovered_ids, primary_translator, reason, attempt_id=attempt_id)
         if not (set(ids) & remaining):
-            self._record_translation_provenance(ids, primary_translator)
+            return
+        if self.targeted_translator is None:
             return
         should_split = (
             len(ids) > 1
@@ -384,35 +420,53 @@ class IterativePipeline:
             return
 
         fallback_ids = sorted(set(ids) & remaining, key=ids.index)
-        recovered = False
         for fb_idx, fb_provider in enumerate(self.fallback_translators):
             self._checkpoint()
+            current_pending = self._chapter_pending_ids(self._chapter(chapter_id))
+            attempted_ids = [item_id for item_id in fallback_ids if item_id in current_pending]
+            if not attempted_ids:
+                break
+            fb_source_chars = sum(len(source_by_id[item_id]) for item_id in attempted_ids)
+            fb_attempt_id = uuid.uuid4().hex
+            fb_started = time.monotonic()
             try:
-                fb_result = self._translate_target(fb_provider, fallback_ids, source_chars)
+                fb_result = self._translate_target(fb_provider, attempted_ids, fb_source_chars)
             except JobCancelled:
                 raise
             except Exception as exc:  # noqa: BLE001
                 fb_result = {"status": "error", "error": str(exc)}
             self._checkpoint()
-            fb_remaining = {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)}
+            fb_remaining = self._chapter_pending_ids(self._chapter(chapter_id))
+            fb_recovered = [item_id for item_id in attempted_ids if item_id not in fb_remaining]
             fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
             fb_attempt = {
+                "attempt_id": fb_attempt_id,
                 "provider": fb_provider,
                 "depth": depth,
-                "ids": ids,
-                "source_chars": source_chars,
+                "attempted_ids": attempted_ids,
+                "recovered_ids": fb_recovered,
+                "source_chars": fb_source_chars,
+                "status": "ok" if fb_recovered else "error",
+                "latency_ms": round((time.monotonic() - fb_started) * 1000, 3),
                 "result": fb_result,
                 "reason": fb_reason,
                 "remaining": sorted(fb_remaining),
             }
             attempts.append(fb_attempt)
             self._record_provider_attempt(fb_attempt)
+            if fb_recovered:
+                self._record_translation_provenance(
+                    fb_recovered,
+                    fb_provider,
+                    fb_reason,
+                    attempt_id=fb_attempt_id,
+                    fallback_from=self.primary_translator,
+                )
             if not (set(ids) & fb_remaining):
-                self._record_translation_provenance(ids, fb_provider, fb_reason)
-                recovered = True
                 break
 
-        if not recovered and len(fallback_ids) > 1:
+        unresolved_now = set(ids) & self._chapter_pending_ids(self._chapter(chapter_id))
+        if unresolved_now and len(fallback_ids) > 1:
             for item in paragraphs:
                 if str(item["id"]) in {str(p["id"]) for p in self._chapter_pending_paragraphs(chapter_id)}:
                     self._translate_segment_with_recovery(chapter_id, [item], attempts, depth + 1)
@@ -420,8 +474,8 @@ class IterativePipeline:
             if not (set(ids) & remaining_after):
                 return
 
-        if not recovered:
-            unresolved = sorted(set(ids) & {str(item["id"]) for item in self._chapter_pending_paragraphs(chapter_id)})
+        unresolved = sorted(set(ids) & self._chapter_pending_ids(self._chapter(chapter_id)))
+        if unresolved:
             raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")
         return
 
@@ -613,21 +667,45 @@ class IterativePipeline:
         ]
         if untranslated:
             raise ValueError(f"全书尚有未翻译段落，无法导出：{', '.join(untranslated)}")
+        missing_reviews = [
+            str(chapter.get("id", ""))
+            for chapter in manifest.get("chapters", [])
+            if chapter.get("id")
+            and not (self.workspace.chapter_states_dir / f"{chapter['id']}.json").exists()
+            and not (self.workspace.reports_dir / f"{chapter['id']}.json").exists()
+        ]
+        if missing_reviews:
+            raise ValueError(f"章节审阅状态不完整，无法导出：{', '.join(missing_reviews)}")
         output = self.workspace.epub_path
         self._checkpoint()
         exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
+        if not isinstance(exported, dict) or exported.get("status") not in {"ok", "success", "exported"}:
+            raise ValueError(f"EPUB export payload 未通过：{exported}")
+        if not output.is_file() or output.stat().st_size == 0 or not zipfile.is_zipfile(output):
+            raise ValueError(f"EPUB export 产物无效：{output}")
         self._checkpoint()
         validation = self.tool_call("validate-epub", "--path", str(output))
+        if not isinstance(validation, dict) or validation.get("status") not in {"ok", "success", "valid"}:
+            raise ValueError(f"EPUB validate payload 未通过：{validation}")
         self._checkpoint()
         if self.layout == "horizontal":
             apply_horizontal_layout(output)
             self._checkpoint()
             validation = self.tool_call("validate-epub", "--path", str(output))
+            if not isinstance(validation, dict) or validation.get("status") not in {"ok", "success", "valid"}:
+                raise ValueError(f"横排 EPUB 二次 validate payload 未通过：{validation}")
             self._checkpoint()
         self.translated_root.mkdir(parents=True, exist_ok=True)
         destination = self.translated_root / output.name
+        temporary_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         self._checkpoint()
-        shutil.copy2(output, destination)
+        shutil.copy2(output, temporary_destination)
+        source_hash = hashlib.sha256(output.read_bytes()).hexdigest()
+        copied_hash = hashlib.sha256(temporary_destination.read_bytes()).hexdigest()
+        if source_hash != copied_hash:
+            temporary_destination.unlink(missing_ok=True)
+            raise ValueError("EPUB 临时交付副本 hash 不一致")
+        temporary_destination.replace(destination)
         self._checkpoint()
         report_path = generate_work_report(
             workspace=self.workspace.root,
@@ -650,6 +728,7 @@ class IterativePipeline:
             "layout": self.layout,
             "exported": exported,
             "validation": validation,
+            "sha256": source_hash,
             "work_report": str(self.workspace.data_dir / "work-report.yaml"),
         }
         write_json(self.workspace.reports_dir / "final-delivery.json", result)

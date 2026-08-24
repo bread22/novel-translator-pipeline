@@ -236,7 +236,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     if kind == "chapter":
         instructions = """
 这是章节级一致性审阅。
-- 顶层必须输出一个 JSON 对象，结构必须包含：{"checked_ids": [...], "fixes": [...], "glossary_delta": {"add":[], "update":[], "conflicts":[]}, "memory_delta": {"character_profiles":[], "world_rules":[], "relationship_graph":[], "chronology":[], "unresolved_clues":[]}, "chapter_state": {"summary": "...", "significant_changes": []}}。
+- 顶层必须输出一个 JSON 对象，结构必须包含：{"schema_version":"2.0", "checked_ids": [...], "fixes": [...], "glossary_delta": {"add":[], "update":[], "conflicts":[]}, "memory_delta": {"add":[], "update":[], "conflicts":[]}, "chapter_state": {"summary": "...", "important_changes":[], "active_entities":[], "location":"", "timeline":[]}}。
 - 【语言规范与严禁残留日文】：
   * 所有 fixes 里的 replacement（修正译文）必须是纯正、地道、通顺的完整简体中文段落！
   * 绝对严禁在 replacement 中残留任何日文假名（包括平假名、片假名，如 すぐそば、カタカナ、の、に 等）或未翻译的生造日文词汇！

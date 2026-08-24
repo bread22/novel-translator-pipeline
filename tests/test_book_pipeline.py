@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
-from translator.core.workspace import BookWorkspace
+from translator.core.workspace import BookWorkspace, write_json
 from translator.pipeline.chapter_pipeline import (
     IterativePipeline,
     newly_translated,
@@ -311,7 +312,8 @@ class PipelineFunctionTests(unittest.TestCase):
             def tool_call(*args: str) -> dict:
                 calls.append(args)
                 if args[0] == "export":
-                    Path(args[args.index("--output") + 1]).write_bytes(b"epub")
+                    with zipfile.ZipFile(Path(args[args.index("--output") + 1]), "w") as archive:
+                        archive.writestr("mimetype", "application/epub+zip")
                 return {"status": "ok", "summary": {"command": args[0]}}
 
             pipeline = IterativePipeline(
@@ -320,6 +322,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 translated_root=root / "translated", layout="preserve",
             )
             pipeline.initialize()
+            write_json(workspace.chapter_states_dir / "c1.json", {"summary": "reviewed"})
             result = pipeline.finalize()
             self.assertEqual(result["status"], "exported")
             self.assertEqual([call[0] for call in calls], ["export", "validate-epub"])
@@ -486,7 +489,7 @@ class PipelineFunctionTests(unittest.TestCase):
                         }
                     ],
                     "glossary_delta": {"add": [{"source": f"term-{cids[0]}", "target": f"词-{cids[0]}"}]},
-                    "memory_delta": {"characters": [{"name": f"char-{cids[0]}"}]},
+                    "memory_delta": {"add": [{"key": f"char-{cids[0]}", "value": "角色", "category": "character"}], "update": [], "conflicts": []},
                     "chapter_state": {"summary": f"总结-{','.join(cids)}"},
                 }
 
@@ -497,7 +500,7 @@ class PipelineFunctionTests(unittest.TestCase):
             self.assertEqual(result["checked_ids"], ["p1", "p2", "p3", "p4", "p5"])
             self.assertEqual(len(result["fixes"]), 3)  # One per chunk (chunk1: p1, chunk2: p3, chunk3: p5)
             self.assertEqual(len(result["glossary_delta"]["add"]), 3)
-            self.assertEqual(len(result["memory_delta"]["characters"]), 3)
+            self.assertEqual(len(result["memory_delta"]["add"]), 3)
             self.assertIn("总结-p1,p2", result["chapter_state"]["summary"])
             self.assertIn("总结-p5", result["chapter_state"]["summary"])
 

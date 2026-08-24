@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BookSummary(BaseModel):
@@ -98,12 +98,46 @@ class TaskStatusResponse(BaseModel):
 
 
 class GlossaryItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     source: str
     target: str
     category: str = "general"  # character, location, skill, organization, general
     confidence: float = 1.0
-    notes: str = ""
-    first_chapter: str | None = None
+    note: str = ""
+    first_seen_chunk: str | None = None
+    last_seen_chunk: str | None = None
+    occurrences: int = 0
+    sample_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_aliases(cls, raw: Any) -> Any:
+        if isinstance(raw, dict):
+            value = dict(raw)
+            value.setdefault("note", value.get("notes", ""))
+            value.setdefault("first_seen_chunk", value.get("first_chapter"))
+            return value
+        return raw
+
+
+class GlossaryUpsert(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source: str
+    target: str
+    category: str = "general"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    note: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_note(cls, raw: Any) -> Any:
+        if isinstance(raw, dict):
+            value = dict(raw)
+            value.setdefault("note", value.get("notes", ""))
+            return value
+        return raw
 
 
 class GlossaryResponse(BaseModel):
@@ -114,7 +148,7 @@ class GlossaryResponse(BaseModel):
 
 
 class GlossaryCreateRequest(BaseModel):
-    terms: list[GlossaryItem]
+    terms: list[GlossaryUpsert]
 
 
 class BookMemoryResponse(BaseModel):
@@ -197,4 +231,3 @@ class QueueClearRequest(BaseModel):
 class QueueConfigUpdateRequest(BaseModel):
     concurrency: int | None = None
     stop_on_error: bool | None = None
-

@@ -1,117 +1,369 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["checked_ids", "fixes", "glossary_delta", "memory_delta", "chapter_state"],
-  "properties": {
-    "checked_ids": {"type": "array", "items": {"type": "string"}},
-    "fixes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "category", "severity", "confidence", "reason", "replacement", "auto_apply"],
-        "properties": {
-          "id": {"type": "string"},
-          "category": {"type": "string", "enum": ["mistranslation", "subject_object", "pronoun_reference", "omission", "addition", "terminology", "factual_conflict", "context_conflict", "explicitness_intensity", "policy_violation"]},
-          "severity": {"type": "string", "enum": ["critical", "major"]},
-          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-          "reason": {"type": "string"},
-          "replacement": {"type": "string"},
-          "auto_apply": {"type": "boolean"}
-        }
-      }
-    },
-    "glossary_delta": {"$ref": "#/$defs/glossaryDelta"},
-    "memory_delta": {
-      "type": "object",
+  "$defs": {
+    "ChapterFix": {
       "additionalProperties": false,
-      "required": ["add", "update", "conflicts"],
       "properties": {
-        "add": {"$ref": "#/$defs/memoryEntries"},
-        "update": {"$ref": "#/$defs/memoryEntries"},
-        "conflicts": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["source", "existing_target", "proposed_target", "note"],
-            "properties": {
-              "source": {"type": "string"},
-              "existing_target": {"type": "string"},
-              "proposed_target": {"type": "string"},
-              "note": {"type": "string"}
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "category": {
+          "default": "context_conflict",
+          "title": "Category",
+          "type": "string"
+        },
+        "severity": {
+          "default": "major",
+          "title": "Severity",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "replacement": {
+          "default": "",
+          "title": "Replacement",
+          "type": "string"
+        },
+        "auto_apply": {
+          "default": false,
+          "title": "Auto Apply",
+          "type": "boolean"
+        },
+        "approved_translation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
             }
-          }
+          ],
+          "default": null,
+          "title": "Approved Translation"
+        },
+        "consensus": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Consensus"
+        },
+        "reporters": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reporters",
+          "type": "array"
+        },
+        "invalid_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Invalid Reason"
         }
-      }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ChapterFix",
+      "type": "object"
     },
-    "chapter_state": {
-      "type": "object",
+    "ChapterState": {
       "additionalProperties": false,
-      "required": ["summary", "important_changes", "active_entities", "location", "timeline"],
       "properties": {
-        "summary": {"type": "string"},
-        "important_changes": {"type": "array", "items": {"type": "string"}},
-        "active_entities": {"type": "array", "items": {"type": "string"}},
-        "location": {"type": "string"},
-        "timeline": {"type": "array", "items": {"type": "string"}}
-      }
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        },
+        "important_changes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Important Changes",
+          "type": "array"
+        },
+        "active_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Entities",
+          "type": "array"
+        },
+        "location": {
+          "default": "",
+          "title": "Location",
+          "type": "string"
+        },
+        "timeline": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "open_questions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Open Questions",
+          "type": "array"
+        }
+      },
+      "title": "ChapterState",
+      "type": "object"
+    },
+    "DeltaConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "existing_value": {
+          "default": "",
+          "title": "Existing Value",
+          "type": "string"
+        },
+        "proposed_value": {
+          "default": "",
+          "title": "Proposed Value",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "reporters": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reporters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "DeltaConflict",
+      "type": "object"
+    },
+    "GlossaryDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "add": {
+          "items": {
+            "$ref": "#/$defs/GlossaryEntry"
+          },
+          "title": "Add",
+          "type": "array"
+        },
+        "update": {
+          "items": {
+            "$ref": "#/$defs/GlossaryEntry"
+          },
+          "title": "Update",
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/DeltaConflict"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        }
+      },
+      "title": "GlossaryDelta",
+      "type": "object"
+    },
+    "GlossaryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        },
+        "category": {
+          "default": "other",
+          "title": "Category",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "reporters": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reporters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "title": "GlossaryEntry",
+      "type": "object"
+    },
+    "MemoryDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "add": {
+          "items": {
+            "$ref": "#/$defs/MemoryEntry"
+          },
+          "title": "Add",
+          "type": "array"
+        },
+        "update": {
+          "items": {
+            "$ref": "#/$defs/MemoryEntry"
+          },
+          "title": "Update",
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/DeltaConflict"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        }
+      },
+      "title": "MemoryDelta",
+      "type": "object"
+    },
+    "MemoryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "value": {
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "category": {
+          "default": "fact",
+          "title": "Category",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "reporters": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reporters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "title": "MemoryEntry",
+      "type": "object"
     }
   },
-  "$defs": {
-    "glossaryDelta": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["add", "update", "conflicts"],
-      "properties": {
-        "add": {"$ref": "#/$defs/glossaryEntries"},
-        "update": {"$ref": "#/$defs/glossaryEntries"},
-        "conflicts": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["key", "existing_value", "proposed_value", "note"],
-            "properties": {
-              "key": {"type": "string"},
-              "existing_value": {"type": "string"},
-              "proposed_value": {"type": "string"},
-              "note": {"type": "string"}
-            }
-          }
-        }
-      }
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
     },
-    "glossaryEntries": {
-      "type": "array",
+    "checked_ids": {
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["source", "target", "category", "note", "confidence"],
-        "properties": {
-          "source": {"type": "string"},
-          "target": {"type": "string"},
-          "category": {"type": "string", "enum": ["name", "place", "organization", "title", "object", "other"]},
-          "note": {"type": "string"},
-          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-        }
-      }
+        "type": "string"
+      },
+      "title": "Checked Ids",
+      "type": "array"
     },
-    "memoryEntries": {
-      "type": "array",
+    "fixes": {
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["key", "value", "category", "note", "confidence"],
-        "properties": {
-          "key": {"type": "string"},
-          "value": {"type": "string"},
-          "category": {"type": "string", "enum": ["character", "relationship", "alias", "fact", "state", "address", "other"]},
-          "note": {"type": "string"},
-          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        "$ref": "#/$defs/ChapterFix"
+      },
+      "title": "Fixes",
+      "type": "array"
+    },
+    "glossary_delta": {
+      "$ref": "#/$defs/GlossaryDelta"
+    },
+    "memory_delta": {
+      "$ref": "#/$defs/MemoryDelta"
+    },
+    "chapter_state": {
+      "$ref": "#/$defs/ChapterState"
+    },
+    "dual_review": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
         }
-      }
+      ],
+      "default": null,
+      "title": "Dual Review"
     }
-  }
+  },
+  "title": "Chapter Review Output v2",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

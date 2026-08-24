@@ -24,6 +24,7 @@ from translator.core.workspace import (
     write_json,
 )
 from translator.providers.registry import get_provider
+from translator.review.models import ChapterReviewOutput, GlobalReviewOutput
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,18 +95,11 @@ def missing_checked_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[
 
 
 def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ValueError("章节审阅结果必须是 JSON 对象")
-    checked = payload.get("checked_ids")
-    fixes = payload.get("fixes")
-    glossary_delta = payload.get("glossary_delta")
-    memory_delta = payload.get("memory_delta")
-    chapter_state = payload.get("chapter_state")
-    if not isinstance(checked, list) or not isinstance(fixes, list):
-        raise ValueError("章节审阅结果必须包含 checked_ids 和 fixes 数组")
-    if not isinstance(glossary_delta, dict) or not isinstance(memory_delta, dict) or not isinstance(chapter_state, dict):
-        raise ValueError("章节审阅结果必须包含 glossary_delta、memory_delta 和 chapter_state 对象")
-    raw_checked_ids = [str(item) for item in checked]
+    try:
+        normalized = ChapterReviewOutput.model_validate(payload).model_dump(exclude_none=True)
+    except Exception as exc:
+        raise ValueError(f"章节审阅结果未通过完整 Schema 校验：{exc}") from exc
+    raw_checked_ids = [str(item) for item in normalized["checked_ids"]]
     # Filter checked_ids to expected IDs and deduplicate preserving order
     seen = set()
     checked_ids = []
@@ -113,11 +107,11 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
         if cid in expected_ids and cid not in seen:
             seen.add(cid)
             checked_ids.append(cid)
-    payload["checked_ids"] = checked_ids
+    normalized["checked_ids"] = checked_ids
     
     # Filter fixes to only valid expected IDs and sanitize Japanese kana hallucinations
     sanitized_fixes = []
-    for item in fixes:
+    for item in normalized["fixes"]:
         if not isinstance(item, dict) or str(item.get("id", "")) not in expected_ids:
             continue
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
@@ -126,19 +120,21 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
             item["confidence"] = min(float(item.get("confidence", 0) or 0), 0.3)
             item["invalid_reason"] = "修正译文中残留未翻译日文假名，已拦截并禁用自动写回"
         sanitized_fixes.append(item)
-    payload["fixes"] = sanitized_fixes
+    normalized["fixes"] = sanitized_fixes
 
     received = set(checked_ids)
     missing = sorted(expected_ids - received)
     if missing:
         raise ValueError(f"章节审阅结果段落不匹配；checked_ids 缺少 ID：{', '.join(missing)}")
-    return payload
+    return ChapterReviewOutput.model_validate(normalized).model_dump(exclude_none=True)
 
 
 def validate_global_consistency_payload(payload: dict[str, Any], expected_chapter_ids: set[str]) -> dict[str, Any]:
-    if not isinstance(payload, dict) or not isinstance(payload.get("checked_chapters"), list):
-        raise ValueError("全书一致性结果必须包含 checked_chapters 数组")
-    checked = [str(item) for item in payload["checked_chapters"]]
+    try:
+        normalized = GlobalReviewOutput.model_validate(payload).model_dump(exclude_none=True)
+    except Exception as exc:
+        raise ValueError(f"全书一致性结果未通过完整 Schema 校验：{exc}") from exc
+    checked = [str(item) for item in normalized["checked_chapters"]]
     if len(checked) != len(set(checked)):
         raise ValueError("全书一致性结果包含重复章节 ID")
     unknown = sorted(set(checked) - expected_chapter_ids)
@@ -150,9 +146,7 @@ def validate_global_consistency_payload(payload: dict[str, Any], expected_chapte
         if missing:
             details.append(f"缺少章节 ID：{', '.join(missing)}")
         raise ValueError("全书一致性结果覆盖范围不匹配；" + "；".join(details))
-    if not isinstance(payload.get("conflicts"), list) or not isinstance(payload.get("recommendations"), list):
-        raise ValueError("全书一致性结果必须包含 conflicts 和 recommendations 数组")
-    return payload
+    return normalized
 
 
 def verify_applied_fixes(manifest: dict[str, Any], fixes: list[dict[str, Any]]) -> None:
@@ -204,7 +198,72 @@ def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str
         return {"name": f"reviewer:{selected}", "status": "error", "error": str(exc)}
 
 
+def _normalized_review(payload: dict[str, Any]) -> dict[str, Any]:
+    return ChapterReviewOutput.model_validate(payload).model_dump(exclude_none=True)
+
+
+def _merge_delta(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    identity_key: str,
+    left_reporter: str | None = None,
+    right_reporter: str | None = None,
+    prefer_right: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {"add": [], "update": [], "conflicts": []}
+    for section in ("add", "update", "conflicts"):
+        by_identity: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for items, reporter, is_right in (
+            (left.get(section, []) or [], left_reporter, False),
+            (right.get(section, []) or [], right_reporter, True),
+        ):
+            for raw in items:
+                if not isinstance(raw, dict):
+                    continue
+                item = dict(raw)
+                identity = str(item.get(identity_key) or item.get("key") or json.dumps(item, ensure_ascii=False, sort_keys=True)).strip()
+                if not identity:
+                    continue
+                reporters = list(item.get("reporters", []) or [])
+                if reporter and reporter not in reporters:
+                    reporters.append(reporter)
+                item["reporters"] = reporters
+                if identity not in by_identity:
+                    by_identity[identity] = item
+                    order.append(identity)
+                    continue
+                existing = by_identity[identity]
+                existing_reporters = list(existing.get("reporters", []) or [])
+                for name in reporters:
+                    if name not in existing_reporters:
+                        existing_reporters.append(name)
+                if (prefer_right and is_right) or float(item.get("confidence", 0) or 0) > float(existing.get("confidence", 0) or 0):
+                    item["reporters"] = existing_reporters
+                    by_identity[identity] = item
+                else:
+                    existing["reporters"] = existing_reporters
+        result[section] = [by_identity[identity] for identity in order]
+    return result
+
+
+def _merge_chapter_state(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    summaries = [str(value.get("summary", "")).strip() for value in (left, right)]
+    merged = {
+        "summary": "\n".join(item for item in summaries if item),
+        "important_changes": list(dict.fromkeys((left.get("important_changes", []) or []) + (right.get("important_changes", []) or []))),
+        "active_entities": list(dict.fromkeys((left.get("active_entities", []) or []) + (right.get("active_entities", []) or []))),
+        "location": str(right.get("location") or left.get("location") or ""),
+        "timeline": list(dict.fromkeys((left.get("timeline", []) or []) + (right.get("timeline", []) or []))),
+        "open_questions": list(dict.fromkeys((left.get("open_questions", []) or []) + (right.get("open_questions", []) or []))),
+    }
+    return merged
+
+
 def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict[str, Any]) -> dict[str, Any]:
+    primary_review = _normalized_review(primary_review)
+    secondary_review = _normalized_review(secondary_review)
     checked_a = primary_review.get("checked_ids", []) or []
     checked_b = secondary_review.get("checked_ids", []) or []
     merged_checked = sorted(set(checked_a) | set(checked_b))
@@ -248,29 +307,20 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
             item["reporters"] = ["secondary"]
             merged_fixes.append(item)
 
-    gloss_a = primary_review.get("glossary_delta", {}) or {}
-    gloss_b = secondary_review.get("glossary_delta", {}) or {}
-    add_a = gloss_a.get("add", []) if isinstance(gloss_a, dict) else []
-    add_b = gloss_b.get("add", []) if isinstance(gloss_b, dict) else []
-    seen_sources = set()
-    merged_add = []
-    for item in add_a + add_b:
-        if isinstance(item, dict) and item.get("source"):
-            src = str(item["source"]).strip()
-            if src not in seen_sources:
-                seen_sources.add(src)
-                merged_add.append(item)
-    merged_glossary_delta = {"add": merged_add}
-
-    mem_a = primary_review.get("memory_delta", {}) or {}
-    mem_b = secondary_review.get("memory_delta", {}) or {}
-    merged_memory = {**mem_b, **mem_a}
+    merged_glossary_delta = _merge_delta(
+        primary_review["glossary_delta"], secondary_review["glossary_delta"],
+        identity_key="source", left_reporter="primary", right_reporter="secondary",
+    )
+    merged_memory = _merge_delta(
+        primary_review["memory_delta"], secondary_review["memory_delta"],
+        identity_key="key", left_reporter="primary", right_reporter="secondary",
+    )
 
     state_a = primary_review.get("chapter_state", {}) or {}
     state_b = secondary_review.get("chapter_state", {}) or {}
-    merged_state = {**state_b, **state_a}
+    merged_state = _merge_chapter_state(state_a, state_b)
 
-    return {
+    return _normalized_review({
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
         "glossary_delta": merged_glossary_delta,
@@ -283,7 +333,7 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
             "consensus_fixes_count": sum(1 for f in merged_fixes if f.get("consensus")),
             "merged_fixes_count": len(merged_fixes),
         },
-    }
+    })
 
 
 REVIEW_CHUNK_MAX_PARAGRAPHS = 200
@@ -320,46 +370,36 @@ def _execute_review_with_fallbacks(
 def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str, Any]) -> dict[str, Any]:
     """Forward newly extracted terms, character memory, and narrative state to subsequent chunks."""
     rolling = dict(base_payload)
+    chunk_review = _normalized_review(chunk_review)
 
     # 1. Forward Glossary
     current_glossary = list(rolling.get("glossary", []))
-    new_terms = chunk_review.get("glossary_delta", {}).get("add", [])
-    seen_sources = {str(t.get("source", "")).strip() for t in current_glossary if isinstance(t, dict)}
-    for term in new_terms:
+    term_index = {str(term.get("source", "")).strip(): index for index, term in enumerate(current_glossary) if isinstance(term, dict)}
+    for term in chunk_review["glossary_delta"]["add"] + chunk_review["glossary_delta"]["update"]:
         if isinstance(term, dict) and term.get("source"):
             src = str(term["source"]).strip()
-            if src and src not in seen_sources:
-                seen_sources.add(src)
+            if src in term_index:
+                current_glossary[term_index[src]] = {**current_glossary[term_index[src]], **term}
+            elif src:
+                term_index[src] = len(current_glossary)
                 current_glossary.append(term)
     rolling["glossary"] = current_glossary
 
     # 2. Forward Book Memory
     current_memory = dict(rolling.get("book_memory", {}))
     mem_delta = chunk_review.get("memory_delta", {})
-    if isinstance(mem_delta, dict) and mem_delta:
-        merged_chars = {c.get("name"): c for c in current_memory.get("characters", []) if isinstance(c, dict) and c.get("name")}
-        for c in mem_delta.get("characters", []):
-            if isinstance(c, dict) and c.get("name"):
-                merged_chars[c["name"]] = c
-        current_memory["characters"] = list(merged_chars.values())
-
-        merged_ws = {w.get("term"): w for w in current_memory.get("world_settings", []) if isinstance(w, dict) and w.get("term")}
-        for w in mem_delta.get("world_settings", []):
-            if isinstance(w, dict) and w.get("term"):
-                merged_ws[w["term"]] = w
-        current_memory["world_settings"] = list(merged_ws.values())
-
-        merged_hints = list(current_memory.get("plot_hints", []))
-        for h in mem_delta.get("plot_hints", []):
-            if h not in merged_hints:
-                merged_hints.append(h)
-        current_memory["plot_hints"] = merged_hints
-
-        merged_entries = {e.get("key"): e for e in current_memory.get("entries", []) if isinstance(e, dict) and e.get("key")}
-        for e in mem_delta.get("entries", []):
-            if isinstance(e, dict) and e.get("key"):
-                merged_entries[e["key"]] = e
+    if isinstance(mem_delta, dict):
+        merged_entries = {entry.get("key"): entry for entry in current_memory.get("entries", []) if isinstance(entry, dict) and entry.get("key")}
+        for entry in mem_delta.get("add", []) + mem_delta.get("update", []):
+            if isinstance(entry, dict) and entry.get("key"):
+                existing = merged_entries.get(entry["key"], {})
+                merged_entries[entry["key"]] = {**existing, **entry}
         current_memory["entries"] = list(merged_entries.values())
+        conflicts = list(current_memory.get("conflicts", []))
+        for conflict in mem_delta.get("conflicts", []):
+            if conflict not in conflicts:
+                conflicts.append(conflict)
+        current_memory["conflicts"] = conflicts
         rolling["book_memory"] = current_memory
 
     # 3. Forward Chapter State (Narrative summary of immediate preceding chunk)
@@ -372,6 +412,8 @@ def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str
 
 def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> dict[str, Any]:
     """Combine two sequential chunk reviews into a unified review structure."""
+    chunk_a = _normalized_review(chunk_a)
+    chunk_b = _normalized_review(chunk_b)
     # Checked IDs concatenated preserving order
     seen_ids = set()
     merged_checked = []
@@ -383,59 +425,19 @@ def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> 
     # Fixes concatenated
     merged_fixes = (chunk_a.get("fixes", []) or []) + (chunk_b.get("fixes", []) or [])
 
-    # Glossary Delta deduplication
-    gloss_a = chunk_a.get("glossary_delta", {}) or {}
-    gloss_b = chunk_b.get("glossary_delta", {}) or {}
-    add_a = gloss_a.get("add", []) if isinstance(gloss_a, dict) else []
-    add_b = gloss_b.get("add", []) if isinstance(gloss_b, dict) else []
-    seen_sources = set()
-    merged_add = []
-    for item in add_a + add_b:
-        if isinstance(item, dict) and item.get("source"):
-            src = str(item["source"]).strip()
-            if src not in seen_sources:
-                seen_sources.add(src)
-                merged_add.append(item)
-    merged_glossary_delta = {"add": merged_add}
-
-    # Memory Delta merger
-    mem_a = chunk_a.get("memory_delta", {}) or {}
-    mem_b = chunk_b.get("memory_delta", {}) or {}
-    merged_memory = {**mem_b, **mem_a}
-    if isinstance(mem_a, dict) and isinstance(mem_b, dict):
-        for key in ["characters", "world_settings", "plot_hints", "entries"]:
-            list_a = mem_a.get(key, []) if isinstance(mem_a.get(key), list) else []
-            list_b = mem_b.get(key, []) if isinstance(mem_b.get(key), list) else []
-            if list_a or list_b:
-                merged_memory[key] = list_a + list_b
+    merged_glossary_delta = _merge_delta(chunk_a["glossary_delta"], chunk_b["glossary_delta"], identity_key="source", prefer_right=True)
+    merged_memory = _merge_delta(chunk_a["memory_delta"], chunk_b["memory_delta"], identity_key="key", prefer_right=True)
 
     # Chapter State synthesis
-    state_a = chunk_a.get("chapter_state", {}) or {}
-    state_b = chunk_b.get("chapter_state", {}) or {}
-    summary_a = str(state_a.get("summary", "")).strip()
-    summary_b = str(state_b.get("summary", "")).strip()
-    if summary_a and summary_b:
-        merged_summary = f"{summary_a}\n{summary_b}"
-    else:
-        merged_summary = summary_b or summary_a
+    merged_state = _merge_chapter_state(chunk_a["chapter_state"], chunk_b["chapter_state"])
 
-    merged_entities = sorted(set((state_a.get("active_entities", []) or []) + (state_b.get("active_entities", []) or [])))
-    merged_changes = (state_a.get("important_changes", []) or []) + (state_b.get("important_changes", []) or [])
-
-    merged_state = {
-        "summary": merged_summary,
-        "active_entities": merged_entities,
-        "important_changes": merged_changes,
-        "open_questions": (state_a.get("open_questions", []) or []) + (state_b.get("open_questions", []) or []),
-    }
-
-    return {
+    return _normalized_review({
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
         "glossary_delta": merged_glossary_delta,
         "memory_delta": merged_memory,
         "chapter_state": merged_state,
-    }
+    })
 
 
 def _execute_single_segment_review(
@@ -489,13 +491,13 @@ def _execute_segment_with_adaptive_split(
 ) -> dict[str, Any]:
     """Execute review for items. If failure occurs and len(items) > 1, recursively binary split."""
     if not items:
-        return {
+        return _normalized_review({
             "checked_ids": [],
             "fixes": [],
-            "glossary_delta": {"add": []},
-            "memory_delta": {},
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
             "chapter_state": base_payload.get("previous_chapter_state") or {},
-        }
+        })
 
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
@@ -617,7 +619,7 @@ def run_chapter_review(
         for next_res in chunk_results[1:]:
             merged_payload = _combine_chunk_reviews(merged_payload, next_res)
 
-    validate_chapter_review_payload(merged_payload, expected_ids)
+    merged_payload = validate_chapter_review_payload(merged_payload, expected_ids)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -628,6 +630,8 @@ def run_global_consistency_review(input_path: Path, output_path: Path, *, backen
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
     payload = _execute_review_with_fallbacks("global", input_payload, GLOBAL_SCHEMA, autonomous=False, backend=backend)
+    expected_chapters = {str(item.get("chapter_id", "")) for item in input_payload.get("chapters", []) if isinstance(item, dict) and item.get("chapter_id")}
+    payload = validate_global_consistency_payload(payload, expected_chapters)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -813,4 +817,3 @@ cli_main = main
 
 if __name__ == "__main__":
     sys.exit(main())
-

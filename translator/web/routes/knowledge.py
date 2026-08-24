@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,16 +37,7 @@ def get_glossary(book_id: str) -> GlossaryResponse:
 
     items = []
     for t in glossary_data.get("terms", []):
-        items.append(
-            GlossaryItem(
-                source=t.get("source", ""),
-                target=t.get("target", ""),
-                category=t.get("category", "general"),
-                confidence=float(t.get("confidence", 1.0)),
-                notes=t.get("notes", ""),
-                first_chapter=t.get("first_chapter"),
-            )
-        )
+        items.append(GlossaryItem.model_validate(t))
 
     return GlossaryResponse(
         book_id=book_id,
@@ -60,13 +52,28 @@ def update_glossary(book_id: str, request: GlossaryCreateRequest) -> GlossaryRes
     workspace = get_workspace_for_book(book_id)
     glossary_data = read_json(workspace.glossary_path, default={"terms": [], "conflicts": []})
 
-    existing_terms = {t.get("source"): t for t in glossary_data.get("terms", [])}
+    existing_terms = {str(t.get("source", "")): dict(t) for t in glossary_data.get("terms", []) if isinstance(t, dict) and t.get("source")}
     for item in request.terms:
-        existing_terms[item.source] = item.model_dump()
+        current = existing_terms.get(item.source, {})
+        existing_terms[item.source] = {**current, **item.model_dump()}
 
     glossary_data["terms"] = list(existing_terms.values())
+    glossary_data["updated_at"] = utc_now()
     write_json(workspace.glossary_path, glossary_data)
 
+    return get_glossary(book_id)
+
+
+@router.delete("/{book_id}/glossary/{source}", response_model=GlossaryResponse)
+def delete_glossary_term(book_id: str, source: str) -> GlossaryResponse:
+    workspace = get_workspace_for_book(book_id)
+    glossary_data = read_json(workspace.glossary_path, default={"terms": [], "conflicts": []})
+    before = len(glossary_data.get("terms", []))
+    glossary_data["terms"] = [term for term in glossary_data.get("terms", []) if str(term.get("source", "")) != source]
+    if len(glossary_data["terms"]) == before:
+        raise HTTPException(status_code=404, detail=f"未找到术语: {source}")
+    glossary_data["updated_at"] = utc_now()
+    write_json(workspace.glossary_path, glossary_data)
     return get_glossary(book_id)
 
 
@@ -158,15 +165,20 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
         if not fixes and approved.get("items"):
             fixes = approved.get("items", [])
 
+        reviewed_at = rep.get("reviewed_at")
+        if not reviewed_at:
+            evidence_path = report_files.get(ch_id) or review_output_files.get(ch_id) or state_files.get(ch_id)
+            reviewed_at = datetime.fromtimestamp(evidence_path.stat().st_mtime, timezone.utc).isoformat() if evidence_path and evidence_path.exists() else None
         reports.append({
+            "schema_version": "2.0",
             "chapter_id": ch_id,
-            "reviewed_at": rep.get("reviewed_at") or utc_now(),
+            "reviewed_at": reviewed_at,
             "checked_paragraphs": rep.get("checked_paragraphs") or len(rev.get("checked_ids", [])),
             "reported_issues": len(fixes),
             "applied_fixes": rep.get("applied_fixes") or len([f for f in fixes if f.get("auto_apply")]),
             "fixes": fixes,
-            "glossary_delta": rev.get("glossary_delta", {}).get("add", []),
-            "memory_delta": rev.get("memory_delta", {}).get("add", []),
+            "glossary_delta": rev.get("glossary_delta", {"add": [], "update": [], "conflicts": []}),
+            "memory_delta": rev.get("memory_delta", {"add": [], "update": [], "conflicts": []}),
             "chapter_state": st or rev.get("chapter_state", {}),
             "dual_review": rev.get("dual_review", {}),
         })
@@ -205,4 +217,3 @@ def get_chapter_review(book_id: str, chapter_id: str) -> dict[str, Any]:
         "fixes": fixes,
         "chapter_state": state_data or (output_data.get("chapter_state") if output_data else {}),
     }
-

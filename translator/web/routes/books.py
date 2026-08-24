@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import shutil
 import tempfile
 from typing import Any
+import uuid
 import zipfile
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -246,7 +248,7 @@ def get_chapter_detail(book_id: str, chapter_id: str) -> ChapterDetail:
         source = str(p.get("source", ""))
         trans = str(p.get("translated", ""))
 
-        prov_info = provenance.get(pid, {})
+        prov_info = provenance.get("items", provenance).get(pid, {})
         provider = prov_info.get("provider")
         fallback_from = prov_info.get("fallback_from")
         fallback_reason = prov_info.get("reason")
@@ -331,7 +333,7 @@ def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horiz
     workspace.initialize(book_id=book_id)
 
     # Call novel-translator export
-    call_novel_translator(
+    exported = call_novel_translator(
         "export",
         "--book",
         book_id,
@@ -341,21 +343,39 @@ def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horiz
         str(workspace.epub_path),
         "--monolingual",
     )
+    if exported.get("status") not in {"ok", "success", "exported"}:
+        raise HTTPException(status_code=502, detail=f"EPUB export payload 未通过：{exported}")
+    if not workspace.epub_path.is_file() or workspace.epub_path.stat().st_size == 0 or not zipfile.is_zipfile(workspace.epub_path):
+        raise HTTPException(status_code=502, detail="EPUB export 产物无效")
+    validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
+    if validated.get("status") not in {"ok", "success", "valid"}:
+        raise HTTPException(status_code=502, detail=f"EPUB validate payload 未通过：{validated}")
 
     if layout == "horizontal":
         apply_horizontal_layout(workspace.epub_path)
+        validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
+        if validated.get("status") not in {"ok", "success", "valid"}:
+            raise HTTPException(status_code=502, detail=f"横排 EPUB 二次 validate payload 未通过：{validated}")
 
     # Copy to translated/ root directory
     translated_dir = Path("translated").resolve()
     translated_dir.mkdir(parents=True, exist_ok=True)
     target_epub = translated_dir / workspace.epub_path.name
-    shutil.copy2(workspace.epub_path, target_epub)
+    temporary_target = translated_dir / f".{target_epub.name}.{uuid.uuid4().hex}.tmp"
+    shutil.copy2(workspace.epub_path, temporary_target)
+    source_hash = hashlib.sha256(workspace.epub_path.read_bytes()).hexdigest()
+    copied_hash = hashlib.sha256(temporary_target.read_bytes()).hexdigest()
+    if source_hash != copied_hash:
+        temporary_target.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="EPUB 临时交付副本 hash 不一致")
+    temporary_target.replace(target_epub)
 
     return {
         "status": "exported",
         "layout": layout,
         "epub_path": str(workspace.epub_path),
         "download_url": f"/api/v1/books/{book_id}/download",
+        "sha256": source_hash,
     }
 
 

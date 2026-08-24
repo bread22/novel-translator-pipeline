@@ -93,8 +93,11 @@ export interface GlossaryItem {
   target: string;
   category: string;
   confidence: number;
-  notes?: string;
-  first_chapter?: string | null;
+  note?: string;
+  first_seen_chunk?: string | null;
+  last_seen_chunk?: string | null;
+  occurrences?: number;
+  sample_ids?: string[];
 }
 
 export interface GlossaryResponse {
@@ -134,8 +137,9 @@ export interface BookMemoryResponse {
 }
 
 export interface ChapterReviewReport {
+  schema_version?: string;
   chapter_id: string;
-  reviewed_at: string;
+  reviewed_at: string | null;
   checked_paragraphs: number;
   reported_issues: number;
   applied_fixes: number;
@@ -149,20 +153,28 @@ export interface ChapterReviewReport {
     auto_apply?: boolean;
     invalid_reason?: string;
   }>;
-  glossary_delta: Array<{
-    source: string;
-    target: string;
-    category?: string;
-    note?: string;
-    confidence?: number;
-  }>;
-  memory_delta: Array<{
-    key?: string;
-    value?: string;
-    category?: string;
-    note?: string;
-    confidence?: number;
-  }>;
+  glossary_delta: {
+    add: Array<{
+      source: string;
+      target: string;
+      category?: string;
+      note?: string;
+      confidence?: number;
+    }>;
+    update: Array<{
+      source: string;
+      target: string;
+      category?: string;
+      note?: string;
+      confidence?: number;
+    }>;
+    conflicts: Array<Record<string, unknown>>;
+  };
+  memory_delta: {
+    add: Array<Record<string, unknown>>;
+    update: Array<Record<string, unknown>>;
+    conflicts: Array<Record<string, unknown>>;
+  };
   chapter_state?: {
     chapter_id?: string;
     title?: string;
@@ -286,5 +298,3 @@ export interface EnqueueRequest {
   options?: PipelineStartRequest;
   insert_front?: boolean;
 }
-
-

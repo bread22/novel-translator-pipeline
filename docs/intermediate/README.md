@@ -18,6 +18,7 @@
 | **08** | [翻译任务队列系统设计规范与实施计划 (Queue Spec & Plan)](08-queue-system-plan-and-spec.md) | 多书队列调度、动态并发槽位、优先级拖拽排队、状态持久化与 Web/CLI 联动 | 已落地 |
 | **09** | [实施进度看板与里程碑记录](09-progress-milestones.md) | 各 Component 阶段进度与里程碑看板追踪 | 持续更新 |
 | **10** | [独立出版杂志 (Editorial Mag) 视觉设计范式规范](10-editorial-magazine-ui-paradigm.md) | **【最新】** 出版暖纸色 `#FAF9F6`、Noto Serif 衬线字体、皇家宝蓝与组件设计系统 | 已落地 |
+| **11** | [v0.2 全面整改与阶段性交付计划](11-v0.2-comprehensive-remediation-plan.md) | 安全、任务引擎、Fallback、审阅记忆、前端、交付、CI 与版本治理的执行记录；正式发布暂缓 | 已执行 |
 
 ---
 
@@ -25,5 +26,6 @@
 
 - **视觉设计系统规范**：详见 [10-editorial-magazine-ui-paradigm.md](10-editorial-magazine-ui-paradigm.md)
 - **队列调度系统规范**：详见 [08-queue-system-plan-and-spec.md](08-queue-system-plan-and-spec.md)
+- **v0.2 全面整改计划**：详见 [11-v0.2-comprehensive-remediation-plan.md](11-v0.2-comprehensive-remediation-plan.md)
 - **Web 端架构与接口契约**：详见 [04-web-studio-prd-specs.md](04-web-studio-prd-specs.md) 与 [01-architecture-overview.md](01-architecture-overview.md)
 - **容灾与审阅机制**：详见 [02-provider-fallback-spec.md](02-provider-fallback-spec.md) 与 [03-chapter-review-plan.md](03-chapter-review-plan.md)

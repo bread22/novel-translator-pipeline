@@ -155,7 +155,7 @@ export const App: React.FC = () => {
   const currentStreamEvents = (selectedBookId && eventsByBook[selectedBookId]) || [];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen bg-[#FAF9F6] text-[#1A1A1A] flex flex-col selection:bg-[#1D4ED8] selection:text-white font-sans">
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}

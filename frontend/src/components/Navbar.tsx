@@ -28,42 +28,45 @@ export const Navbar: React.FC<NavbarProps> = ({
   const isTaskRunning = (activeTask && activeTask.status === 'running') || isQueueRunning;
 
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/85 backdrop-blur-md px-6 py-3">
+    <header className="sticky top-0 z-50 border-b border-[#E5E0D8] bg-[#FAF9F6]/95 backdrop-blur-md px-6 py-3">
       <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
-        {/* Logo & Title */}
+        
+        {/* Editorial Masthead & Branding */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 text-white font-bold text-lg">
+          <div className="w-9 h-9 rounded-sm bg-[#1A1A1A] text-white flex items-center justify-center font-serif font-black text-base shadow-sm">
             NT
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold tracking-tight text-slate-100 text-lg">Novel Translator Studio</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700/50 text-indigo-300 font-mono font-medium">
-                v1.0 AI
+              <span className="font-serif font-bold tracking-tight text-[#1A1A1A] text-lg">
+                Novel Translator Studio
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 border border-[#1A1A1A] bg-white text-[#1A1A1A] font-serif italic">
+                EDITION · 2026
               </span>
             </div>
-            <p className="text-xs text-slate-400">全自动小说翻译与长程一致性审阅工作台</p>
+            <p className="text-xs text-[#666666] font-sans">全自动日文小说翻译与长程一致性审阅工坊</p>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <nav className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800/80">
+        {/* Navigation Tabs (Editorial Paper Tab Bar) */}
+        <nav className="flex items-center gap-1 bg-[#F2EFE9] p-1 rounded-sm border border-[#E5E0D8]">
           <button
             onClick={() => onSelectTab('queue')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all relative ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all relative cursor-pointer ${
               currentTab === 'queue' || currentTab === 'library'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
+                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
             }`}
           >
-            <Layers className="w-4 h-4" />
-            任务调度
+            <Layers className="w-3.5 h-3.5" />
+            <span>任务调度</span>
             {queueCount > 0 && (
               <span
-                className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold leading-none ${
+                className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold leading-none ${
                   isQueueRunning
-                    ? 'bg-emerald-500 text-white shadow-sm animate-pulse'
-                    : 'bg-slate-800 text-indigo-300 border border-slate-700'
+                    ? 'bg-emerald-600 text-white animate-pulse'
+                    : currentTab === 'queue' ? 'bg-white text-[#1D4ED8]' : 'bg-[#E5E0D8] text-[#1A1A1A]'
                 }`}
               >
                 {queueCount}
@@ -73,14 +76,14 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onSelectTab('studio')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all relative ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all relative cursor-pointer ${
               currentTab === 'studio'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
+                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
             }`}
           >
-            <Activity className="w-4 h-4" />
-            翻译控制台
+            <Activity className="w-3.5 h-3.5" />
+            <span>翻译控制台</span>
             {isTaskRunning && (
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute top-1 right-1" />
             )}
@@ -88,38 +91,38 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onSelectTab('reader')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
               currentTab === 'reader'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
+                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
             }`}
           >
-            <Compass className="w-4 h-4" />
-            双语阅读器
+            <Compass className="w-3.5 h-3.5" />
+            <span>双语阅读器</span>
           </button>
 
           <button
             onClick={() => onSelectTab('knowledge')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
               currentTab === 'knowledge'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
+                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
             }`}
           >
-            <BookMarked className="w-4 h-4" />
-            记忆与术语库
+            <BookMarked className="w-3.5 h-3.5" />
+            <span>记忆与术语库</span>
           </button>
 
           <button
             onClick={() => onSelectTab('settings')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
               currentTab === 'settings'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
+                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
             }`}
           >
-            <Cpu className="w-4 h-4" />
-            模型路由与预检
+            <Cpu className="w-3.5 h-3.5" />
+            <span>模型路由与预检</span>
           </button>
         </nav>
 
@@ -131,7 +134,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <select
                 value={selectedBookId || ''}
                 onChange={(e) => onSelectBookId(e.target.value)}
-                className="bg-slate-900 border border-slate-700/70 text-slate-200 text-xs rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-indigo-500 appearance-none font-medium max-w-[200px] truncate"
+                className="bg-white border border-[#E5E0D8] text-[#1A1A1A] text-xs rounded-sm px-3 py-1.5 pr-8 focus:outline-none focus:border-[#1D4ED8] appearance-none font-medium max-w-[200px] truncate shadow-sm cursor-pointer"
               >
                 {books.map((b) => (
                   <option key={b.id} value={b.id}>
@@ -144,19 +147,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* SSE Live Pulse Indicator */}
           <div
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-mono font-medium border ${
               sseConnected
-                ? 'bg-emerald-950/60 border-emerald-800/60 text-emerald-400'
-                : 'bg-rose-950/60 border-rose-800/60 text-rose-400'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                : 'bg-rose-50 border-rose-300 text-rose-800'
             }`}
-            title={sseConnected ? 'SSE 实时推送已连接' : 'SSE 连接断开，尝试重连中'}
+            title={sseConnected ? 'SSE 实时流水线连接正常' : 'SSE 连接断开，正在尝试重连'}
           >
-            <Radio className={`w-3 h-3 ${sseConnected ? 'animate-pulse text-emerald-400' : 'text-rose-400'}`} />
+            <Radio className={`w-3 h-3 ${sseConnected ? 'animate-pulse text-emerald-600' : 'text-rose-600'}`} />
             <span>{sseConnected ? 'LIVE' : 'OFFLINE'}</span>
           </div>
         </div>
+
       </div>
     </header>
   );
 };
-

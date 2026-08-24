@@ -4,7 +4,6 @@ import {
   Play,
   Pause,
   RotateCcw,
-  Trash2,
   ArrowUp,
   ArrowDown,
   ArrowUpToLine,
@@ -13,16 +12,9 @@ import {
   Clock,
   AlertCircle,
   X,
-  Sparkles,
   BookOpen,
   Search,
-  Download,
-  Share2,
-  Layers,
-  Cpu,
-  RefreshCw,
   Plus,
-  Compass,
   FileText,
   Zap,
 } from 'lucide-react';
@@ -57,7 +49,6 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
   // Right Pane: Drag & Drop State
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [isUpdatingQueue, setIsUpdatingQueue] = useState(false);
 
   const pendingItems = queueStatus?.items.filter((i) => i.status === 'pending') || [];
   const runningItems = queueStatus?.items.filter((i) => i.status === 'running') || [];
@@ -89,7 +80,6 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
       const newBook = await api.uploadBook(file);
       setUploadMessage(`"${newBook.name}" 导入成功！已加入书籍库。`);
       await onRefreshBooks();
-      // Auto enqueue option
       await api.enqueueBooks({ book_ids: [newBook.id] });
       await onRefreshQueue();
     } catch (err: any) {
@@ -199,13 +189,11 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
       return;
     }
 
-    // Optimistic reorder
     const newPending = [...pendingItems];
     const [movedItem] = newPending.splice(currentIndex, 1);
     newPending.splice(targetIndex, 0, movedItem);
 
     setDraggedItemId(null);
-    setIsUpdatingQueue(true);
 
     try {
       const newIds = newPending.map((i) => i.id);
@@ -214,8 +202,6 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
     } catch (err: any) {
       console.error('Reorder queue failed:', err);
       await onRefreshQueue();
-    } finally {
-      setIsUpdatingQueue(false);
     }
   };
 
@@ -258,7 +244,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
     }
   };
 
-  // Book Actions (Reset, Delete, Export)
+  // Book Actions
   const handleResetBook = async (bookId: string, bookName: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`确定要重置《${bookName}》的翻译进度吗？\n\n注意：这会清空已翻译的段落文本并重置所有提取的长程记忆，从头开始重新翻译。`)) {
@@ -312,26 +298,26 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
   return (
     <div className="space-y-6 max-w-[1600px] mx-auto pb-16">
-      {/* Upload Drop Zone Banner */}
+      
+      {/* Upload Drop Zone Banner (Editorial Publication Desk) */}
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
-        className="relative overflow-hidden rounded-2xl border border-indigo-900/50 bg-gradient-to-br from-indigo-950/40 via-slate-900/80 to-slate-950 p-6 shadow-xl backdrop-blur-sm"
+        className="bg-white border border-[#E5E0D8] rounded-sm p-6 shadow-sm"
       >
-        <div className="absolute -right-12 -top-12 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="space-y-1.5 text-center md:text-left">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-900/60 border border-indigo-700/50 text-indigo-300 text-xs font-medium">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              任务调度工作台 · 多书籍批量队列
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="space-y-1 text-center md:text-left">
+            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 border border-[#1A1A1A] bg-white text-[#1A1A1A] text-[11px] font-serif italic">
+              MANUSCRIPT INTAKE · 稿件排版与排队中心
             </div>
-            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-white">
-              小说批量翻译与队列调度
+            <h1 className="text-xl md:text-2xl font-serif font-bold tracking-tight text-[#1A1A1A]">
+              日文小说批量翻译与队列调度
             </h1>
-            <p className="text-slate-400 text-xs max-w-2xl">
-              支持多书籍批量排队、自由拖拽调整执行次序、动态并发槽位与断点续译。
+            <p className="text-[#666666] text-xs font-sans max-w-2xl">
+              支持多书籍批量排队、自由拖拽调整执行次序、动态并发槽位与断点自愈。
             </p>
           </div>
+
           <div className="flex items-center gap-3">
             <input
               type="file"
@@ -347,7 +333,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white font-semibold text-xs shadow-sm transition-all cursor-pointer rounded-sm disabled:opacity-50"
             >
               <UploadCloud className="w-4 h-4" />
               {isUploading ? '正在上传解析...' : '上传并加入队列'}
@@ -355,227 +341,219 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
             <button
               onClick={handleEnqueueAllPending}
-              className="flex items-center gap-1.5 px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700/60 transition-all cursor-pointer"
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-white hover:bg-[#FAF9F6] text-[#1A1A1A] text-xs font-medium border border-[#E5E0D8] transition-all cursor-pointer rounded-sm shadow-sm"
               title="将书库中所有未完结书籍一键添加至队列尾部"
             >
-              <Zap className="w-4 h-4 text-amber-400" />
+              <Zap className="w-4 h-4 text-amber-600" />
               全部未完结入队
             </button>
           </div>
         </div>
 
         {uploadMessage && (
-          <div className="mt-3 p-2.5 rounded-lg bg-indigo-900/50 border border-indigo-700 text-indigo-200 text-xs flex items-center gap-2 animate-fade-in">
-            <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
-            {uploadMessage}
+          <div className="mt-4 p-3 bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D4ED8] text-xs flex items-center gap-2 rounded-sm">
+            <FileText className="w-4 h-4 shrink-0" />
+            <span>{uploadMessage}</span>
           </div>
         )}
       </div>
 
-      {/* Dual-Pane Layout: Left = Book Pool (45%), Right = Execution Queue (55%) */}
+      {/* Dual-Pane Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        
         {/* ================= LEFT PANE: Book Pool (5 cols) ================= */}
         <div className="lg:col-span-5 space-y-4">
-          <div className="flex items-center justify-between bg-slate-900/90 border border-slate-800 p-4 rounded-xl shadow-md">
+          
+          <div className="flex items-center justify-between bg-white border border-[#E5E0D8] p-4 rounded-sm shadow-sm">
             <div className="flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-indigo-400" />
-              <h2 className="text-sm font-bold text-white">已注册书籍资产池</h2>
-              <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                {books.length} 本
+              <BookOpen className="w-4 h-4 text-[#1D4ED8]" />
+              <h2 className="text-sm font-serif font-bold text-[#1A1A1A]">已注册书籍资产池</h2>
+              <span className="text-xs font-mono px-2 py-0.5 bg-[#F2EFE9] border border-[#E5E0D8] text-[#4A4A4A]">
+                {books.length} 卷
               </span>
             </div>
 
-            {/* Filter Tabs */}
-            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-[11px]">
+            <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setFilterStatus('all')}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  filterStatus === 'all' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 text-xs transition-colors rounded-sm cursor-pointer ${
+                  filterStatus === 'all'
+                    ? 'bg-[#1A1A1A] text-white font-semibold'
+                    : 'text-[#666666] hover:text-[#1A1A1A]'
                 }`}
               >
                 全部
               </button>
               <button
                 onClick={() => setFilterStatus('untranslated')}
-                className={`px-2.5 py-1 rounded transition-colors ${
+                className={`px-2.5 py-1 text-xs transition-colors rounded-sm cursor-pointer ${
                   filterStatus === 'untranslated'
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-[#1A1A1A] text-white font-semibold'
+                    : 'text-[#666666] hover:text-[#1A1A1A]'
                 }`}
               >
-                待处理
+                未完结
               </button>
               <button
                 onClick={() => setFilterStatus('completed')}
-                className={`px-2.5 py-1 rounded transition-colors ${
-                  filterStatus === 'completed' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                className={`px-2.5 py-1 text-xs transition-colors rounded-sm cursor-pointer ${
+                  filterStatus === 'completed'
+                    ? 'bg-[#1A1A1A] text-white font-semibold'
+                    : 'text-[#666666] hover:text-[#1A1A1A]'
                 }`}
               >
-                已完结
+                已完成
               </button>
             </div>
           </div>
 
-          {/* Search Input */}
+          {/* Search Box */}
           <div className="relative">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#888888]" />
             <input
               type="text"
-              placeholder="搜索书籍名称..."
+              placeholder="按书名或作者检索..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-900/90 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full bg-white border border-[#E5E0D8] rounded-sm pl-9 pr-4 py-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1D4ED8] shadow-sm font-sans placeholder-[#999999]"
             />
           </div>
 
-          {/* Book List */}
-          <div className="space-y-3 max-h-[750px] overflow-y-auto pr-1">
+          {/* Book Cards List */}
+          <div className="space-y-3 max-h-[640px] overflow-y-auto pr-1">
             {filteredBooks.length === 0 ? (
-              <div className="text-center py-12 border border-dashed border-slate-800 rounded-xl p-6">
-                <BookOpen className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                <p className="text-slate-400 text-xs">暂无匹配书籍，拖入 EPUB 即可开始</p>
+              <div className="bg-white border border-dashed border-[#E5E0D8] rounded-sm p-8 text-center text-xs text-[#888888]">
+                暂无符合条件的小说。请在上方拖拽上传 .epub 或 .txt
               </div>
             ) : (
               filteredBooks.map((book) => {
-                const isCompleted = book.status === 'completed';
                 const queueItem = bookQueueMap.get(book.id);
                 const isRunningInQueue = queueItem?.status === 'running';
                 const isPendingInQueue = queueItem?.status === 'pending';
-                const progressPercent = Math.round((book.progress_percentage || 0) * 100);
+                const isCompleted = book.status === 'completed';
+                const progressPct =
+                  book.total_paragraphs > 0
+                    ? Math.min(100, Math.round((book.translated_paragraphs / book.total_paragraphs) * 100))
+                    : 0;
 
                 return (
                   <div
                     key={book.id}
-                    className={`bg-slate-900/80 hover:bg-slate-900 border rounded-xl p-4 transition-all duration-200 shadow-sm ${
-                      isRunningInQueue
-                        ? 'border-indigo-500/80 ring-1 ring-indigo-500/40'
-                        : isPendingInQueue
-                        ? 'border-amber-500/40'
-                        : 'border-slate-800 hover:border-slate-700'
-                    }`}
+                    className="bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-4 space-y-3 shadow-sm transition-all"
                   >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 uppercase">
-                            {book.source_type || 'epub'}
-                          </span>
-                          {isRunningInQueue ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-indigo-300 bg-indigo-950 border border-indigo-700/60 px-2 py-0.5 rounded-full animate-pulse">
-                              <Play className="w-2.5 h-2.5 fill-indigo-400" />
-                              队列翻译中
-                            </span>
-                          ) : isPendingInQueue ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-300 bg-amber-950/80 border border-amber-700/60 px-2 py-0.5 rounded-full">
-                              <Clock className="w-2.5 h-2.5" />
-                              排队中 #{queueItem?.order_index}
-                            </span>
-                          ) : isCompleted ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
-                              <CheckCircle2 className="w-2.5 h-2.5" />
-                              已完结
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-mono text-slate-400">
-                              {progressPercent}%
-                            </span>
-                          )}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-serif font-bold text-sm text-[#1A1A1A] truncate">
+                            {book.name}
+                          </h3>
                         </div>
-                        <h3 className="font-semibold text-slate-100 text-xs line-clamp-1">
-                          {book.name}
-                        </h3>
+                        <p className="text-[11px] text-[#666666] font-mono">
+                          {book.source_type?.toUpperCase() || 'EPUB'} · {book.total_chapters} 章节 · 共 {book.total_paragraphs.toLocaleString()} 段
+                        </p>
                       </div>
 
-                      {/* Top Right Mini Actions */}
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={(e) => handleResetBook(book.id, book.name, e)}
-                          disabled={resettingBookId === book.id || isRunningInQueue}
-                          className="p-1 rounded bg-slate-800/80 hover:bg-amber-950 text-slate-400 hover:text-amber-300 border border-slate-700/50 transition-colors disabled:opacity-30 cursor-pointer"
-                          title="重置全书翻译与记忆"
-                        >
-                          <RotateCcw className={`w-3 h-3 ${resettingBookId === book.id ? 'animate-spin' : ''}`} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteBook(book.id, book.name, e)}
-                          disabled={deletingBookId === book.id || isRunningInQueue}
-                          className="p-1 rounded bg-slate-800/80 hover:bg-rose-950 text-slate-400 hover:text-rose-400 border border-slate-700/50 transition-colors disabled:opacity-30 cursor-pointer"
-                          title="彻底删除书籍"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                      {/* In-Queue Status Badges */}
+                      <div className="shrink-0">
+                        {isRunningInQueue ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-bold bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-sm">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                            正在翻译中
+                          </span>
+                        ) : isPendingInQueue ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-semibold bg-amber-50 border border-amber-300 text-amber-800 rounded-sm">
+                            <Clock className="w-3 h-3 text-amber-600" />
+                            排队 #{queueItem?.order_index}
+                          </span>
+                        ) : isCompleted ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-bold bg-[#FAF9F6] border border-[#E5E0D8] text-emerald-700 rounded-sm">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            已完结
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 text-[10px] font-mono bg-[#F2EFE9] text-[#666666] rounded-sm">
+                            待翻译
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    {/* Progress Bar & Mini Stats */}
-                    <div className="space-y-1.5 my-2">
-                      <div className="flex items-center justify-between text-[10px] text-slate-400">
-                        <span>{book.translated_chapters} / {book.total_chapters} 章</span>
-                        <span>{book.translated_paragraphs} / {book.total_paragraphs} 段</span>
+                    {/* Progress Bar */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-[#666666] font-mono">
+                        <span>进度 {book.translated_chapters}/{book.total_chapters} 章</span>
+                        <span>{progressPct}% ({book.translated_paragraphs}/{book.total_paragraphs} 段)</span>
                       </div>
-                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
+                      <div className="w-full bg-[#F2EFE9] h-1.5 overflow-hidden rounded-sm border border-[#E5E0D8]">
                         <div
-                          className={`h-full rounded-full transition-all duration-300 ${
-                            isCompleted
-                              ? 'bg-emerald-500'
-                              : isRunningInQueue
-                              ? 'bg-indigo-500 animate-pulse'
-                              : 'bg-indigo-600'
+                          className={`h-full transition-all duration-300 ${
+                            isCompleted ? 'bg-emerald-600' : isRunningInQueue ? 'bg-[#1D4ED8]' : 'bg-[#4A4A4A]'
                           }`}
-                          style={{ width: `${progressPercent}%` }}
+                          style={{ width: `${progressPct}%` }}
                         />
                       </div>
                     </div>
 
-                    {/* Bottom Action Bar */}
-                    <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-slate-800/80">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => onSelectBook(book.id, 'reader')}
-                          className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition-all cursor-pointer"
-                          title="进入双语对照阅读器"
-                        >
-                          <Compass className="w-3 h-3" />
-                          阅读
-                        </button>
-
-                        {book.has_output_epub ? (
-                          <a
-                            href={book.epub_download_url || `/api/v1/books/${book.id}/download`}
-                            download
-                            className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-950/80 border border-emerald-700/60 hover:bg-emerald-800 text-emerald-300 text-[11px] transition-all"
-                            title="下载中文横排 EPUB"
-                          >
-                            <Download className="w-3 h-3" />
-                            EPUB
-                          </a>
+                    {/* Action Toolbar */}
+                    <div className="flex items-center justify-between pt-2 border-t border-[#E5E0D8] text-xs">
+                      <div className="flex items-center gap-2">
+                        {isCompleted ? (
+                          <>
+                            <button
+                              onClick={() => onSelectBook(book.id, 'reader')}
+                              className="px-2 py-1 text-xs text-[#1D4ED8] hover:underline font-medium cursor-pointer"
+                            >
+                              阅读
+                            </button>
+                            <button
+                              onClick={(e) => handleExport(book.id, e)}
+                              disabled={exportingBookId === book.id}
+                              className="px-2 py-1 text-xs text-[#4A4A4A] hover:text-[#1A1A1A] cursor-pointer"
+                            >
+                              {exportingBookId === book.id ? '导出中...' : '导出EPUB'}
+                            </button>
+                          </>
                         ) : (
                           <button
-                            onClick={(e) => handleExport(book.id, e)}
-                            disabled={exportingBookId === book.id}
-                            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[11px] transition-all cursor-pointer disabled:opacity-40"
-                            title="导出横排 EPUB"
+                            onClick={() => onSelectBook(book.id, 'studio')}
+                            className="px-2 py-1 text-xs text-[#4A4A4A] hover:text-[#1A1A1A] cursor-pointer"
                           >
-                            <Share2 className={`w-3 h-3 ${exportingBookId === book.id ? 'animate-spin' : ''}`} />
-                            导出
+                            详情
                           </button>
                         )}
+
+                        <button
+                          onClick={(e) => handleResetBook(book.id, book.name, e)}
+                          disabled={resettingBookId === book.id || isRunningInQueue}
+                          className="px-2 py-1 text-xs text-[#666666] hover:text-[#1A1A1A] disabled:opacity-30 cursor-pointer"
+                          title="清空翻译历史与长程记忆"
+                        >
+                          {resettingBookId === book.id ? '重置中...' : '重置'}
+                        </button>
+
+                        <button
+                          onClick={(e) => handleDeleteBook(book.id, book.name, e)}
+                          disabled={deletingBookId === book.id || isRunningInQueue}
+                          className="px-2 py-1 text-xs text-[#888888] hover:text-rose-600 disabled:opacity-30 cursor-pointer"
+                          title="彻底删除该书籍"
+                        >
+                          删除
+                        </button>
                       </div>
 
                       {/* Enqueue Action Button */}
                       {isRunningInQueue ? (
                         <button
                           onClick={() => onSelectBook(book.id, 'studio')}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 text-[11px] font-medium transition-all cursor-pointer"
+                          className="flex items-center gap-1 px-3 py-1 bg-[#1D4ED8] text-white text-xs font-semibold rounded-sm shadow-sm cursor-pointer"
                         >
-                          <Play className="w-3 h-3 fill-indigo-300" />
+                          <Play className="w-3 h-3 fill-white" />
                           查看控制台
                         </button>
                       ) : isPendingInQueue ? (
                         <button
-                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 text-amber-300 text-[11px] transition-all cursor-pointer"
+                          onClick={(e) => handleCancelItem(queueItem!.id, e)}
+                          className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs rounded-sm transition-all cursor-pointer"
                           title="从排队中移出"
                         >
                           <X className="w-3 h-3" />
@@ -584,7 +562,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                       ) : (
                         <button
                           onClick={(e) => handleEnqueue(book.id, e)}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium shadow-sm transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                          className="flex items-center gap-1 px-3 py-1 bg-white hover:bg-[#FAF9F6] border border-[#1A1A1A] text-[#1A1A1A] text-xs font-serif font-bold rounded-sm transition-all cursor-pointer shadow-sm"
                         >
                           <Plus className="w-3 h-3" />
                           加入队列
@@ -600,141 +578,111 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
         {/* ================= RIGHT PANE: Execution Queue (7 cols) ================= */}
         <div className="lg:col-span-7 space-y-4">
-          {/* Queue Global Toolbar */}
-          <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-xl shadow-md space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <Layers className="w-4 h-4 text-indigo-400" />
-                <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
-                  动态任务执行队列
-                  {isUpdatingQueue && <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin" />}
+          
+          {/* Queue Status Control Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-[#E5E0D8] p-4 rounded-sm shadow-sm">
+            <div className="flex items-center gap-3">
+              <span
+                className={`w-3 h-3 rounded-full ${
+                  queueStatus?.is_paused
+                    ? 'bg-amber-500'
+                    : runningItems.length > 0
+                    ? 'bg-emerald-500 animate-pulse'
+                    : 'bg-[#888888]'
+                }`}
+              />
+              <div>
+                <h2 className="text-sm font-serif font-bold text-[#1A1A1A]">
+                  执行队列调度中心
                 </h2>
-
-                {queueStatus?.is_paused ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-amber-950/80 border border-amber-700/70 text-amber-300">
-                    <Pause className="w-2.5 h-2.5 fill-amber-400" />
-                    已暂停调度
-                  </span>
-                ) : runningItems.length > 0 ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-950/80 border border-emerald-700/70 text-emerald-300">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                    队列运行中
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-800 text-slate-400">
-                    空闲待命
-                  </span>
-                )}
-              </div>
-
-              {/* Concurrency Selector */}
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-slate-400 text-[11px] flex items-center gap-1">
-                  <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-                  并发槽位:
-                </span>
-                <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 font-mono text-xs">
-                  {[1, 2, 3, 4].map((slot) => (
-                    <button
-                      key={slot}
-                      onClick={() => handleChangeConcurrency(slot)}
-                      className={`px-2.5 py-0.5 rounded transition-all cursor-pointer ${
-                        queueStatus?.concurrency === slot
-                          ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {slot}
-                    </button>
-                  ))}
-                </div>
+                <p className="text-[11px] text-[#666666] font-mono">
+                  {queueStatus?.is_paused
+                    ? '状态: 待命暂停 (点击启动开始处理)'
+                    : runningItems.length > 0
+                    ? `正在翻译 ${runningItems.length} 部 · 排队等待 ${pendingItems.length} 部`
+                    : '就绪中 (等待书籍加入)'}
+                </p>
               </div>
             </div>
 
-            {/* Quick Actions Bar */}
-            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/80 text-xs flex-wrap">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleToggleQueuePause}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs transition-all cursor-pointer ${
-                    queueStatus?.is_paused
-                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
-                      : 'bg-amber-600/90 hover:bg-amber-500 text-white shadow-sm'
-                  }`}
+            <div className="flex items-center gap-3">
+              {/* Concurrency Selector */}
+              <div className="flex items-center gap-1 text-xs text-[#666666]">
+                <span>并发槽位:</span>
+                <select
+                  value={queueStatus?.concurrency || 1}
+                  onChange={(e) => handleChangeConcurrency(Number(e.target.value))}
+                  className="bg-[#FAF9F6] border border-[#E5E0D8] text-[#1A1A1A] rounded-sm px-2 py-1 text-xs font-mono focus:outline-none cursor-pointer"
                 >
-                  {queueStatus?.is_paused ? (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-white" />
-                      恢复队列调度
-                    </>
-                  ) : (
-                    <>
-                      <Pause className="w-3.5 h-3.5 fill-white" />
-                      暂停队列调度
-                    </>
-                  )}
-                </button>
-
-                <button
-                  onClick={() => onRefreshQueue()}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-all cursor-pointer"
-                  title="刷新队列状态"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  刷新
-                </button>
+                  <option value={1}>1 本 (推荐)</option>
+                  <option value={2}>2 本并行</option>
+                  <option value={3}>3 本并行</option>
+                  <option value={4}>4 本最大</option>
+                </select>
               </div>
 
-              {finishedItems.length > 0 && (
-                <button
-                  onClick={() => handleClearQueue('completed')}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-xs transition-all cursor-pointer"
-                  title="清空所有已完结的历史队列项"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  清空已完成
-                </button>
-              )}
+              {/* Pause / Resume Button */}
+              <button
+                onClick={handleToggleQueuePause}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-sm text-xs font-semibold shadow-sm transition-all cursor-pointer ${
+                  queueStatus?.is_paused
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white font-bold'
+                    : 'bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100'
+                }`}
+              >
+                {queueStatus?.is_paused ? (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    <span>启动队列</span>
+                  </>
+                ) : (
+                  <>
+                    <Pause className="w-3.5 h-3.5 fill-current" />
+                    <span>暂停调度</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
-          {/* Section 1: RUNNING ITEMS (Active Execution) */}
+          {/* Section 1: RUNNING ITEMS */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-indigo-300 px-1">
-              <span>🚀 正在执行任务 ({runningItems.length})</span>
+            <div className="flex items-center justify-between text-xs font-serif font-bold text-[#1A1A1A] px-1">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                正在执行的翻译任务 ({runningItems.length})
+              </span>
             </div>
 
             {runningItems.length === 0 ? (
-              <div className="bg-slate-900/40 border border-dashed border-slate-800/80 rounded-xl p-4 text-center text-xs text-slate-500">
-                暂无正在运行的书籍任务。添加书籍或点击启动队列即可开始。
+              <div className="bg-[#FAF9F6] border border-dashed border-[#E5E0D8] rounded-sm p-6 text-center text-xs text-[#888888]">
+                当前无正在执行的书籍。
               </div>
             ) : (
               runningItems.map((item) => {
-                const progressPct = Math.round(item.overall_progress * 100);
+                const progressPct = Math.min(100, Math.round((item.overall_progress || 0) * 100));
+
                 return (
                   <div
                     key={item.id}
-                    className="relative overflow-hidden bg-gradient-to-br from-indigo-950/60 via-slate-900/90 to-slate-950 border border-indigo-500/60 rounded-xl p-4 shadow-lg ring-1 ring-indigo-500/30"
+                    className="bg-white border-2 border-[#1D4ED8] rounded-sm p-4 shadow-sm space-y-3"
                   >
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-900 text-indigo-200 font-bold animate-pulse">
-                            ● RUNNING
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="px-1.5 py-0.5 bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D4ED8] text-[10px] font-mono font-bold rounded-sm">
+                            RUNNING
                           </span>
-                          <span className="text-xs text-indigo-400 font-mono">
-                            {progressPct}%
-                          </span>
+                          <h3 className="font-serif font-bold text-[#1A1A1A] text-sm truncate">
+                            {item.book_name}
+                          </h3>
                         </div>
-                        <h3 className="font-bold text-white text-sm">
-                          {item.book_name}
-                        </h3>
                       </div>
 
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => onSelectBook(item.book_id, 'studio')}
-                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition-all cursor-pointer"
+                          className="flex items-center gap-1 px-3 py-1.5 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-semibold rounded-sm shadow-sm cursor-pointer"
                         >
                           <Play className="w-3.5 h-3.5 fill-white" />
                           查看控制台
@@ -742,6 +690,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
                         <button
                           onClick={(e) => handleCancelItem(item.id, e)}
+                          className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-sm cursor-pointer"
                           title="终止该任务"
                         >
                           <X className="w-4 h-4" />
@@ -750,14 +699,14 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                     </div>
 
                     {/* Progress Bar */}
-                    <div className="space-y-1.5 my-3">
-                      <div className="flex items-center justify-between text-xs text-slate-300 font-mono">
-                        <span className="truncate max-w-md text-indigo-200">{item.message}</span>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs text-[#4A4A4A] font-mono">
+                        <span className="truncate max-w-md text-[#1D4ED8]">{item.message}</span>
                         <span>{item.current_chapter || `第 ${item.current_chapter_index}/${item.total_chapters} 章`}</span>
                       </div>
-                      <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden">
+                      <div className="w-full bg-[#F2EFE9] h-2 overflow-hidden rounded-sm border border-[#E5E0D8]">
                         <div
-                          className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 transition-all duration-300"
+                          className="h-full bg-[#1D4ED8] transition-all duration-300"
                           style={{ width: `${progressPct}%` }}
                         />
                       </div>
@@ -770,25 +719,25 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
           {/* Section 2: PENDING QUEUE (Drag & Drop Reorderable List) */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-amber-300 px-1">
-              <span className="flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5" />
+            <div className="flex items-center justify-between text-xs font-serif font-bold text-[#1A1A1A] px-1">
+              <span className="flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
                 等待排队列表 ({pendingItems.length})
-                <span className="text-[10px] font-normal text-slate-400 ml-1">
-                  (🖐️ 拖拽左侧抓手或点击上下箭头自由调序)
+                <span className="text-[11px] font-normal text-[#888888] ml-1 font-sans">
+                  (按住左侧 ⠿ 抓手或点击上下箭头调序)
                 </span>
               </span>
             </div>
 
             {queueStatus?.is_paused && pendingItems.length > 0 && (
-              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs">
+              <div className="flex items-center justify-between gap-3 p-3 rounded-sm bg-amber-50 border border-amber-300 text-amber-900 text-xs">
                 <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>队列处于待命暂停状态，已加入 {pendingItems.length} 本书。可任意拖拽调序，准备就绪后点击「启动队列」。</span>
+                  <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>队列处于待命暂停状态，已排队 {pendingItems.length} 部小说。调序完成后点击「启动队列」。</span>
                 </div>
                 <button
                   onClick={handleToggleQueuePause}
-                  className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow transition-all shrink-0 cursor-pointer flex items-center gap-1"
+                  className="px-3 py-1 rounded-sm bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-sm cursor-pointer flex items-center gap-1 shrink-0"
                 >
                   <Play className="w-3 h-3 fill-white" />
                   启动队列
@@ -797,7 +746,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
             )}
 
             {pendingItems.length === 0 ? (
-              <div className="bg-slate-900/40 border border-dashed border-slate-800/80 rounded-xl p-6 text-center text-xs text-slate-500">
+              <div className="bg-white border border-dashed border-[#E5E0D8] rounded-sm p-6 text-center text-xs text-[#888888]">
                 等待队列为空。在左侧书籍资产池中点击「加入队列」即可添加。
               </div>
             ) : (
@@ -814,32 +763,32 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                       onDragOver={(e) => handleDragOver(e, index)}
                       onDrop={(e) => handleDragDrop(e, index)}
                       onDragEnd={handleDragEnd}
-                      className={`group relative flex items-center justify-between gap-3 bg-slate-900/80 hover:bg-slate-900 border rounded-xl p-3 transition-all select-none ${
+                      className={`group relative flex items-center justify-between gap-3 bg-white hover:bg-[#FAF9F6] border rounded-sm p-3 transition-all select-none ${
                         isDragging
-                          ? 'opacity-40 border-dashed border-indigo-400'
+                          ? 'opacity-40 border-dashed border-[#1D4ED8]'
                           : isOver
-                          ? 'border-t-4 border-t-indigo-500 bg-slate-800/80'
-                          : 'border-slate-800 hover:border-slate-700 shadow-sm'
+                          ? 'border-t-4 border-t-[#1D4ED8] bg-[#EFF6FF]'
+                          : 'border-[#E5E0D8] shadow-sm'
                       }`}
                     >
                       {/* Left: Drag Handle & Order Badge */}
                       <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         <div
-                          className="cursor-grab active:cursor-grabbing p-1 text-slate-500 hover:text-slate-200 transition-colors"
+                          className="cursor-grab active:cursor-grabbing p-1 text-[#888888] hover:text-[#1A1A1A] transition-colors"
                           title="拖动调整顺序"
                         >
                           <GripVertical className="w-4 h-4" />
                         </div>
 
-                        <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/60 text-amber-300">
+                        <span className="text-xs font-mono font-bold px-2 py-0.5 bg-[#FAF9F6] border border-[#E5E0D8] text-[#1A1A1A] rounded-sm">
                           #{index + 1}
                         </span>
 
                         <div className="min-w-0 flex-1">
-                          <h4 className="text-xs font-semibold text-slate-100 truncate">
+                          <h4 className="text-xs font-serif font-bold text-[#1A1A1A] truncate">
                             {item.book_name}
                           </h4>
-                          <p className="text-[10px] text-slate-400 font-mono truncate">
+                          <p className="text-[10px] text-[#666666] font-mono truncate">
                             {item.message}
                           </p>
                         </div>
@@ -850,7 +799,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         {index > 0 && (
                           <button
                             onClick={(e) => handleMoveItem(item.id, 'top', e)}
-                            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                            className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-white text-[#4A4A4A] transition-colors cursor-pointer"
                             title="置顶"
                           >
                             <ArrowUpToLine className="w-3.5 h-3.5" />
@@ -859,7 +808,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         {index > 0 && (
                           <button
                             onClick={(e) => handleMoveItem(item.id, 'up', e)}
-                            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                            className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-white text-[#4A4A4A] transition-colors cursor-pointer"
                             title="上移一位"
                           >
                             <ArrowUp className="w-3.5 h-3.5" />
@@ -868,7 +817,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         {index < pendingItems.length - 1 && (
                           <button
                             onClick={(e) => handleMoveItem(item.id, 'down', e)}
-                            className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                            className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-white text-[#4A4A4A] transition-colors cursor-pointer"
                             title="下移一位"
                           >
                             <ArrowDown className="w-3.5 h-3.5" />
@@ -877,7 +826,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
                         <button
                           onClick={(e) => handleCancelItem(item.id, e)}
-                          className="p-1 rounded bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer ml-1"
+                          className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-rose-50 text-[#666666] hover:text-rose-600 transition-colors cursor-pointer ml-1"
                           title="移出等待队列"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -893,16 +842,14 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
           {/* Section 3: FINISHED & FAILED ARCHIVE */}
           {finishedItems.length > 0 && (
             <div className="space-y-2 pt-2">
-              <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
+              <div className="flex items-center justify-between text-xs font-serif font-bold text-[#666666] px-1">
                 <span>🏁 历史完成与异常记录 ({finishedItems.length})</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleClearQueue('all_finished')}
-                    className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
-                  >
-                    全部清空
-                  </button>
-                </div>
+                <button
+                  onClick={() => handleClearQueue('all_finished')}
+                  className="text-[11px] text-[#888888] hover:text-[#1A1A1A] cursor-pointer underline"
+                >
+                  全部清空
+                </button>
               </div>
 
               <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
@@ -913,24 +860,24 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                   return (
                     <div
                       key={item.id}
-                      className={`flex items-center justify-between gap-3 rounded-xl p-3 text-xs border ${
+                      className={`flex items-center justify-between gap-3 rounded-sm p-3 text-xs border ${
                         isSuccess
-                          ? 'bg-slate-900/60 border-slate-800/80'
-                          : 'bg-rose-950/30 border-rose-900/60'
+                          ? 'bg-white border-[#E5E0D8]'
+                          : 'bg-rose-50 border-rose-200'
                       }`}
                     >
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         {isSuccess ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                         ) : (
-                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                         )}
 
                         <div className="min-w-0 flex-1">
-                          <h4 className="font-medium text-slate-200 truncate">
+                          <h4 className="font-serif font-bold text-[#1A1A1A] truncate">
                             {item.book_name}
                           </h4>
-                          <p className={`text-[10px] truncate ${isFailed ? 'text-rose-300' : 'text-slate-500'}`}>
+                          <p className={`text-[10px] truncate ${isFailed ? 'text-rose-700' : 'text-[#666666]'}`}>
                             {item.message.includes('均未完成')
                               ? '所有翻译模型均未返回有效译文（请检查模型 API Key 配置后重试）'
                               : item.message}
@@ -942,7 +889,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         {isFailed && (
                           <button
                             onClick={(e) => handleRetryItem(item.id, e)}
-                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-900/80 hover:bg-rose-800 text-rose-200 text-[11px] font-medium transition-colors cursor-pointer"
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-sm bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-medium shadow-sm cursor-pointer"
                             title="重新入队执行重试"
                           >
                             <RotateCcw className="w-3 h-3" />
@@ -953,7 +900,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         {isSuccess && (
                           <button
                             onClick={() => onSelectBook(item.book_id, 'reader')}
-                            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition-colors cursor-pointer"
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-sm bg-white border border-[#E5E0D8] hover:bg-[#FAF9F6] text-[#1A1A1A] text-[11px] font-medium cursor-pointer shadow-sm"
                           >
                             <BookOpen className="w-3 h-3" />
                             阅读
@@ -962,7 +909,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
                         <button
                           onClick={(e) => handleCancelItem(item.id, e)}
-                          className="p-1 rounded text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
+                          className="p-1 rounded-sm text-[#888888] hover:text-[#1A1A1A] cursor-pointer"
                           title="删除该记录"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -974,9 +921,11 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
               </div>
             </div>
           )}
+
         </div>
+
       </div>
+
     </div>
   );
 };
-

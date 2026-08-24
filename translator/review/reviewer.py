@@ -44,6 +44,9 @@ OBJECTIVE_CATEGORIES = {
     "policy_violation",
 }
 OBJECTIVE_SEVERITIES = {"critical", "major"}
+CATEGORY_ALIASES = {
+    "translation_error": "mistranslation",
+}
 
 
 import re
@@ -69,21 +72,43 @@ def paragraph_map(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def approved_fixes(items: list[dict[str, Any]], threshold: float = 0.9, *, autonomous: bool = False) -> list[dict[str, Any]]:
+def approved_fixes(
+    items: list[dict[str, Any]],
+    threshold: float = 0.9,
+    *,
+    autonomous: bool = False,
+    current_translations: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     approved: list[dict[str, Any]] = []
     for raw in items:
         item = dict(raw)
+        item_id = str(item.get("id", ""))
         replacement = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         is_new_contract = "category" in item or "replacement" in item
+        mandatory_kana_cleanup = bool(
+            current_translations
+            and has_japanese_kana(str(current_translations.get(item_id, "")))
+        )
+        category = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
+        if mandatory_kana_cleanup:
+            category = "policy_violation"
+            item["severity"] = "critical"
+            item["auto_apply"] = True
+        if is_new_contract or mandatory_kana_cleanup:
+            item["category"] = category
         if is_new_contract and (
-            str(item.get("category", "")) not in OBJECTIVE_CATEGORIES
+            category not in OBJECTIVE_CATEGORIES
             or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
         ):
             continue
         # Quality Guardrail: Strictly reject any replacement that contains leftover Japanese kana
         if has_japanese_kana(replacement):
             continue
-        if (autonomous or item.get("auto_apply") is True) and float(item.get("confidence", 0) or 0) >= threshold and replacement:
+        meets_approval_threshold = mandatory_kana_cleanup or (
+            (autonomous or item.get("auto_apply") is True)
+            and float(item.get("confidence", 0) or 0) >= threshold
+        )
+        if meets_approval_threshold and replacement:
             item["approved_translation"] = replacement
             item["replacement"] = replacement
             approved.append(item)
@@ -116,6 +141,7 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
         if not isinstance(item, dict) or str(item.get("id", "")) not in expected_ids:
             continue
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
+        item["category"] = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
         if rep and has_japanese_kana(rep):
             item["auto_apply"] = False
             item["confidence"] = min(float(item.get("confidence", 0) or 0), 0.3)
@@ -801,14 +827,28 @@ def review_book(
             retry_path = workspace.reviews_dir / f"{c_id}-consistency-retry-{retry:02d}.json"
             run_chapter_review(input_path, retry_path, autonomous=autonomous, backend=reviewer)
             review = read_json(retry_path)
-        validate_chapter_review_payload(review, expected)
-        fixes = approved_fixes(review["fixes"], autonomous=autonomous)
+        review = validate_chapter_review_payload(review, expected)
+        current_translations = {item["id"]: item["translated"] for item in items}
+        fixes = approved_fixes(
+            review["fixes"],
+            autonomous=autonomous,
+            current_translations=current_translations,
+        )
         fixes_path = workspace.reviews_dir / f"{c_id}-consistency-fixes.json"
         write_json(fixes_path, {"book": book, "items": fixes})
         applied_fixes: Any = False
-        if apply and fixes:
-            applied_fixes = call_novel_translator("apply-review-fixes", "--book", book, "--input", str(fixes_path))
-            verify_applied_fixes(read_json(manifest_path(book)), fixes)
+        if apply:
+            if fixes:
+                applied_fixes = call_novel_translator("apply-review-fixes", "--book", book, "--input", str(fixes_path))
+            manifest_after_fixes = read_json(manifest_path(book))
+            verify_applied_fixes(manifest_after_fixes, fixes)
+            remaining_kana = [
+                item_id
+                for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
+                if item_id in expected and has_japanese_kana(str(paragraph.get("translated", "")))
+            ]
+            if remaining_kana:
+                raise ValueError(f"章节 {c_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
         glossary, term_summary = merge_term_updates(
             glossary,
             review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []),

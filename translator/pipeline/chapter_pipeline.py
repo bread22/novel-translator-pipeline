@@ -44,6 +44,7 @@ from translator.pipeline.preflight import PreflightError, run_preflight
 from translator.providers.translator import ProviderTranslator
 from translator.review.reviewer import (
     approved_fixes,
+    has_japanese_kana,
     missing_checked_ids,
     run_chapter_review,
     validate_chapter_review_payload,
@@ -589,25 +590,38 @@ class IterativePipeline:
                 self.chapter_reviewer(input_path, retry_path)
             self._checkpoint()
             review = read_json(retry_path)
-        validate_chapter_review_payload(review, expected_ids)
-        fixes = approved_fixes(review["fixes"], autonomous=self.autonomous)
+        review = validate_chapter_review_payload(review, expected_ids)
+        current_translations = {item["id"]: item["translated"] for item in items}
+        fixes = approved_fixes(
+            review["fixes"],
+            autonomous=self.autonomous,
+            current_translations=current_translations,
+        )
         fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
         write_json(fixes_path, {"book": self.book, "items": fixes})
         applied_fixes: Any = False
-        if self.apply and fixes:
-            self._checkpoint()
-            try:
-                applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
-            except Exception:
-                manifest_data = read_json(self.manifest)
-                p_map = paragraph_map(manifest_data)
-                for item in fixes:
-                    if item.get("id") in p_map and item.get("replacement"):
-                        p_map[item["id"]]["translated"] = item["replacement"]
-                write_json(self.manifest, manifest_data)
-                applied_fixes = {"status": "ok", "summary": {"applied": len(fixes)}}
+        if self.apply:
+            if fixes:
+                self._checkpoint()
+                try:
+                    applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+                except Exception:
+                    manifest_data = read_json(self.manifest)
+                    p_map = paragraph_map(manifest_data)
+                    for item in fixes:
+                        if item.get("id") in p_map and item.get("replacement"):
+                            p_map[item["id"]]["translated"] = item["replacement"]
+                    write_json(self.manifest, manifest_data)
+                    applied_fixes = {"status": "ok", "summary": {"applied": len(fixes)}}
             manifest_after_fixes = read_json(self.manifest)
             verify_applied_fixes(manifest_after_fixes, fixes)
+            remaining_kana = [
+                item_id
+                for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
+                if item_id in expected_ids and has_japanese_kana(str(paragraph.get("translated", "")))
+            ]
+            if remaining_kana:
+                raise ValueError(f"章节 {chapter_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
         self._checkpoint()
         merged_terms, term_summary = merge_term_updates(
             glossary,

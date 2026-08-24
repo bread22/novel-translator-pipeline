@@ -14,6 +14,7 @@ from translator.pipeline.chapter_pipeline import (
 )
 from translator.review.reviewer import (
     approved_fixes,
+    has_japanese_kana,
     merge_chapter_reviews,
     missing_checked_ids,
     validate_chapter_review_payload,
@@ -85,6 +86,25 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertEqual(len(approved), 1)
         self.assertEqual(approved[0]["id"], "p3")
         self.assertEqual(approved[0]["replacement"], "车子已经开到了那栋公寓的近旁。")
+
+    def test_approved_fixes_must_apply_kana_cleanup_despite_category_drift(self) -> None:
+        items = [{
+            "id": "p1",
+            "category": "translation_error",
+            "severity": "major",
+            "confidence": 0.3,
+            "replacement": "「竹田先生。那个赞助人到底是谁啊？」",
+            "auto_apply": False,
+        }]
+        approved = approved_fixes(
+            items,
+            current_translations={"p1": "「竹田さん。那个赞助人到底是谁啊？」"},
+        )
+        self.assertEqual([item["id"] for item in approved], ["p1"])
+        self.assertEqual(approved[0]["category"], "policy_violation")
+        self.assertEqual(approved[0]["severity"], "critical")
+        self.assertTrue(approved[0]["auto_apply"])
+        self.assertFalse(has_japanese_kana(approved[0]["replacement"]))
 
     def test_merge_chapter_reviews_consensus_and_deduplication(self) -> None:
         rev_a = {

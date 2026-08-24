@@ -259,6 +259,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - 重点检查人物身份和关系、主客体、代词指代、漏译、擅自添加、术语固定译法、事实冲突、时间顺序、跨段落动作关系和明显改变的强度。
 - 当无法确定问题是否改变原意时，不要输出 fix（fixes 数组可为空 []）。
 - fixes 只输出确实存在且属于 critical 或 major 的问题；replacement 必须是完整段落译文。
+- fixes.category 只能使用：mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation；译文残留日文假名必须使用 policy_violation。
 - glossary_delta 只收录后文仍有价值的人名、别名、组织、地点、特殊术语和固定称谓。
 - memory_delta 只收录会影响后续章节翻译的人物、关系、别名、重要事实和持续状态。
 - chapter_state 只保存本章摘要和会影响后续理解的重要变化。

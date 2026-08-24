@@ -100,7 +100,7 @@ class PipelineE2ETests(unittest.TestCase):
             user_prompt = payload["messages"][-1]["content"]
             input_items = json.loads(user_prompt)["items"]
             translated_items = [
-                {"id": item["id"], "text": f"译文: {item.get('text') or item.get('source', '')}"}
+                {"id": item["id"], "text": f"译文：{item['id']}"}
                 for item in input_items
             ]
             response_json = {
@@ -134,15 +134,15 @@ class PipelineE2ETests(unittest.TestCase):
         # Verify manifest was atomically updated with translated text
         manifest_data = json.loads(self.manifest_file.read_text(encoding="utf-8"))
         c1_paragraphs = manifest_data["chapters"][0]["paragraphs"]
-        self.assertEqual(c1_paragraphs[0]["translated"], "译文: 女教師 翔子と高校生")
-        self.assertEqual(c1_paragraphs[1]["translated"], "译文: 雨宮慶")
+        self.assertEqual(c1_paragraphs[0]["translated"], "译文：c0001-p00001")
+        self.assertEqual(c1_paragraphs[1]["translated"], "译文：c0001-p00002")
 
         # Run Chapter 2
         res2 = pipeline.run_chapter("c0002", cycle=2)
         self.assertEqual(res2["chapter_id"], "c0002")
         manifest_data = json.loads(self.manifest_file.read_text(encoding="utf-8"))
         c2_paragraphs = manifest_data["chapters"][1]["paragraphs"]
-        self.assertEqual(c2_paragraphs[0]["translated"], "译文: 放課後の教室で")
+        self.assertEqual(c2_paragraphs[0]["translated"], "译文：c0002-p00001")
 
     @patch("translator.pipeline.chapter_pipeline.run_chapter_review", side_effect=_mock_reviewer)
     @patch("translator.core.job_manager.manifest_path")
@@ -158,7 +158,7 @@ class PipelineE2ETests(unittest.TestCase):
             user_prompt = payload["messages"][-1]["content"]
             input_items = json.loads(user_prompt)["items"]
             translated_items = [
-                {"id": item["id"], "text": f"译文: {item.get('text') or item.get('source', '')}"}
+                {"id": item["id"], "text": f"译文：{item['id']}"}
                 for item in input_items
             ]
             response_json = {
@@ -219,7 +219,7 @@ class PipelineE2ETests(unittest.TestCase):
             user_prompt = payload["messages"][-1]["content"]
             input_items = json.loads(user_prompt)["items"]
             translated_items = [
-                {"id": item["id"], "text": f"Fallback译文: {item.get('text') or item.get('source', '')}"}
+                {"id": item["id"], "text": f"Fallback译文：{item['id']}"}
                 for item in input_items
             ]
             response_json = {
@@ -254,7 +254,7 @@ class PipelineE2ETests(unittest.TestCase):
         # Verify fallback translated text was written
         manifest_data = json.loads(self.manifest_file.read_text(encoding="utf-8"))
         p1 = manifest_data["chapters"][0]["paragraphs"][0]
-        self.assertEqual(p1["translated"], "Fallback译文: 女教師 翔子と高校生")
+        self.assertEqual(p1["translated"], "Fallback译文：c0001-p00001")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from pathlib import Path
@@ -466,30 +467,38 @@ def _execute_single_segment_review(
             on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "completed"})
         return result
 
-    primary_payload = None
-    secondary_payload = None
+    payloads: dict[str, dict[str, Any]] = {}
     errors = []
+    reviewers = {"primary": primary_cand, "secondary": sec_cand}
     if on_reviewer_status:
-        on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "reviewing"})
-    try:
-        primary_payload = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
-        if on_reviewer_status:
-            on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "completed"})
-    except Exception as exc:
-        if on_reviewer_status:
-            on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "failed"})
-        errors.append(f"primary ({primary_cand}) error: {exc}")
+        for role, candidate in reviewers.items():
+            on_reviewer_status({"role": role, "backend": candidate or "", "status": "reviewing"})
 
-    if on_reviewer_status:
-        on_reviewer_status({"role": "secondary", "backend": sec_cand or "", "status": "reviewing"})
-    try:
-        secondary_payload = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=sec_cand)
-        if on_reviewer_status:
-            on_reviewer_status({"role": "secondary", "backend": sec_cand or "", "status": "completed"})
-    except Exception as exc:
-        if on_reviewer_status:
-            on_reviewer_status({"role": "secondary", "backend": sec_cand or "", "status": "failed"})
-        errors.append(f"secondary ({sec_cand}) error: {exc}")
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="DualReviewer") as executor:
+        futures = {
+            executor.submit(
+                _execute_review_with_fallbacks,
+                "chapter",
+                input_payload,
+                schema_path,
+                autonomous=autonomous,
+                backend=candidate,
+            ): (role, candidate)
+            for role, candidate in reviewers.items()
+        }
+        for future in as_completed(futures):
+            role, candidate = futures[future]
+            try:
+                payloads[role] = future.result()
+                if on_reviewer_status:
+                    on_reviewer_status({"role": role, "backend": candidate or "", "status": "completed"})
+            except Exception as exc:
+                if on_reviewer_status:
+                    on_reviewer_status({"role": role, "backend": candidate or "", "status": "failed"})
+                errors.append(f"{role} ({candidate}) error: {exc}")
+
+    primary_payload = payloads.get("primary")
+    secondary_payload = payloads.get("secondary")
 
     if primary_payload and secondary_payload:
         return merge_chapter_reviews(primary_payload, secondary_payload)

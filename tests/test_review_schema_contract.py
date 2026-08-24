@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -67,8 +68,10 @@ class ReviewSchemaContractTests(unittest.TestCase):
 
     def test_dual_review_reports_each_reviewer_state(self) -> None:
         states: list[dict[str, str]] = []
+        both_started = threading.Barrier(2)
 
         def execute(_kind, _payload, _schema, *, backend=None, **_kwargs):
+            both_started.wait(timeout=1)
             return review("primary" if backend == "reviewer-a" else "secondary")
 
         with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=execute):
@@ -81,12 +84,17 @@ class ReviewSchemaContractTests(unittest.TestCase):
                 on_reviewer_status=states.append,
             )
 
-        self.assertEqual(states, [
+        self.assertEqual(states[:2], [
             {"role": "primary", "backend": "reviewer-a", "status": "reviewing"},
-            {"role": "primary", "backend": "reviewer-a", "status": "completed"},
             {"role": "secondary", "backend": "reviewer-b", "status": "reviewing"},
-            {"role": "secondary", "backend": "reviewer-b", "status": "completed"},
         ])
+        self.assertEqual(
+            {(item["role"], item["backend"], item["status"]) for item in states[2:]},
+            {
+                ("primary", "reviewer-a", "completed"),
+                ("secondary", "reviewer-b", "completed"),
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
+import secrets
+import uuid
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,14 +31,35 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # 1. Enable CORS for all local/intranet origins
+    configured_origins = [item.strip() for item in os.environ.get("WEB_CORS_ORIGINS", "").split(",") if item.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=configured_origins,
+        allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def security_boundary(request: Request, call_next):
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        configured_token = os.environ.get("WEB_AUTH_TOKEN", "")
+        if configured_token and request.method != "OPTIONS" and request.url.path.startswith("/api/v1/"):
+            supplied = request.headers.get("authorization", "")
+            expected = f"Bearer {configured_token}"
+            if not secrets.compare_digest(supplied, expected):
+                response = JSONResponse(status_code=401, content={"detail": "认证凭据无效", "request_id": request_id})
+            else:
+                response = await call_next(request)
+        else:
+            response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+        return response
 
     # 2. Register API v1 routers
     api_v1 = APIRouter(prefix="/api/v1")
@@ -77,4 +101,3 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
 
 
 app = create_app()
-

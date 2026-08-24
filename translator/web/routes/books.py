@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 from typing import Any
+import zipfile
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -22,6 +23,7 @@ from translator.web.models import (
     ParagraphItem,
     ParagraphUpdateRequest,
 )
+from translator.web.path_policy import validate_book_id
 
 
 router = APIRouter(prefix="/books", tags=["Books"])
@@ -96,7 +98,7 @@ def list_books() -> list[BookSummary]:
 
 
 @router.post("/upload", response_model=BookSummary)
-async def upload_book(file: UploadFile = File(...)) -> BookSummary:
+async def upload_book(file: UploadFile = File(...), replace: bool = Query(False)) -> BookSummary:
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名无效")
 
@@ -104,15 +106,49 @@ async def upload_book(file: UploadFile = File(...)) -> BookSummary:
     if suffix not in {".epub", ".txt"}:
         raise HTTPException(status_code=400, detail="仅支持上传 .epub 或 .txt 格式电子书")
 
-    # Save to temp location
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = Path(tmp.name)
+    max_upload_bytes = int(os.environ.get("MAX_UPLOAD_BYTES", 50 * 1024 * 1024))
+    written = 0
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = Path(tmp.name)
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_upload_bytes:
+                    raise HTTPException(status_code=413, detail=f"上传文件超过 {max_upload_bytes} 字节限制")
+                tmp.write(chunk)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+    except Exception:
+        if "tmp_path" in locals():
+            tmp_path.unlink(missing_ok=True)
+        raise
 
     book_title = Path(file.filename).stem
-    book_id = safe_book_name(book_title)
+    try:
+        book_id = validate_book_id(safe_book_name(book_title))
+    except ValueError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
+        if written == 0:
+            raise HTTPException(status_code=400, detail="上传文件为空")
+        if suffix == ".txt":
+            try:
+                tmp_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(status_code=400, detail="TXT 文件必须使用 UTF-8 编码") from exc
+        else:
+            try:
+                with zipfile.ZipFile(tmp_path) as archive:
+                    if archive.testzip() is not None or "META-INF/container.xml" not in archive.namelist():
+                        raise ValueError("EPUB ZIP 结构不完整")
+            except (zipfile.BadZipFile, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"EPUB 文件无效：{exc}") from exc
+
+        existing_manifest = manifest_path(book_id)
+        if existing_manifest.exists() and not replace:
+            raise HTTPException(status_code=409, detail=f"书籍 ID 已存在：{book_id}；使用 replace=true 显式替换")
         # Register book in novel-translator
         result = call_novel_translator(
             "add-book",

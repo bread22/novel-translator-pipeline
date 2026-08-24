@@ -4,11 +4,15 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import tempfile
 try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 from typing import Any
+
+from dotenv import dotenv_values, set_key
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,17 +22,9 @@ def _load_dotenv(dotenv_path: Path = ROOT / ".env", override: bool = True) -> No
     if not dotenv_path.exists():
         return
     try:
-        content = dotenv_path.read_text(encoding="utf-8")
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip("'\"")
-            if key:
-                if override or key not in os.environ:
-                    os.environ[key] = value
+        for key, value in dotenv_values(dotenv_path).items():
+            if key and value is not None and (override or key not in os.environ):
+                os.environ[key] = value
     except Exception:
         pass
 
@@ -37,45 +33,51 @@ def read_env_keys(dotenv_path: Path = ROOT / ".env") -> dict[str, str]:
     """Read all key-values from .env file."""
     if not dotenv_path.exists():
         return {}
-    res = {}
+    res: dict[str, str] = {}
     try:
-        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            res[k.strip()] = v.strip().strip("'\"")
+        res = {key: value for key, value in dotenv_values(dotenv_path).items() if key and value is not None}
     except Exception:
         pass
     return res
 
 
+ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def write_env_keys(updates: dict[str, str], dotenv_path: Path = ROOT / ".env") -> None:
+    """Atomically apply dotenv updates with correct quoting and mode 0600."""
+    dotenv_path = dotenv_path.expanduser().resolve()
+    dotenv_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in updates.items():
+        key = raw_key.strip()
+        if not ENV_KEY_PATTERN.fullmatch(key):
+            raise ValueError(f"无效环境变量名：{raw_key!r}")
+        normalized[key] = str(raw_value)
+
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{dotenv_path.name}.", dir=dotenv_path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            if dotenv_path.exists():
+                stream.write(dotenv_path.read_bytes())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
+        for key, value in normalized.items():
+            set_key(str(temporary), key, value, quote_mode="always")
+        with temporary.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, dotenv_path)
+        os.chmod(dotenv_path, stat.S_IRUSR | stat.S_IWUSR)
+        for key, value in normalized.items():
+            os.environ[key] = value
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def write_env_key(key: str, value: str, dotenv_path: Path = ROOT / ".env") -> None:
-    """Write or update a single key in .env and update os.environ immediately."""
-    key = key.strip()
-    value = value.strip()
-    lines: list[str] = []
-    if dotenv_path.exists():
-        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
-
-    found = False
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            k, _ = stripped.split("=", 1)
-            if k.strip() == key:
-                new_lines.append(f"{key}={value}")
-                found = True
-                continue
-        new_lines.append(line)
-
-    if not found:
-        new_lines.append(f"{key}={value}")
-
-    dotenv_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    os.environ[key] = value
-    _load_dotenv(dotenv_path, override=True)
+    write_env_keys({key: value}, dotenv_path)
 
 
 _load_dotenv()
@@ -98,11 +100,19 @@ def _resolve_ref(root: dict[str, Any], reference: str) -> dict[str, Any]:
 def _schema_errors(value: Any, schema: dict[str, Any], root: dict[str, Any], path: str = "<root>") -> list[str]:
     errors: list[str] = []
     if "$ref" in schema:
-        errors.extend(_schema_errors(value, _resolve_ref(root, str(schema["$ref"])), root, path))
+        return _schema_errors(value, _resolve_ref(root, str(schema["$ref"])), root, path)
+    if "oneOf" in schema:
+        candidates = [_schema_errors(value, candidate, root, path) for candidate in schema["oneOf"]]
+        matches = [candidate for candidate in candidates if not candidate]
+        if len(matches) != 1:
+            return [f"{path}: 必须且只能匹配一个 schema 分支"]
+        return []
     for item in schema.get("allOf", []):
         errors.extend(_schema_errors(value, item, root, path))
     if "enum" in schema and value not in schema["enum"]:
         errors.append(f"{path}: {value!r} 不在 {schema['enum']!r} 中")
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path}: 必须为 {schema['const']!r}")
     expected = schema.get("type")
     type_ok = {
         "object": isinstance(value, dict),
@@ -151,11 +161,9 @@ def _schema_errors(value: Any, schema: dict[str, Any], root: dict[str, Any], pat
     return errors
 
 
-def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
-    with path.open("rb") as stream:
-        value = tomllib.load(stream)
+def validate_config_data(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"参数文件必须是 TOML 对象：{path}")
+        raise ValueError("参数文件必须是 TOML 对象")
     schema = json.loads(CONFIG_SCHEMA_PATH.read_text(encoding="utf-8"))
     errors = _schema_errors(value, schema, schema)
     if errors:
@@ -188,8 +196,16 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         raise ValueError(f"roles.fallback_translator 引用了未定义 provider：{roles['fallback_translator']}")
     if roles.get("secondary_fallback_translator") and roles["secondary_fallback_translator"] not in providers:
         raise ValueError(f"roles.secondary_fallback_translator 引用了未定义 provider：{roles['secondary_fallback_translator']}")
-        
+    for fallback_reviewer in roles.get("fallback_reviewers", []):
+        if fallback_reviewer not in providers:
+            raise ValueError(f"roles.fallback_reviewers 引用了未定义 provider：{fallback_reviewer}")
     return value
+
+
+def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+    with path.expanduser().resolve().open("rb") as stream:
+        value = tomllib.load(stream)
+    return validate_config_data(value)
 
 
 def config_value(config: dict[str, Any], dotted: str) -> Any:
@@ -229,8 +245,6 @@ def fallback_translators_names(config: dict[str, Any]) -> list[str]:
     return result or ["lmstudio"]
 
 
-def reviewer_name(config: dict[str, Any]) -> str:
-    return str(setting(config, "roles.reviewer", "REVIEWER")).strip()
 
 
 def secondary_reviewer_name(config: dict[str, Any]) -> str:

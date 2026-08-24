@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import stat
 import shutil
 import zipfile
 from typing import Any, Iterable
@@ -38,15 +39,52 @@ def read_json(path: Path, default: Any = None) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def safely_extract_epub(epub_path: Path, target: Path) -> None:
+def safely_extract_epub(
+    epub_path: Path,
+    target: Path,
+    *,
+    max_files: int = 10_000,
+    max_single_size: int = 100 * 1024 * 1024,
+    max_total_size: int = 500 * 1024 * 1024,
+    max_compression_ratio: float = 200.0,
+) -> None:
     target.mkdir(parents=True, exist_ok=True)
     root = target.resolve()
     with zipfile.ZipFile(epub_path) as archive:
-        for member in archive.infolist():
-            destination = (target / member.filename).resolve()
+        members = archive.infolist()
+        if len(members) > max_files:
+            raise ValueError(f"EPUB 文件数超过限制：{len(members)} > {max_files}")
+        total_size = 0
+        normalized_names: set[str] = set()
+        for member in members:
+            normalized = member.filename.replace("\\", "/")
+            if normalized in normalized_names:
+                raise ValueError(f"EPUB 包含重复路径：{member.filename}")
+            normalized_names.add(normalized)
+            destination = (target / normalized).resolve()
             if destination != root and root not in destination.parents:
                 raise ValueError(f"EPUB 包含越界路径：{member.filename}")
-        archive.extractall(target)
+            mode = member.external_attr >> 16
+            file_type = stat.S_IFMT(mode)
+            if stat.S_ISLNK(mode) or (file_type and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
+                raise ValueError(f"EPUB 包含不支持的文件类型：{member.filename}")
+            if member.file_size > max_single_size:
+                raise ValueError(f"EPUB 单文件展开大小超过限制：{member.filename}")
+            total_size += member.file_size
+            if total_size > max_total_size:
+                raise ValueError("EPUB 总展开大小超过限制")
+            ratio = member.file_size / max(1, member.compress_size)
+            if ratio > max_compression_ratio:
+                raise ValueError(f"EPUB 压缩膨胀率超过限制：{member.filename}")
+        for member in members:
+            normalized = member.filename.replace("\\", "/")
+            destination = (target / normalized).resolve()
+            if member.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, destination.open("wb") as output:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
 
 
 @dataclass(frozen=True)

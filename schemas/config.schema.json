@@ -38,7 +38,11 @@
     "providers": {
       "type": "object",
       "additionalProperties": {
-        "type": "object"
+        "oneOf": [
+          {"$ref": "#/$defs/httpProvider"},
+          {"$ref": "#/$defs/cliProvider"},
+          {"$ref": "#/$defs/antigravityProvider"}
+        ]
       }
     },
     "pipeline": {
@@ -82,9 +86,10 @@
   "$defs": {
     "httpProvider": {
       "type": "object",
-      "required": ["base_url", "model"],
+      "required": ["type", "base_url", "model"],
+      "additionalProperties": true,
       "properties": {
-        "type": {"type": "string"},
+        "type": {"const": "openai"},
         "base_url": {"type": "string", "pattern": "^https?://"},
         "model": {"type": "string", "minLength": 1},
         "api_key": {"type": "string"},
@@ -95,12 +100,24 @@
     "cliProvider": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["binary", "timeout"],
+      "required": ["type", "binary", "timeout"],
       "properties": {
-        "type": {"type": "string"},
+        "type": {"enum": ["opencode", "codex"]},
         "binary": {"type": "string", "minLength": 1},
         "model": {"type": "string"},
         "timeout": {"type": "integer", "minimum": 1}
+      }
+    },
+    "antigravityProvider": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "agy", "model", "timeout"],
+      "properties": {
+        "type": {"const": "antigravity"},
+        "agy": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "timeout": {"type": "integer", "minimum": 1},
+        "context_tokens": {"type": "integer", "minimum": 1024}
       }
     }
   }

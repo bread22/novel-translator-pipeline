@@ -236,16 +236,22 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         const isTranslationActive = activeTask?.phase === 'translating'
           || (!activeTask?.phase && !isFallbackActive && !isReviewActive);
         const hasRecovered = (activeTask?.recovered_paragraphs || 0) > 0;
-        const rev1Status = activeTask?.reviewer_states?.primary
-          || (isReviewActive ? 'reviewing' : 'standby');
+        const rev1RawStatus = activeTask?.reviewer_states?.primary;
+        const rev1Status = isReviewActive && rev1RawStatus === 'standby'
+          ? 'pending'
+          : rev1RawStatus || (isReviewActive ? 'pending' : 'standby');
+        const rev2RawStatus = activeTask?.reviewer_states?.secondary;
         const rev2Status = !isDualReview
           ? 'disabled'
-          : activeTask?.reviewer_states?.secondary || (isReviewActive ? 'reviewing' : 'standby');
+          : isReviewActive && rev2RawStatus === 'standby'
+          ? 'pending'
+          : rev2RawStatus || (isReviewActive ? 'pending' : 'standby');
         const reviewerBadge = (status: string) => ({
           reviewing: '● REVIEWING',
           completed: '✓ COMPLETED',
           failed: '× FAILED',
           disabled: 'DISABLED',
+          pending: 'PENDING',
           standby: 'STANDBY',
         }[status] || 'STANDBY');
         const reviewerActive = (status: string) => status === 'reviewing';
@@ -384,6 +390,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                           ? 'bg-rose-50 border-rose-400'
                           : reviewer.status === 'completed'
                           ? 'bg-emerald-50 border-emerald-300'
+                          : reviewer.status === 'pending'
+                          ? 'bg-amber-50 border-amber-300'
                           : 'bg-[#FAF9F6] border-[#E5E0D8]'
                       }`}
                     >
@@ -396,6 +404,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                             ? 'bg-rose-600 text-white font-bold'
                             : reviewer.status === 'completed'
                             ? 'bg-emerald-600 text-white font-bold'
+                            : reviewer.status === 'pending'
+                            ? 'bg-amber-100 text-amber-800 font-bold'
                             : 'bg-[#E5E0D8] text-[#666666]'
                         }`}>
                           {reviewerBadge(reviewer.status)}

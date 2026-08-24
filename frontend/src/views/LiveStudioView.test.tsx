@@ -47,4 +47,30 @@ describe('live model topology', () => {
     expect(within(primaryReviewer!).getByText('✓ COMPLETED')).toBeInTheDocument();
     expect(within(secondaryReviewer!).getByText('● REVIEWING')).toBeInTheDocument();
   });
+
+  it('labels a reviewer that has not started the current chapter as pending', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.spyOn(api, 'getConfig').mockResolvedValue({
+      roles: { reviewer: 'reviewer-1', secondary_reviewer: 'reviewer-2', dual_review: true },
+      providers: {},
+    } as never);
+    vi.spyOn(api, 'getPrompts').mockResolvedValue([]);
+
+    render(<LiveStudioView
+      book={{ id: 'book', name: 'Book', source_type: 'epub', total_chapters: 1,
+        translated_chapters: 0, total_paragraphs: 1, translated_paragraphs: 1,
+        progress_percentage: 1 } as never}
+      activeTask={{ task_id: 'task', book_id: 'book', status: 'running', phase: 'reviewing',
+        overall_progress: 1, current_chapter: 'c0001', current_chapter_index: 1,
+        total_chapters: 1, current_batch: 0, total_batches: 0, recovered_paragraphs: 0,
+        message: '正在审阅', reviewer_states: { primary: 'reviewing', secondary: 'standby' } }}
+      streamEvents={[]}
+      onRefreshTask={vi.fn(async () => undefined)}
+      onRefreshBooks={vi.fn(async () => undefined)}
+    />);
+
+    const secondaryReviewer = screen.getByText('REVIEWER #2 (副审)').parentElement;
+    expect(secondaryReviewer).not.toBeNull();
+    expect(within(secondaryReviewer!).getByText('PENDING')).toBeInTheDocument();
+  });
 });

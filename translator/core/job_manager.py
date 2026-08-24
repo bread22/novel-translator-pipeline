@@ -730,7 +730,7 @@ class JobManager:
                     if phase == "translating":
                         item.reviewer_states = {"primary": "standby", "secondary": "standby"}
                     elif phase == "reviewing":
-                        item.reviewer_states = {"primary": "standby", "secondary": "standby"}
+                        item.reviewer_states = {"primary": "pending", "secondary": "pending"}
                     if chapter_id:
                         item.current_chapter = chapter_id
                     action = "翻译" if phase == "translating" else "审阅"
@@ -744,7 +744,7 @@ class JobManager:
             def handle_reviewer_status(status_info: dict[str, str]) -> None:
                 role = str(status_info.get("role", "")).strip()
                 status = str(status_info.get("status", "")).strip()
-                if role not in {"primary", "secondary"} or status not in {"standby", "reviewing", "completed", "failed"}:
+                if role not in {"primary", "secondary"} or status not in {"standby", "pending", "reviewing", "completed", "failed"}:
                     return
                 with self._lock:
                     item.reviewer_states = {**item.reviewer_states, role: status}

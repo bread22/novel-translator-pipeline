@@ -3,7 +3,7 @@
 ## 📌 里程碑概览
 
 - [x] **Release v0.1: CLI 核心流水线自包含版 (Component 1)**
-- [ ] **Release v1.0: 现代化 Web 工作台与 Docker 镜像 (Components 2 ~ 4)**
+- [x] **Release v0.2: 现代化 Web 工作台与独立出版杂志视觉范式 (Components 2 ~ 4)**
 
 ---
 
@@ -18,21 +18,22 @@
 
 ### Component 2: 后端 API 与异步任务管理层 (FastAPI + TaskManager + SSE)
 - [x] **2.1** 创建 `translator/web/` 基础结构与 FastAPI 应用工厂 (`app.py`)
-- [x] **2.2** 实现 SSE 实时事件广播器 (`events.py`)
-- [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`)
-- [x] **2.4** 实现核心 REST API 路由 (`books.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
-- [x] **2.5** 编写 `tests/test_web_api.py` 接口自动化测试 (57 项测试 100% 通过)
-### Component 3: 现代化 Web 前端 (React 18/19 + Vite + Tailwind + Lucide Icons)
-- [x] **3.1** 初始化 `frontend/` 项目结构与依赖配置 (Vite + React 19 + Tailwind v4)
-- [x] **3.2** 构建全局布局、顶栏状态大屏与实时 SSE 状态同步 (`Navbar.tsx`)
-- [x] **3.3** 实现 **书架中心 (LibraryView)**：EPUB/TXT 拖拽上传解析与自适应进度卡片
-- [x] **3.4** 实现 **实时作战室 (LiveStudioView)**：两级降级容灾流向拓扑与实时事件瀑布流
-- [x] **3.5** 实现 **双语阅读器 (ReaderView)**：章节分栏阅读、原地编辑修改与单段重译
-- [x] **3.6** 实现 **记忆与术语透视台 (KnowledgeView)**：Glossary 术语表与角色长程记忆事实
-- [x] **3.7** 实现 **模型路由与系统设置 (SettingsView)**：Provider 连通性预检与配置热更新
+- [x] **2.2** 实现 SSE 实时事件广播器 (`events.py`) 与单书持久化记录
+- [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`) 与队列管理层 (`queue_manager.py`)
+- [x] **2.4** 实现核心 REST API 路由 (`books.py`, `queue.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
+- [x] **2.5** 编写 `tests/test_web_api.py` 与 `tests/test_queue_api.py` 接口自动化测试 (87 项测试 100% 通过)
 
-### Component 4: 容器化与一键交付 (Deployment & Distribution)
-- [ ] **4.1** 编写多阶段构建 `Dockerfile` (Node.js 构建前端 + Python 3.11+ 运行后端)
-- [ ] **4.2** 编写 `docker-compose.yml` (预设数据卷持久化)
-- [ ] **4.3** 编写本地一键启动脚本 `scripts/start_web.py`
-- [ ] **4.4** 端到端全流程集成验证与 Release 打标
+### Component 3: 现代化 Web 前端与出版杂志视觉范式 (React 19 + Vite + Tailwind v4)
+- [x] **3.1** 初始化 `frontend/` 项目结构与依赖配置 (Vite + React 19 + Tailwind v4)
+- [x] **3.2** 全面落地 **独立出版杂志 (Editorial Mag)** 视觉范式 (暖白瓷纸色 `#FAF9F6`、Noto Serif 衬线字体、皇家宝蓝 `#1D4ED8` 点缀)
+- [x] **3.3** 重构 **任务调度中心 (QueueHubView)**：已注册书籍资产池 + 自由拖拽排序队列 + 动态并发槽位 + 待命启动
+- [x] **3.4** 实现 **翻译控制台 (LiveStudioView)**：模型路由多级降级拓扑、动态提示词策略切换与实时事件瀑布流
+- [x] **3.5** 实现 **双语阅读器 (ReaderView)**：目录索引、原地人工校对、单段重译与一致性审阅质检报告
+- [x] **3.6** 实现 **记忆与术语库 (KnowledgeView)**：词典版式术语表、角色长程档案与世界观设定
+- [x] **3.7** 实现 **模型路由与提示词规范管理 (SettingsView)**：AI Provider 管理器、一键并发连通性预检与 Markdown 规范在线编辑
+
+### Component 4: 一键交付与运行保障 (Deployment & Execution)
+- [x] **4.1** 编写本地一键启动脚本 `scripts/start_web.py`
+- [x] **4.2** 静态资源自动打包部署到 `frontend/dist/`
+- [x] **4.3** 修复沙箱外网出站 403 阻断，支持多模型线上 API 正常调用
+- [x] **4.4** 全量文档更新与 Release v0.2 打标

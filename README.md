@@ -1,237 +1,85 @@
-# Novel Translator Pipeline
+# Novel Translator Studio (Novel Translator Pipeline)
 
-本项目是 [`novel-translator`](https://github.com/OYcedar/novel-translator) 的自动化流水线编排与审阅增强层，用于将 EPUB 小说按书籍生命周期管理，提供大模型翻译调度、敏感词/格式异常二分降级容灾、两级备用救回（Two-Level Fallback）、章节一致性审阅与长程记忆事实追踪、横排版式重构，并最终交付高质量中文 EPUB。
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![React 19](https://img.shields.io/badge/react-19-61dafb.svg)](https://react.dev/)
+[![Tailwind CSS v4](https://img.shields.io/badge/tailwind-v4-38bdf8.svg)](https://tailwindcss.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests: 87 Passed](https://img.shields.io/badge/tests-87%20passed-brightgreen.svg)](tests/)
 
-导出 EPUB 时默认保留原书版式；对于日文竖排书，可在流水线命令中加入 `--layout horizontal`。该选项不会修改翻译源或 `novel-translator`，而是在其完成 EPUB 导出后追加横排 CSS、更新正文 CSS 引用、将 spine 翻页方向设为 `ltr`，并将语言元数据设为 `zh-CN`，最后再执行 EPUB 校验。校验完成的成品同时会复制到项目根目录的 `translated/`。
-
----
-
-## 核心特性
-
-- **通用 Provider 架构**：通过统一的 `BaseProvider` 适配器解耦角色与模型，支持 `antigravity` (Gemini)、`opencode`、`codex`、`openai` 兼容协议（本地 LM Studio / Ollama / 在线 DeepSeek、OpenRouter、SiliconFlow 等）；
-- **跨平台原生兼容 (Cross-Platform)**：基于纯 Python 3.11+ 标准库架构，无 C 编译扩展依赖，全量原生支持 Linux、macOS (Apple Silicon / Intel) 及 Windows 10/11；
-- **两级降级容灾回路 (Two-Level Fallback)**：主译遇敏感词安全审查拦截（`content_filter`）时，自动触发二分递归拆解；单段落仍受阻时，顺序降级至**一级备用**（如 OpenCode 指定模型），若仍受阻则无缝降级至**二级备用**（如 LM Studio 本地无审查模型），全程自动记录 Provenance 溯源；
-- **章节级长上下文一致性审阅**：每章全量翻译完成后，执行一次通用审阅，校验 100% `checked_ids` 覆盖率，自动提取并合并 Glossary 增量、Book Memory 事实记忆和 Chapter State 状态演进；
-- **高置信度客观缺陷自动写回**：仅对 `confidence >= 0.9`、`major/critical` 的客观错误（误译、漏译、主客体错位、事实冲突等）自动安全替换；
-- **分层配置管理**：所有运行参数集中在 `config.toml`，支持 Schema 校验与环境变量覆盖。
+**Novel Translator Studio** 是日文轻小说/网络小说全自动 AI 翻译流水线与长程一致性审阅工坊。本项目基于 [`novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础解包能力，构建了完整的全自动生命周期编排、大模型并发调度、敏感词二分降级容灾、两级备用救回（Two-Level Fallback）、双盲章节一致性审阅与长程事实记忆追踪，并提供世界一流的 **「独立出版杂志 (Editorial Mag)」** 视觉交互工作台。
 
 ---
 
-## 架构概览
+## 🎨 视觉美学：独立出版杂志 (Editorial Mag)
 
-```text
-原始 EPUB
-   ↓ 保留原文件，建立 output/中文书名/ 工作副本
-Novel Translator 导入/解包
-   ↓
-manifest.json + 待翻译段落
-   ↓
-【章节翻译流水线 (Chapter Pipeline)】
-   ├── 主译 Primary (e.g. Antigravity / Gemini)
-   │     ↓ 遇到敏感词审查 / 异常
-   │   递归二分拆解 (Binary Split)
-   │     ↓
-   ├── 一级备用 Fallback #1 (e.g. OpenCode)
-   │     ↓ 仍受阻
-   └── 二级备用 Fallback #2 (e.g. LM Studio 无审查模型)
-   ↓
-【章节一致性审阅 (Chapter Reviewer)】(e.g. OpenCode / Codex / AGY)
-   ├── 校验 checked_ids 覆盖
-   ├── 合并 glossary.json / book_memory.json / chapter_states
-   └── 自动写回高置信度客观修复
-   ↓
-进入下一章直至全书翻译完成
-   ↓
-最终质量报告 (work-report.yaml) 与中文 EPUB 导出
-```
+Studio 采用考究高雅的独立出版杂志风格，消除常规 AI 仪表盘的暗黑荧光压迫感：
+- **纸张与墨水基底**：温暖精致的出版暖白瓷纸底色（`#FAF9F6`），搭配深邃墨水黑（`#1A1A1A`）与碳素石墨灰（`#4A4A4A`）。
+- **典雅排版与字体**：标题全面引入 `Noto Serif SC` / `Zen Old Mincho` 经典衬线书体；正文使用开阔通透的 `Inter`；版次、Token 统计与代码使用精准克制的 `Space Grotesk` / `Fira Code` 等宽字体。
+- **出版印章与宝蓝点缀**：沉稳深邃的皇家宝蓝（`#1D4ED8`）按键与焦点，辅以 `EDITION · 2026` 独立出版印章与 `#1` `#2` 印刷序号标。
 
 ---
 
-## 目录结构
+## 🌟 五大核心模块与功能
 
-```text
-output/正式中文书名/
-├── input/                         # 原始 EPUB
-├── unpacked/                      # EPUB 解包后的工作副本
-├── data/
-│   ├── manifest.json              # 核心段落与译文元数据
-│   ├── glossary.json              # 动态沉淀的术语表
-│   ├── book_memory.json           # 全书长程事实与角色记忆
-│   ├── chapter_states/            # 章节摘要与状态记录
-│   ├── translation-provenance.json# 段落翻译来源与救回原因溯源
-│   ├── provider-diagnostics.json  # Provider 诊断与拦截日志
-│   └── progress.json              # 流水线推进断点状态
-├── reviews/                       # 审阅输入、输出与修复记录
-├── snapshots/                     # 翻译和审阅前快照
-├── reports/                       # 质量报告与工作报告 (work-report.yaml)
-└── 正式中文书名-中文.epub           # 最终交付的中文电子书
-```
+### 1. 任务调度中心 (Queue & Asset Hub)
+- **已注册书籍资产池**：书籍元数据总览（章节数、已译段落数、进度条），支持一键加入队列、全部未完结一键入队、重置翻译记忆、导出 EPUB 与彻底删除。
+- **自由拖拽调度队列**：可视化拖拽抓手（`⠿`）调整执行次序，支持置顶、上移、下移与移出队列。
+- **并发槽位与待命控制**：支持 1~4 本书籍动态并行槽位控制；书籍加入队列后处于待命暂停状态，支持调序完毕后手动一键「启动队列」。
+- **历史记录与失败重试**：已完结书籍快速直达阅读器；异常中断书籍一键「重试」重新入队。
 
----
+### 2. 翻译控制台 (Live Translation Studio)
+- **模型路由拓扑大屏**：实时可视化主译（Primary）、一级备用（Fallback #1）、二级备用（Fallback #2）及双审阅者（Dual Reviewer）路由状态与救回段落统计。
+- **动态 Policy 规范切换**：在控制台直接为当前翻译任务选择不同的文学提示词规范（如情色小说规范、通用小说规范、轻小说规范等）。
+- **SSE 实时事件瀑布流**：全量推送章节启动、批次完成、全书进度、降级触发与审阅修复事件；单书独立持久化历史记录，切换页面不丢失，支持分类过滤与手动一键清空。
 
-## 配置设置指南 (`config.toml`)
+### 3. 双语阅读器 (Bilingual Reader)
+- **目录索引 (TOC)**：清晰展示全书章节列表与完成状态指示。
+- **段落级精细对照**：上方日文原文衬线排版，下方中文译文纸面排版；清晰标注段落 ID、翻译 Provider 与容灾救回来源。
+- **人工原地校对与单段重译**：支持直接在阅读器中点击「编辑」修改译文并即刻写回工作区；支持单段点击「重译」重新调用主译模型。
+- **章节质检审阅报告**：折叠面板展示本章一致性审阅报告、长程叙事摘要及所有修正缺陷清单（包含修正原因、被替换内容与新译文）。
 
-项目参数在根目录 `config.toml` 中集中定义，采用**分层解耦**设计：
+### 4. 记忆与术语库 (Knowledge Hub)
+- **动态沉淀术语表 (Glossary)**：展示由审阅模型在章节推进时自动提取并合并的专有名词、统一译名、置信度与出现章节，支持手动添加自定义术语。
+- **角色长程档案 (Characters)**：提取全书人物名称、别名、角色定位与人物画像。
+- **世界观设定 (World Settings)**：沉淀作品独特的技能、道具、势力与世界观解释。
+- **全书质检审计报告 (Audit Reports)**：汇总各章节审阅发现的客观问题数与修复写回明细。
 
-```toml
-# ==========================================
-# 1. 基础路径配置
-# ==========================================
-[paths]
-output_root = "output"                                   # 书籍处理工作区目录
-translation_policy = "docs/prompts/translation-policy.md"# 翻译规范与风格策略文档
-
-# ==========================================
-# 2. 角色绑定 (Roles)
-# 将流水线工作角色映射到具体的 Provider 名称
-# ==========================================
-[roles]
-primary_translator = "antigravity"                      # 主译提供商 (长上下文/高质量)
-fallback_translators = ["opencode", "lmstudio"]         # 多级备用链 (顺序降级救回)
-reviewer = "opencode"                                   # 章节一致性审阅者
-
-# ==========================================
-# 3. 提供商具体参数 (Providers)
-# ==========================================
-
-# --- Antigravity (Gemini CLI) ---
-[providers.antigravity]
-type = "antigravity"
-agy = "agy"                                             # agy 可执行文件路径
-model = "gemini-3.7-flash"                              # 模型标识
-effort = "low"                                          # 思考深度: low / medium / high
-concurrency = 1                                         # 进程内并发控制槽位
-timeout = 600
-
-# --- OpenCode (CLI) ---
-[providers.opencode]
-type = "opencode"
-binary = "opencode"                                     # opencode 可执行文件路径
-model = "opencode/muse-spark-1.2-contributor-free"      # 默认模型
-agent = ""                                              # 指定 agent 别名 (可选)
-timeout = 600
-
-# --- 本地 LM Studio (OpenAI 协议) ---
-[providers.lmstudio]
-type = "openai"
-base_url = "http://127.0.0.1:1234/v1"
-model = "murasaki-14b-v0.2"                             # 本地无审查翻译模型
-api_key = "lm-studio"
-context_tokens = 8192                                   # 本地加载时分配的上下文上限
-timeout = 600
-
-# --- Codex (CLI) ---
-[providers.codex]
-type = "codex"
-binary = "codex"
-model = "gpt-5.6"
-reasoning_effort = "low"
-timeout = 600
-
-# --- DeepSeek 官方 API (OpenAI 协议) ---
-[providers.deepseek]
-type = "openai"
-base_url = "https://api.deepseek.com/v1"                # API Base URL
-model = "deepseek-chat"                                 # 默认模型 (V4 Flash)
-api_key = ""                                            # 留空时自动读取 .env 中的 DEEPSEEK_API_KEY
-context_tokens = 1048576                                # 1M 上下文窗口
-timeout = 600
-
-# --- 通用在线 API (OpenRouter / SiliconFlow / OpenAI 等) ---
-[providers.online_api]
-type = "openai"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key = ""
-context_tokens = 1048576
-timeout = 600
-
-# ==========================================
-# 4. 流水线策略参数 (Pipeline)
-# ==========================================
-[pipeline]
-max_cycles = 1000                                       # 单次运行最大处理章节数
-max_chapter_batches = 1000                              # 单章推进最大批次数
-primary_batch_max_chars = 4000                          # 主译大窗口原文字符上限
-max_provider_split_depth = 2                            # 遇到审查时最大二分递归深度
-translation_max_tokens = 8192                           # 单次翻译最大输出 token
-health_check_timeout = 60                               # 启动预检超时秒数
-layout = "preserve"                                     # 默认导出版式: preserve (保持) 或 horizontal (横排)
-
-# ==========================================
-# 5. 批量翻译队列 (Queue)
-# ==========================================
-[queue]
-source_root = "source"                                  # 待翻译原始 EPUB 投放目录
-max_cycles = 1000
-apply = true
-autonomous = true
-finalize = true
-stop_on_error = true
-```
-
-### 常见配置场景
-
-1. **接入 DeepSeek 作为主译**：
-   - 在 `.env` 中设置 `DEEPSEEK_API_KEY=sk-...`（或在 `config.toml` 中填入 `api_key`）；
-   - 将 `[roles]` 的 `primary_translator` 设为 `"deepseek"` 即可。
-2. **将 Codex 作为审阅者**：
-   - 将 `[roles]` 的 `reviewer` 设为 `"codex"`。
-3. **临时指定配置文件**：
-   - 通过环境变量 `TRANSLATOR_CONFIG=/path/to/my-config.toml` 指定独立配置。
+### 5. 模型路由与提示词规范管理 (Settings & Prompt Manager)
+- **AI Provider 可视化管理器**：直观配置与增删 OpenAI 兼容接口（DeepSeek、SiliconFlow、OpenRouter、LM Studio、Ollama 等）、Antigravity CLI、OpenCode CLI 与 Codex CLI。
+- **一键并发连通性测试 (Preflight Probe)**：并发探测所有已配置模型的网络可达性、API 鉴权与往返延迟（ms）。
+- **提示词规范管理器 (Prompt Policy Manager)**：在线查看、新建、编辑与保存 Markdown 翻译规范及审阅规范，支持一键「设为系统全局默认规范」。
 
 ---
 
-## 快速上手
+## 🚀 快速启动
 
-### 1. 安装与环境准备
+### 方式一：启动 Web Studio 工作台 (强烈推荐)
 
-本项目采用纯 Python 3.11+ 标准库构建，支持在 Linux、macOS 及 Windows 上直接运行。
-
-#### Linux / macOS (Bash / Zsh)
 ```bash
-# 1. 克隆本项目
+# 1. 克隆仓库并进入目录
 git clone https://github.com/bread22/novel-translator-pipeline.git
 cd novel-translator-pipeline
 
-# 2. 创建虚拟环境并配置
+# 2. 创建并激活 Python 虚拟环境 (Python 3.11+)
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows 用户: .venv\Scripts\Activate.ps1
+
+# 3. 安装依赖并配置环境变量
+pip install -e .
 cp .env.example .env
-# 可选：在 .env 中配置在线 API Key（如 DEEPSEEK_API_KEY）
+# 可选：在 .env 中填入 DEEPSEEK_API_KEY 等
+
+# 4. 启动 Web 工作台 (默认端口 8000)
+python scripts/start_web.py --port 8000
 ```
 
-#### Windows (PowerShell)
-```powershell
-# 1. 克隆本项目
-git clone https://github.com/bread22/novel-translator-pipeline.git
-cd novel-translator-pipeline
+打开浏览器访问 **[http://127.0.0.1:8000](http://127.0.0.1:8000)** 即可开始使用。
 
-# 2. 创建虚拟环境并配置
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-Copy-Item .env.example .env
-# 可选：在 .env 中配置在线 API Key（如 DEEPSEEK_API_KEY）
-```
+---
 
-> [!TIP]
-> 本项目核心编排逻辑仅依赖 Python 标准库（需配合底层 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础 EPUB 处理能力）。请根据配置的 Provider 确保对应后端可用：
-> - **Antigravity**：系统 `PATH` 中包含 `agy` CLI；
-> - **OpenCode**：系统 `PATH` 中包含 `opencode` CLI；
-> - **LM Studio / Ollama**：本地启动 HTTP 服务（默认 `http://127.0.0.1:1234/v1`）；
-> - **在线 API (DeepSeek / OpenAI 等)**：在 `config.toml` 或 `.env` 中配置 `api_key` 与 `base_url`。
+### 方式二：CLI 命令行一键批量执行
 
-### 2. 运行连通性预检
-
-在开始翻译前，运行预检工具测试所有配置的 Provider 与 Reviewer：
-
-```bash
-python scripts/preflight.py
-```
-
-### 3. 一键批量翻译队列 (推荐)
-
-将所有待翻译的原始 EPUB 文件直接放入 `source/` 目录，执行批量队列脚本：
+将待翻译的原始 `.epub` 文件放入 `source/` 目录：
 
 ```bash
 python scripts/batch_translate.py
@@ -239,9 +87,9 @@ python scripts/batch_translate.py
 
 流水线会自动遍历 `source/` 下所有 EPUB，顺序完成书籍注册、章节翻译、两级降级救回、一致性审阅与横排重构，并在项目根目录的 `translated/` 产出最终成品中文 EPUB。
 
-### 4. 单本书单步执行流水线
+---
 
-如需单独推进某本特定书籍，可直接调用 `book_pipeline.py`：
+### 方式三：CLI 单本书单步执行
 
 ```bash
 python scripts/book_pipeline.py \
@@ -249,68 +97,83 @@ python scripts/book_pipeline.py \
   --name '正式中文书名' \
   --apply \
   --autonomous \
-  --finalize
+  --finalize \
+  --layout horizontal
 ```
 
-参数说明：
-- `--apply`：自动将高置信度客观审阅修复写回 `manifest.json`；
-- `--autonomous`：全自动模式；
-- `--finalize`：全部章节完成后，自动校验并导出最终中文 EPUB；
-- `--layout horizontal`：日文竖排小说自动重构为横排版式；
-- `--primary-translator` / `--fallback-translators` / `--reviewer`：可选临时覆盖 `config.toml` 中的角色分配。
+---
 
-### 5. 独立章节审阅与全书一致性检查
+## ⚙️ 核心配置说明 (`config.toml`)
 
-可随时单独对某一章节或整本书执行审阅：
+项目参数在根目录 `config.toml` 中集中定义，亦可在 Web 工作台的「模型路由与设置」中可视化调整：
+
+```toml
+[paths]
+output_root = "output"
+translation_policy = "docs/prompts/erotic-novel-policy.md"
+
+[roles]
+primary_translator = "nemotron"                         # 主译主力模型
+fallback_translators = ["gemini_lite", "deepseek"]      # 两级降级备用链
+reviewer = "nemotron"                                   # 章节一致性审阅模型
+secondary_reviewer = "gemini_lite"                      # 双盲副审模型
+dual_review = true                                      # 开启双模型交叉审阅
+
+[providers.nemotron]
+type = "openai"
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "nvidia/llama-3.1-nemotron-70b-instruct"
+api_key = "$NVIDIA_API_KEY"
+temperature = 0.3
+context_tokens = 131072
+
+[providers.deepseek]
+type = "openai"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key = "$DEEPSEEK_API_KEY"
+context_tokens = 1048576
+```
+
+---
+
+## 🧪 自动化测试
+
+项目具备严苛的自动化测试套件（涵盖 Universal Providers、Two-Level Fallback、Chapter Reviewer、Queue Manager、REST API 及 SSE 事件流）：
 
 ```bash
-# 审阅指定单章
-python scripts/chapter_review.py \
-  --book 'BOOK_ID' \
-  --name '正式中文书名' \
-  --chapter c0001 \
-  --apply \
-  --autonomous
+.venv/bin/pytest tests/ -v
+```
 
-# 全书跨章节一致性检查
-python scripts/chapter_review.py \
-  --book 'BOOK_ID' \
-  --name '正式中文书名' \
-  --global-consistency
+```text
+============================== 87 passed in 2.76s ==============================
 ```
 
 ---
 
-## 跨平台支持说明
+## 📁 目录结构
 
-| 操作系统 | 支持状态 | 推荐环境与特性 |
-| :--- | :--- | :--- |
-| **Linux** (Ubuntu / Debian / Arch / Fedora 等) | ⭐️ 原生支持 | 项目原生开发与测试平台，配合系统 Python 3.11+ 或 venv 即可无缝运行。 |
-| **macOS** (Apple Silicon / Intel) | ⭐️ 完美支持 | 使用 Homebrew / pyenv 安装 Python 3.11+；Apple Silicon (M 系列芯片) 本地运行 LM Studio / Ollama 具备极佳的推理效率。 |
-| **Windows** (Windows 10 / 11) | ⭐️ 完全支持 | 推荐在 **Windows Terminal + PowerShell 7** 中运行；内置 Windows 非法路径字符安全过滤与全局 UTF-8 编码。 |
-
-> [!NOTE]
-> **Windows 用户注意事项**：
-> 1. **虚拟环境路径**：若单独配置了底层 `novel-translator` 的虚拟环境，可通过 `.env` 中的 `NOVEL_TRANSLATOR_PYTHON=C:/path/to/.venv/Scripts/python.exe` 显式指定。
-> 2. **终端字符编码**：建议在终端执行 `chcp 65001` 或使用 Windows Terminal，保证 UTF-8 日志正常渲染。
-
----
-
-## 运行测试
-
-```bash
-python3 -m unittest discover -s tests -v
-python3 -m py_compile translator/**/*.py scripts/*.py tests/*.py
+```text
+novel-translator-pipeline/
+├── frontend/                      # React 19 + Vite + Tailwind v4 前端工程
+│   ├── src/components/            # 报头、导航栏等共享组件
+│   ├── src/views/                 # 任务调度、控制台、阅读器、知识库、设置等视图
+│   └── dist/                      # 编译就绪的高性能生产前端静态包
+├── translator/                    # 核心 Python 后端框架
+│   ├── core/                      # Workspace 工作区、配置与队列管理器
+│   ├── pipeline/                  # 章节翻译流水线、双审阅器与连通性预检
+│   ├── providers/                 # OpenAI、AGY、OpenCode、Codex 统一适配器
+│   └── web/                       # FastAPI 路由、SSE 广播器与 Web 容器
+├── docs/                          # 架构设计、PRD、降级容灾规范与提示词模板
+├── output/                        # 书籍生命周期工作区副本
+├── source/                        # CLI 批量翻译待处理目录
+├── translated/                    # 最终产出的精排中文 EPUB 交付目录
+├── scripts/start_web.py           # Web Studio 一键启动入口
+└── config.toml                    # 集中式分层配置文件
 ```
 
-详细架构与工作流设计请参阅：
-- [系统处理架构 (`docs/architecture.md`)](docs/architecture.md)
-- [两级降级容灾工作流 (`docs/provider-fallback.md`)](docs/provider-fallback.md)
-- [章节一致性审阅与长程记忆 (`docs/review-plan.md`)](docs/review-plan.md)
-
 ---
 
-## 开源协议 (License)
+## 📄 开源协议 (License)
 
 本项目基于 [MIT License](LICENSE) 协议开源。
-

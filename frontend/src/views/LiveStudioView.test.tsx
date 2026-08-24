@@ -30,8 +30,24 @@ describe('live model topology', () => {
         total_chapters: 1, current_batch: 1, total_batches: 1,
         recovered_paragraphs: 0, message: '正在审阅第 1/1 章：c0001',
         reviewer_states: { primary: 'completed', secondary: 'reviewing' },
+        reviewer_details: {
+          primary: { status: 'completed', backend: 'reviewer', attempt: 1, chunk_index: 1, total_chunks: 2 },
+          secondary: {
+            status: 'reviewing', backend: 'reviewer-fallback', attempt: 3,
+            candidate_index: 2, candidate_total: 2, chunk_index: 1, total_chunks: 2,
+            split_depth: 1, split_path: 'root.L', timeout_seconds: 360,
+          },
+        },
       }}
-      streamEvents={[]}
+      streamEvents={[{
+        event: 'pipeline_reviewer_status', timestamp: '2026-08-24T12:00:00Z', event_id: 'evt-1',
+        data: {
+          task_id: 'task', message: '副审 reviewer-fallback 审阅中', reviewer_role: 'secondary',
+          reviewer_backend: 'reviewer-fallback', reviewer_status: 'reviewing', attempt: 3,
+          candidate_index: 2, candidate_total: 2, chunk_index: 1, total_chunks: 2,
+          split_path: 'root.L', timeout_seconds: 360,
+        },
+      }]}
       onRefreshTask={vi.fn(async () => undefined)}
       onRefreshBooks={vi.fn(async () => undefined)}
     />);
@@ -46,6 +62,12 @@ describe('live model topology', () => {
     expect(secondaryReviewer).not.toBeNull();
     expect(within(primaryReviewer!).getByText('✓ COMPLETED')).toBeInTheDocument();
     expect(within(secondaryReviewer!).getByText('● REVIEWING')).toBeInTheDocument();
+    const secondaryReviewerCard = secondaryReviewer!.parentElement;
+    expect(within(secondaryReviewerCard!).getAllByText('reviewer-fallback').length).toBeGreaterThan(0);
+    expect(within(secondaryReviewerCard!).getByText('分块 1/2 · 尝试 #3 · 路由 2/2 · 子段 root.L')).toBeInTheDocument();
+    expect(screen.getByText(/后端/).textContent).toContain('reviewer-fallback');
+    expect(screen.getByText(/后端/).textContent).toContain('尝试 #3');
+    expect(screen.getByText(/后端/).textContent).toContain('超时 360s');
   });
 
   it('labels a reviewer that has not started the current chapter as pending', async () => {

@@ -56,6 +56,7 @@ export interface TaskStatusResponse {
   status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
   reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'completed' | 'failed' | 'cancelled'>>;
+  reviewer_details?: Partial<Record<'primary' | 'secondary', ReviewerExecutionDetail>>;
   overall_progress: number;
   current_chapter: string;
   current_chapter_index: number;
@@ -67,6 +68,20 @@ export interface TaskStatusResponse {
   error_detail?: string | null;
   started_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface ReviewerExecutionDetail {
+  status?: 'standby' | 'pending' | 'reviewing' | 'completed' | 'failed' | 'cancelled';
+  backend?: string;
+  attempt?: number;
+  candidate_index?: number;
+  candidate_total?: number;
+  chunk_index?: number;
+  total_chunks?: number;
+  split_depth?: number;
+  split_path?: string;
+  timeout_seconds?: number;
+  error?: string;
 }
 
 export interface PipelineStartRequest {
@@ -283,6 +298,7 @@ export interface QueueItem {
   status: 'pending' | 'recovery_pending' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
   reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'completed' | 'failed' | 'cancelled'>>;
+  reviewer_details?: Partial<Record<'primary' | 'secondary', ReviewerExecutionDetail>>;
   order_index: number;
   priority: number;
   overall_progress: number;

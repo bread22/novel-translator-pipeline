@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import threading
 import time
+from typing import Any
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from translator.core.job_control import JobCancelled
 from translator.review.reviewer import (
     _combine_chunk_reviews,
     _execute_single_segment_review,
+    _review_backends,
     _update_rolling_payload,
     merge_chapter_reviews,
 )
@@ -36,6 +38,21 @@ def review(label: str) -> dict:
 
 
 class ReviewSchemaContractTests(unittest.TestCase):
+    def test_reviewer_fallbacks_are_only_explicitly_configured(self) -> None:
+        with patch("translator.review.reviewer.load_config", return_value={
+            "roles": {
+                "reviewer": "reviewer-a",
+                "fallback_reviewers": [],
+                "fallback_translators": ["translator-fallback"],
+            },
+        }):
+            self.assertEqual(_review_backends("reviewer-a"), ["reviewer-a"])
+
+        with patch("translator.review.reviewer.load_config", return_value={
+            "roles": {"reviewer": "reviewer-a", "fallback_reviewers": ["reviewer-b"]},
+        }):
+            self.assertEqual(_review_backends("reviewer-a"), ["reviewer-a", "reviewer-b"])
+
     def test_checked_in_schema_matches_pydantic_model(self) -> None:
         path = Path(__file__).resolve().parents[1] / "schemas" / "chapter-review-output.schema.json"
         checked_in = json.loads(path.read_text(encoding="utf-8"))
@@ -69,14 +86,21 @@ class ReviewSchemaContractTests(unittest.TestCase):
         self.assertEqual(len(merged["glossary_delta"]["conflicts"]), 2)
 
     def test_dual_review_reports_each_reviewer_state(self) -> None:
-        states: list[dict[str, str]] = []
+        states: list[dict[str, Any]] = []
         both_started = threading.Barrier(2)
 
-        def execute(_kind, _payload, _schema, *, backend=None, **_kwargs):
-            both_started.wait(timeout=1)
-            return review("primary" if backend == "reviewer-a" else "secondary")
+        class Provider:
+            def __init__(self, backend: str) -> None:
+                self.backend = backend
 
-        with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=execute):
+            def review(self, _kind, _payload, _schema, **_kwargs):
+                both_started.wait(timeout=1)
+                return review("primary" if self.backend == "reviewer-a" else "secondary")
+
+        with (
+            patch("translator.review.reviewer._review_backends", side_effect=lambda backend: [backend]),
+            patch("translator.review.reviewer.get_provider", side_effect=Provider),
+        ):
             _execute_single_segment_review(
                 {},
                 Path("schema.json"),
@@ -86,10 +110,10 @@ class ReviewSchemaContractTests(unittest.TestCase):
                 on_reviewer_status=states.append,
             )
 
-        self.assertEqual(states[:2], [
-            {"role": "primary", "backend": "reviewer-a", "status": "reviewing"},
-            {"role": "secondary", "backend": "reviewer-b", "status": "reviewing"},
-        ])
+        self.assertEqual(
+            {(item["role"], item["backend"]) for item in states if item["status"] == "reviewing"},
+            {("primary", "reviewer-a"), ("secondary", "reviewer-b")},
+        )
         self.assertEqual(
             {(item["role"], item["backend"], item["status"]) for item in states[2:]},
             {
@@ -99,7 +123,7 @@ class ReviewSchemaContractTests(unittest.TestCase):
         )
 
     def test_cancellation_does_not_wait_for_blocked_reviewers(self) -> None:
-        states: list[dict[str, str]] = []
+        states: list[dict[str, Any]] = []
         both_started = threading.Event()
         release = threading.Event()
         cancelled = threading.Event()

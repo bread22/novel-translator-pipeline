@@ -10,7 +10,7 @@ import {
   Terminal,
   CheckCircle2,
 } from 'lucide-react';
-import { BookSummary, PromptItem, StreamEvent, SystemConfig, TaskStatusResponse } from '../types/api';
+import { BookSummary, PromptItem, ReviewerExecutionDetail, StreamEvent, SystemConfig, TaskStatusResponse } from '../types/api';
 import { api } from '../lib/api';
 
 interface LiveStudioViewProps {
@@ -256,6 +256,29 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           standby: 'STANDBY',
         }[status] || 'STANDBY');
         const reviewerActive = (status: string) => status === 'reviewing';
+        const reviewerDetailText = (detail: ReviewerExecutionDetail | undefined) => {
+          if (!detail) return '';
+          const parts: string[] = [];
+          if (detail.chunk_index && detail.total_chunks) parts.push(`分块 ${detail.chunk_index}/${detail.total_chunks}`);
+          if (detail.attempt) parts.push(`尝试 #${detail.attempt}`);
+          if (detail.candidate_index && (detail.candidate_total || 0) > 1) {
+            parts.push(`路由 ${detail.candidate_index}/${detail.candidate_total}`);
+          }
+          if (detail.split_path && detail.split_path !== 'root') parts.push(`子段 ${detail.split_path}`);
+          return parts.join(' · ');
+        };
+        const reviewerCard = (
+          role: 'primary' | 'secondary',
+          label: string,
+          configuredName: string,
+          configuredModel: string,
+          status: string,
+        ) => {
+          const detail = activeTask?.reviewer_details?.[role];
+          const actualName = detail?.backend || configuredName;
+          const actualModel = config?.providers?.[actualName]?.model || (actualName === configuredName ? configuredModel : actualName);
+          return { role: label, name: actualName, model: actualModel, status, detail: reviewerDetailText(detail) };
+        };
 
         return (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -379,8 +402,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {[
-                    { role: 'REVIEWER #1 (主审)', name: rev1Name, model: rev1Model, status: rev1Status },
-                    { role: 'REVIEWER #2 (副审)', name: rev2Name, model: rev2Model, status: rev2Status },
+                    reviewerCard('primary', 'REVIEWER #1 (主审)', rev1Name, rev1Model, rev1Status),
+                    reviewerCard('secondary', 'REVIEWER #2 (副审)', rev2Name, rev2Model, rev2Status),
                   ].map((reviewer) => (
                     <div
                       key={reviewer.role}
@@ -418,6 +441,11 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                       <div className="text-[10px] text-[#666666] font-mono truncate mt-0.5" title={reviewer.model}>
                         {reviewer.model}
                       </div>
+                      {reviewer.detail && (
+                        <div className="text-[10px] text-[#1D4ED8] font-mono mt-1" title={reviewer.detail}>
+                          {reviewer.detail}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -608,6 +636,22 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 content = (
                   <span className="text-[#4A4A4A] font-sans">
                     📊 全书进度: <strong className="text-[#1D4ED8]">{Math.round((evt.data?.overall_progress || 0) * 100)}%</strong> · {evt.data?.message || ''}
+                  </span>
+                );
+              } else if (evt.event === 'pipeline_reviewer_status') {
+                const role = evt.data?.reviewer_role === 'secondary' ? '副审' : '主审';
+                const backend = evt.data?.reviewer_backend || '-';
+                const status = ({ reviewing: '审阅中', completed: '已完成', failed: '调用失败', cancelled: '已取消' } as Record<string, string>)[evt.data?.reviewer_status] || evt.data?.reviewer_status;
+                const details = [
+                  evt.data?.attempt ? `尝试 #${evt.data.attempt}` : '',
+                  evt.data?.candidate_index && evt.data?.candidate_total > 1 ? `路由 ${evt.data.candidate_index}/${evt.data.candidate_total}` : '',
+                  evt.data?.chunk_index && evt.data?.total_chunks ? `分块 ${evt.data.chunk_index}/${evt.data.total_chunks}` : '',
+                  evt.data?.split_path && evt.data.split_path !== 'root' ? `子段 ${evt.data.split_path}` : '',
+                  evt.data?.timeout_seconds ? `超时 ${evt.data.timeout_seconds}s` : '',
+                ].filter(Boolean).join(' · ');
+                content = (
+                  <span className="text-violet-800 font-sans">
+                    🔎 <strong>{role}</strong> · 后端 <strong>{backend}</strong> · {status}{details ? ` · ${details}` : ''}
                   </span>
                 );
               } else if (evt.event === 'chapter_completed') {

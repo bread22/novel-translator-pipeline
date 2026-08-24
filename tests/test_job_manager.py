@@ -57,6 +57,7 @@ class JobManagerTests(unittest.TestCase):
         self.assertEqual(status.items[0].phase, "queued")
         self.assertEqual(self.qm.get_task(item.id).phase, "queued")
         self.assertEqual(self.qm.get_task(item.id).reviewer_states, {})
+        self.assertEqual(self.qm.get_task(item.id).reviewer_details, {})
 
     def test_enqueue_duplicate(self) -> None:
         item1 = self.qm.enqueue("book-1")

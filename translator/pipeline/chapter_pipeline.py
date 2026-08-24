@@ -174,7 +174,7 @@ class IterativePipeline:
         translated_root: Path | None = None,
         on_batch_completed: Callable[[dict[str, Any]], None] | None = None,
         on_phase_changed: Callable[[dict[str, Any]], None] | None = None,
-        on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
+        on_reviewer_status: Callable[[dict[str, Any]], None] | None = None,
         cancellation_token: CancellationToken | None = None,
         pause_gate: PauseGate | None = None,
     ) -> None:

@@ -614,6 +614,125 @@ class PipelineFunctionTests(unittest.TestCase):
             result = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(result["checked_ids"], ["p1", "p2", "p3", "p4"])
 
+    def test_review_tries_explicit_fallback_then_splits_from_original_with_fresh_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "c1-input.json"
+            output_path = root / "c1-output.json"
+            items = [
+                {"id": f"p{i}", "source": "源" * 2000, "translated": f"译{i}"}
+                for i in range(1, 5)
+            ]
+            input_path.write_text(json.dumps({
+                "book": "book",
+                "chapter_id": "c1",
+                "book_memory": {},
+                "previous_chapter_state": {},
+                "glossary": [],
+                "items": items,
+            }), encoding="utf-8")
+
+            calls: list[tuple[str, tuple[str, ...], int]] = []
+            states: list[dict[str, Any]] = []
+
+            class Provider:
+                def __init__(self, name: str) -> None:
+                    self.name = name
+
+                def review(self, _kind, payload, _schema, *, timeout, **_kwargs):
+                    ids = tuple(item["id"] for item in payload["items"])
+                    calls.append((self.name, ids, timeout))
+                    if len(ids) > 2:
+                        raise TimeoutError(f"{self.name} timeout")
+                    return {
+                        "checked_ids": list(ids),
+                        "fixes": [],
+                        "glossary_delta": {},
+                        "memory_delta": {},
+                        "chapter_state": {"summary": ",".join(ids)},
+                    }
+
+            from unittest.mock import patch
+            from translator.review.reviewer import run_chapter_review
+
+            config = {
+                "roles": {
+                    "reviewer": "primary-reviewer",
+                    "secondary_reviewer": "",
+                    "dual_review": False,
+                    "fallback_reviewers": ["fallback-reviewer"],
+                    "fallback_translators": ["translation-only"],
+                },
+            }
+            with (
+                patch("translator.review.reviewer.load_config", return_value=config),
+                patch("translator.review.reviewer.get_provider", side_effect=Provider),
+            ):
+                run_chapter_review(
+                    input_path,
+                    output_path,
+                    backend="primary-reviewer",
+                    dual_review=False,
+                    chunk_size=4,
+                    on_reviewer_status=states.append,
+                )
+
+            self.assertEqual(calls, [
+                ("primary-reviewer", ("p1", "p2", "p3", "p4"), 360),
+                ("fallback-reviewer", ("p1", "p2", "p3", "p4"), 360),
+                ("primary-reviewer", ("p1", "p2"), 360),
+                ("primary-reviewer", ("p3", "p4"), 360),
+            ])
+            reviewing = [state for state in states if state["status"] == "reviewing"]
+            self.assertEqual([state["attempt"] for state in reviewing], [1, 2, 3, 4])
+            self.assertEqual([state["backend"] for state in reviewing], [
+                "primary-reviewer", "fallback-reviewer", "primary-reviewer", "primary-reviewer",
+            ])
+            self.assertEqual([state["split_path"] for state in reviewing], ["root", "root", "root.L", "root.R"])
+            self.assertTrue(all(state["chunk_index"] == 1 and state["total_chunks"] == 1 for state in reviewing))
+
+    def test_review_status_reports_each_rolling_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "c1-input.json"
+            output_path = root / "c1-output.json"
+            items = [
+                {"id": f"p{i}", "source": f"源{i}", "translated": f"译{i}"}
+                for i in range(1, 6)
+            ]
+            input_path.write_text(json.dumps({
+                "book": "book", "chapter_id": "c1", "book_memory": {},
+                "previous_chapter_state": {}, "glossary": [], "items": items,
+            }), encoding="utf-8")
+            states: list[dict[str, Any]] = []
+
+            class Provider:
+                def review(self, _kind, payload, _schema, **_kwargs):
+                    ids = [item["id"] for item in payload["items"]]
+                    return {
+                        "checked_ids": ids, "fixes": [], "glossary_delta": {},
+                        "memory_delta": {}, "chapter_state": {"summary": ",".join(ids)},
+                    }
+
+            from unittest.mock import patch
+            from translator.review.reviewer import run_chapter_review
+
+            with (
+                patch("translator.review.reviewer.load_config", return_value={
+                    "roles": {"reviewer": "reviewer", "dual_review": False, "fallback_reviewers": []},
+                }),
+                patch("translator.review.reviewer.get_provider", return_value=Provider()),
+            ):
+                run_chapter_review(
+                    input_path, output_path, backend="reviewer", dual_review=False,
+                    chunk_size=2, on_reviewer_status=states.append,
+                )
+
+            reviewing = [state for state in states if state["status"] == "reviewing"]
+            self.assertEqual([state["chunk_index"] for state in reviewing], [1, 2, 3])
+            self.assertEqual([state["total_chunks"] for state in reviewing], [3, 3, 3])
+            self.assertEqual([state["attempt"] for state in reviewing], [1, 2, 3])
+
 
 if __name__ == "__main__":
     unittest.main()

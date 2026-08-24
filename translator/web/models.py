@@ -86,6 +86,7 @@ class TaskStatusResponse(BaseModel):
     status: str  # idle, running, paused, completed, failed, stopped
     phase: str = "idle"  # queued, initializing, translating, reviewing, finalizing, idle
     reviewer_states: dict[str, str] = Field(default_factory=dict)  # standby, pending, reviewing, completed, failed, cancelled
+    reviewer_details: dict[str, dict[str, Any]] = Field(default_factory=dict)
     overall_progress: float = 0.0
     current_chapter: str = ""
     current_chapter_index: int = 0
@@ -185,6 +186,7 @@ class QueueItem(BaseModel):
     status: str = "pending"  # pending, running, paused, completed, failed, cancelled
     phase: str = "queued"  # queued, initializing, translating, reviewing, finalizing, idle
     reviewer_states: dict[str, str] = Field(default_factory=dict)  # standby, pending, reviewing, completed, failed, cancelled
+    reviewer_details: dict[str, dict[str, Any]] = Field(default_factory=dict)
     order_index: int = 0
     priority: int = 0
     overall_progress: float = 0.0

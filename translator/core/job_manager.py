@@ -158,6 +158,7 @@ class JobManager:
             status=item.status,
             phase=item.phase,
             reviewer_states=item.reviewer_states,
+            reviewer_details=item.reviewer_details,
             overall_progress=item.overall_progress,
             current_chapter=item.current_chapter,
             current_chapter_index=item.current_chapter_index,
@@ -729,8 +730,10 @@ class JobManager:
                     item.phase = phase
                     if phase == "translating":
                         item.reviewer_states = {"primary": "standby", "secondary": "standby"}
+                        item.reviewer_details = {}
                     elif phase == "reviewing":
                         item.reviewer_states = {"primary": "pending", "secondary": "pending"}
+                        item.reviewer_details = {}
                     if chapter_id:
                         item.current_chapter = chapter_id
                     action = "翻译" if phase == "translating" else "审阅"
@@ -741,13 +744,35 @@ class JobManager:
                 broadcaster.broadcast_sync("pipeline_phase_changed", payload, book_id=item.book_id)
                 self._emit_item_progress(item)
 
-            def handle_reviewer_status(status_info: dict[str, str]) -> None:
+            def handle_reviewer_status(status_info: dict[str, Any]) -> None:
                 role = str(status_info.get("role", "")).strip()
                 status = str(status_info.get("status", "")).strip()
                 if role not in {"primary", "secondary"} or status not in {"standby", "pending", "reviewing", "completed", "failed", "cancelled"}:
                     return
                 with self._lock:
                     item.reviewer_states = {**item.reviewer_states, role: status}
+                    detail = {key: value for key, value in status_info.items() if key != "role"}
+                    item.reviewer_details = {**item.reviewer_details, role: detail}
+                    role_label = "主审" if role == "primary" else "副审"
+                    backend = str(status_info.get("backend", "")).strip() or "-"
+                    attempt = int(status_info.get("attempt", 0) or 0)
+                    chunk_index = int(status_info.get("chunk_index", 0) or 0)
+                    total_chunks = int(status_info.get("total_chunks", 0) or 0)
+                    split_path = str(status_info.get("split_path", "root"))
+                    action = {
+                        "reviewing": "审阅中",
+                        "completed": "已完成",
+                        "failed": "调用失败",
+                        "cancelled": "已取消",
+                    }.get(status, status)
+                    parts = [f"{role_label} {backend} {action}"]
+                    if attempt:
+                        parts.append(f"尝试 #{attempt}")
+                    if chunk_index and total_chunks:
+                        parts.append(f"分块 {chunk_index}/{total_chunks}")
+                    if split_path and split_path != "root":
+                        parts.append(f"子段 {split_path}")
+                    item.message = " · ".join(parts)
                     item.updated_at = utc_now()
                     self._save_state()
                     payload = {
@@ -755,6 +780,7 @@ class JobManager:
                         "reviewer_role": role,
                         "reviewer_backend": status_info.get("backend", ""),
                         "reviewer_status": status,
+                        **{key: value for key, value in status_info.items() if key not in {"role", "backend", "status"}},
                     }
                 broadcaster.broadcast_sync("pipeline_reviewer_status", payload, book_id=item.book_id)
 
@@ -910,6 +936,7 @@ class JobManager:
                 "status": item.status,
                 "phase": item.phase,
                 "reviewer_states": item.reviewer_states,
+                "reviewer_details": item.reviewer_details,
                 "overall_progress": item.overall_progress,
                 "current_chapter": item.current_chapter,
                 "current_chapter_index": item.current_chapter_index,

@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useReducer, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { QueueHubView } from './views/QueueHubView';
 import { LiveStudioView } from './views/LiveStudioView';
 import { ReaderView } from './views/ReaderView';
 import { KnowledgeView } from './views/KnowledgeView';
 import { SettingsView } from './views/SettingsView';
-import { BookSummary, QueueStatusResponse, StreamEvent, TaskStatusResponse } from './types/api';
+import { QueueStatusResponse, StreamEvent, TaskStatusResponse } from './types/api';
 import { api } from './lib/api';
+import { appServerReducer, initialAppServerState } from './appState';
+import { createRequestCache } from './lib/requestCache';
 
 const VALID_TABS = ['queue', 'studio', 'reader', 'knowledge', 'settings'];
 
@@ -15,17 +17,16 @@ export const App: React.FC = () => {
     const tab = window.location.hash.replace(/^#\/?/, '');
     return VALID_TABS.includes(tab) ? tab : 'queue';
   });
-  const [books, setBooks] = useState<BookSummary[]>([]);
-  const [queueStatus, setQueueStatus] = useState<QueueStatusResponse | null>(null);
+  const [{ books, queue: queueStatus, task: activeTask }, dispatchServer] = useReducer(appServerReducer, initialAppServerState);
   const [selectedBookId, setSelectedBookId] = useState<string | null>(() => {
     return localStorage.getItem('selected_book_id') || null;
   });
-  const [activeTask, setActiveTask] = useState<TaskStatusResponse | null>(null);
   const [eventsByBook, setEventsByBook] = useState<Record<string, StreamEvent[]>>({});
   const [sseConnected, setSseConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const selectedBookRef = useRef(selectedBookId);
+  const requestCache = useRef(createRequestCache()).current;
 
   useEffect(() => {
     selectedBookRef.current = selectedBookId;
@@ -34,9 +35,9 @@ export const App: React.FC = () => {
   // Refresh Books
   const refreshBooks = useCallback(async () => {
     try {
-      const data = await api.getBooks();
+      const data = await requestCache('books', () => api.getBooks());
       setLoadError(null);
-      setBooks(data);
+      dispatchServer({ type: 'books', value: data });
       if (data.length > 0) {
         setSelectedBookId((prev) => {
           if (prev && data.some((b) => b.id === prev)) {
@@ -53,28 +54,28 @@ export const App: React.FC = () => {
       console.error('Failed to fetch books:', err);
       setLoadError(err instanceof Error ? err.message : '书籍列表加载失败');
     }
-  }, []);
+  }, [requestCache]);
 
   // Refresh active task status
   const refreshTask = useCallback(async () => {
     if (!selectedBookId) return;
     try {
-      const task = await api.getTaskStatus(selectedBookId).catch(() => null);
-      setActiveTask(task);
+      const task = await requestCache(`task:${selectedBookId}`, () => api.getTaskStatus(selectedBookId)).catch(() => null);
+      dispatchServer({ type: 'task', value: task });
     } catch (err) {
       console.error('Failed to fetch task status:', err);
     }
-  }, [selectedBookId]);
+  }, [requestCache, selectedBookId]);
 
   // Refresh Queue
   const refreshQueue = useCallback(async () => {
     try {
-      const q = await api.getQueue();
-      setQueueStatus(q);
+      const q = await requestCache('queue', () => api.getQueue());
+      dispatchServer({ type: 'queue', value: q });
     } catch (err) {
       console.error('Failed to fetch queue:', err);
     }
-  }, []);
+  }, [requestCache]);
 
   useEffect(() => {
     Promise.allSettled([refreshBooks(), refreshQueue()]).finally(() => setIsInitialLoading(false));
@@ -118,7 +119,7 @@ export const App: React.FC = () => {
 
       // 1. Queue event updates
       if (evt.event === 'queue_updated' && evt.data && typeof evt.data === 'object') {
-        setQueueStatus(evt.data as QueueStatusResponse);
+        dispatchServer({ type: 'queue', value: evt.data as QueueStatusResponse });
         refreshBooks();
       } else if (evt.event.startsWith('queue_')) {
         refreshQueue();
@@ -128,7 +129,7 @@ export const App: React.FC = () => {
       // 2. Direct activeTask state update from event payload if present
       if (evt.data && typeof evt.data === 'object' && evt.data.task_id && evt.data.status) {
         if (!selectedBookRef.current || evt.data.book_id === selectedBookRef.current) {
-          setActiveTask(evt.data as TaskStatusResponse);
+          dispatchServer({ type: 'task', value: evt.data as TaskStatusResponse });
         }
       }
 
@@ -146,7 +147,9 @@ export const App: React.FC = () => {
       ];
       if (pipelineEvents.includes(evt.event)) {
         if (selectedBookRef.current) {
-          api.getTaskStatus(selectedBookRef.current).then(setActiveTask).catch(() => setActiveTask(null));
+          requestCache(`task:${selectedBookRef.current}`, () => api.getTaskStatus(selectedBookRef.current!))
+            .then((value) => dispatchServer({ type: 'task', value }))
+            .catch(() => dispatchServer({ type: 'task', value: null }));
         }
         refreshBooks();
         refreshQueue();
@@ -157,7 +160,9 @@ export const App: React.FC = () => {
         refreshBooks();
         refreshQueue();
         if (selectedBookRef.current) {
-          api.getTaskStatus(selectedBookRef.current).then(setActiveTask).catch(() => setActiveTask(null));
+          requestCache(`task:${selectedBookRef.current}`, () => api.getTaskStatus(selectedBookRef.current!))
+            .then((value) => dispatchServer({ type: 'task', value }))
+            .catch(() => dispatchServer({ type: 'task', value: null }));
         }
       }
     });
@@ -165,7 +170,7 @@ export const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, [refreshBooks, refreshQueue]);
+  }, [refreshBooks, refreshQueue, requestCache]);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
 

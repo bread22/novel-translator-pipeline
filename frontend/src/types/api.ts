@@ -77,6 +77,7 @@ export interface PipelineStartRequest {
   fallback_translators?: string[];
   reviewer?: string;
   translation_policy?: string;
+  max_cycles?: number;
 }
 
 export interface PromptItem {
@@ -271,7 +272,7 @@ export interface QueueItem {
   book_name: string;
   source_type: string;
   options: PipelineStartRequest;
-  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'recovery_pending' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   order_index: number;
   priority: number;
   overall_progress: number;
@@ -283,7 +284,11 @@ export interface QueueItem {
   enqueued_at: string;
   started_at?: string | null;
   completed_at?: string | null;
+  updated_at?: string | null;
   retry_count: number;
+  checkpoint: Record<string, unknown>;
+  process_id?: string | null;
+  recovery_reason?: string | null;
 }
 
 export interface QueueStatusResponse {

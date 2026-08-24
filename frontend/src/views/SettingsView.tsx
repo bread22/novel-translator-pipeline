@@ -19,7 +19,7 @@ import {
 import { PreflightProviderResult, PreflightResponse, PromptItem, SystemConfig } from '../types/api';
 import { api } from '../lib/api';
 import { Modal } from '../components/Modal';
-import { providerRoleReferences } from './settingsUtils';
+import { migrateProviderRoleReferences, providerRoleReferences } from './settingsUtils';
 
 export const SettingsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'routing' | 'prompts'>('routing');
@@ -28,6 +28,8 @@ export const SettingsView: React.FC = () => {
   const [isRunningPreflight, setIsRunningPreflight] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [providerPendingDeletion, setProviderPendingDeletion] = useState<string | null>(null);
+  const [providerReplacementId, setProviderReplacementId] = useState('');
 
   const lastSavedConfig = useRef<SystemConfig | null>(null);
 
@@ -243,7 +245,9 @@ export const SettingsView: React.FC = () => {
     if (!config || !config.providers) return;
     const references = providerRoleReferences(config, providerId);
     if (references.length) {
-      alert(`Provider [${providerId}] 正被以下角色引用：${references.join('、')}。请先在角色路由中迁移这些角色。`);
+      const replacement = Object.keys(config.providers).find((id) => id !== providerId) || '';
+      setProviderPendingDeletion(providerId);
+      setProviderReplacementId(replacement);
       return;
     }
     if (!confirm(`确定要删除 Provider [${providerId}] 吗？`)) return;
@@ -252,6 +256,15 @@ export const SettingsView: React.FC = () => {
       ...config,
       providers: remaining,
     });
+  };
+
+  const handleMigrateAndDeleteProvider = () => {
+    if (!config?.providers || !providerPendingDeletion || !providerReplacementId) return;
+    const migrated = migrateProviderRoleReferences(config, providerPendingDeletion, providerReplacementId);
+    const { [providerPendingDeletion]: _removed, ...remaining } = migrated.providers || {};
+    setConfig({ ...migrated, providers: remaining });
+    setProviderPendingDeletion(null);
+    setProviderReplacementId('');
   };
 
   const handleAddProviderSubmit = (e: React.FormEvent) => {
@@ -1062,6 +1075,32 @@ export const SettingsView: React.FC = () => {
       )}
 
       {/* Add Provider Modal */}
+      {providerPendingDeletion && config?.providers && (
+        <Modal title="迁移 Provider 角色引用" onClose={() => setProviderPendingDeletion(null)} className="p-6 max-w-lg w-full space-y-4">
+          <h3 className="font-serif font-bold">删除前迁移角色引用</h3>
+          <p className="text-xs text-[#4A4A4A]">
+            Provider [{providerPendingDeletion}] 被 {providerRoleReferences(config, providerPendingDeletion).join('、')} 引用。请选择替代 Provider；迁移和删除将在点击「保存配置」时一并提交。
+          </p>
+          <label className="block text-xs font-medium" htmlFor="provider-replacement">替代 Provider</label>
+          <select
+            id="provider-replacement"
+            value={providerReplacementId}
+            onChange={(event) => setProviderReplacementId(event.target.value)}
+            className="w-full border border-[#E5E0D8] bg-white p-2 text-xs"
+          >
+            {Object.keys(config.providers).filter((id) => id !== providerPendingDeletion).map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setProviderPendingDeletion(null)} className="border px-4 py-2 text-xs">取消</button>
+            <button type="button" disabled={!providerReplacementId} onClick={handleMigrateAndDeleteProvider} className="bg-[#1D4ED8] px-4 py-2 text-xs text-white disabled:opacity-50">
+              迁移引用并删除
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {showAddProviderModal && (
         <Modal title="新增 AI Provider" onClose={() => setShowAddProviderModal(false)} className="p-6 max-w-lg w-full space-y-5">
             <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-3">
@@ -1113,7 +1152,7 @@ export const SettingsView: React.FC = () => {
                   <div>
                     <label className="text-[#4A4A4A] block mb-1 font-medium font-serif">Base URL</label>
                     <input
-                      type="password"
+                      type="text"
                       required
                       placeholder="例如: https://api.deepseek.com/v1"
                       value={newBaseUrl}
@@ -1127,7 +1166,7 @@ export const SettingsView: React.FC = () => {
                       API Key (密钥)
                     </label>
                     <input
-                      type="text"
+                      type="password"
                       placeholder="sk-xxxxxxxx 或 $ENV_VAR"
                       value={newApiKey}
                       onChange={(e) => setNewApiKey(e.target.value)}

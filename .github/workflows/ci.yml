@@ -45,6 +45,7 @@ jobs:
       - run: ruff check translator scripts tests
       - run: mypy translator
       - run: python scripts/check_version_consistency.py
+      - run: python scripts/check_frontend_api_contract.py
       - name: Build wheel and source distribution
         run: python -m build
       - name: Install wheel in a clean environment

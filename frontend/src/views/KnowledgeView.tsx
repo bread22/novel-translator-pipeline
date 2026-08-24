@@ -397,8 +397,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
 
             <form onSubmit={handleAddTerm} className="space-y-3 text-xs">
               <div>
-                <label className="block text-[#4A4A4A] mb-1 font-serif">日文原文 (Source):</label>
+                <label htmlFor="glossary-source" className="block text-[#4A4A4A] mb-1 font-serif">日文原文 (Source):</label>
                 <input
+                  id="glossary-source"
                   type="text"
                   required
                   placeholder="如: 由香利"
@@ -409,8 +410,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
               </div>
 
               <div>
-                <label className="block text-[#4A4A4A] mb-1 font-serif">中文统一译名 (Target):</label>
+                <label htmlFor="glossary-target" className="block text-[#4A4A4A] mb-1 font-serif">中文统一译名 (Target):</label>
                 <input
+                  id="glossary-target"
                   type="text"
                   required
                   placeholder="如: 由香里 / 由香莉"
@@ -421,8 +423,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
               </div>
 
               <div>
-                <label className="block text-[#4A4A4A] mb-1">分类:</label>
+                <label htmlFor="glossary-category" className="block text-[#4A4A4A] mb-1">分类:</label>
                 <select
+                  id="glossary-category"
                   value={newCategory}
                   onChange={(e) => setNewCategory(e.target.value)}
                   className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2 text-[#1A1A1A] focus:outline-none"

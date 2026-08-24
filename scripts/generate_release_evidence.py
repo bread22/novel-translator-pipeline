@@ -13,7 +13,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.check_version_consistency import check_versions
+from scripts.check_frontend_api_contract import check_contract
 from scripts.migrate_glossary_v2 import migrate
+from scripts.migrate_memory_v2 import migrate as migrate_memory
+from scripts.migrate_review_v2 import migrate as migrate_review
 from scripts.verify_frontend_dist import verify_dist
 from translator.core.config import CONFIG_PATH, load_config, validate_config_data
 from translator.core.paths import PathResolver
@@ -36,6 +39,8 @@ def generate(output_dir: Path) -> dict[str, Any]:
     resolver = PathResolver.for_config(config_path)
     output_root = resolver.output_root(config)
     glossary_reports = [migrate(path) for path in sorted(output_root.glob("*/data/glossary.json")) if path.is_file()]
+    memory_reports = [migrate_memory(path) for path in sorted(output_root.glob("*/data/book_memory.json")) if path.is_file()]
+    review_reports = [migrate_review(path) for path in sorted(output_root.glob("*/reviews/c*-output.json")) if path.is_file()]
     queue_path = output_root / "jobs" / "job_state.v2.json"
     queue_payload = json.loads(queue_path.read_text(encoding="utf-8")) if queue_path.is_file() else None
     queue_report = {
@@ -58,7 +63,14 @@ def generate(output_dir: Path) -> dict[str, Any]:
             "mutated": config_before != config_after,
         },
         "glossary-migration-dry-run.json": {"schema_version": "2.0", "mode": "dry-run", "reports": glossary_reports},
+        "memory-migration-dry-run.json": {"schema_version": "2.0", "mode": "dry-run", "reports": memory_reports},
+        "review-migration-dry-run.json": {"schema_version": "2.0", "mode": "dry-run", "reports": review_reports},
         "queue-state-migration-dry-run.json": queue_report,
+        "frontend-api-contract.json": {
+            "status": "ok" if not (contract_failures := check_contract()) else "error",
+            "interfaces": 14,
+            "failures": contract_failures,
+        },
     }
     for filename, report in reports.items():
         _write(output_dir / filename, report)

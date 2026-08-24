@@ -154,7 +154,8 @@ context_tokens = 1048576
 项目具备后端、前端和浏览器自动化测试套件；持续结果以页首 CI badge 为准，不在文档中固定测试数量或耗时：
 
 ```bash
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q --cov=translator --cov-report=json:coverage.json --cov-fail-under=80
+.venv/bin/python scripts/check_coverage_thresholds.py coverage.json
 .venv/bin/ruff check translator scripts tests
 .venv/bin/mypy translator
 cd frontend

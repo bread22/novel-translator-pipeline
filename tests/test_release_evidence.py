@@ -11,7 +11,10 @@ def test_release_evidence_generation_is_non_mutating(tmp_path: Path) -> None:
         "frontend-dist.json",
         "config-dry-run.json",
         "glossary-migration-dry-run.json",
+        "memory-migration-dry-run.json",
+        "review-migration-dry-run.json",
         "queue-state-migration-dry-run.json",
+        "frontend-api-contract.json",
         "openapi.json",
     }
     assert expected <= set(report["files"])

@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - 将 Web 单书执行与多书队列收敛到唯一 `JobManager`，补齐状态机、并发槽位、取消检查点、重启恢复和历史裁剪。
+- 删除旧 `TranslationQueue` 执行引擎，CLI 批处理统一通过 `JobManager`，并提供 Queue/Glossary/Memory/Review v2 dry-run、备份与升级报告。
 - 统一 Review/Memory/Glossary v2 契约、Fallback 尝试记录、Finalize 校验与外部进程超时终止。
 - 前端改用单一全局 SSE、固定事件 envelope、可取消请求与最新请求获胜，并补齐 Modal 焦点管理和 URL tabs。
+- 前端 books/queue/tasks 使用 reducer 与同请求合并缓存，Provider 删除支持角色引用迁移，TypeScript 契约由 OpenAPI 在 CI 中校验。
 - 前端生产资源改为可重复构建与发布归档交付，不再跟踪残缺 `dist`。
 
 ### Security
@@ -20,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 默认仅监听 loopback，收紧 CORS，并增加可选 Bearer 管理认证、安全响应头和请求 ID。
 
 ### Quality
-- 支持范围统一为 Python 3.10–3.13 与 Node 20；加入后端矩阵、Ruff/mypy、前端 Vitest/RTL、Playwright、构建产物与干净安装门禁。
+- 支持范围统一为 Python 3.10–3.13 与 Node 20；加入后端矩阵、Ruff/mypy、前端 Vitest/RTL、完整工作流 Playwright、构建产物与干净安装门禁。
+- 覆盖率门禁按关键配置/状态/合并逻辑 90%、Provider/API 85%、其余核心 Python 80% 分组强制执行。
 
 ## [0.2.0] - 2026-08-23
 

@@ -3,6 +3,10 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+coverage.json
+frontend/test-results/
+frontend/playwright-report/
 .env
 .env.*
 !.env.example

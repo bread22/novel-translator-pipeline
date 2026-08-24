@@ -76,7 +76,7 @@ translator/
 └── pipeline/                   # 业务流水线层
     ├── preflight.py            # 端到端启动前全 Provider 与审阅者健康检查
     ├── chapter_pipeline.py     # 章节推进主流程与两级 Fallback 容灾调度 (IterativePipeline)
-    └── queue.py                # 批量书籍全自动翻译工作队列 (TranslationQueue)
+    └── chapter_pipeline.py     # 单书章节流水线；批量入口统一委托 core/job_manager.py
 ```
 
 ---

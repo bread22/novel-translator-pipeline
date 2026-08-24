@@ -11,6 +11,30 @@ import { appServerReducer, initialAppServerState } from './appState';
 import { createRequestCache } from './lib/requestCache';
 
 const VALID_TABS = ['queue', 'studio', 'reader', 'knowledge', 'settings'];
+const STREAM_EVENTS_STORAGE_KEY = 'stream_events_by_book_v1';
+const MAX_STREAM_EVENTS_PER_BOOK = 300;
+
+function loadPersistedEvents(): Record<string, StreamEvent[]> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STREAM_EVENTS_STORAGE_KEY) || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([bookId, events]) => (
+        Array.isArray(events)
+          ? [[bookId, events.filter((event): event is StreamEvent => (
+            event !== null
+            && typeof event === 'object'
+            && typeof event.event === 'string'
+            && typeof event.timestamp === 'string'
+            && typeof event.event_id === 'string'
+          )).slice(-MAX_STREAM_EVENTS_PER_BOOK)]]
+          : []
+      )),
+    );
+  } catch {
+    return {};
+  }
+}
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>(() => {
@@ -21,7 +45,7 @@ export const App: React.FC = () => {
   const [selectedBookId, setSelectedBookId] = useState<string | null>(() => {
     return localStorage.getItem('selected_book_id') || null;
   });
-  const [eventsByBook, setEventsByBook] = useState<Record<string, StreamEvent[]>>({});
+  const [eventsByBook, setEventsByBook] = useState<Record<string, StreamEvent[]>>(loadPersistedEvents);
   const [sseConnected, setSseConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -31,6 +55,14 @@ export const App: React.FC = () => {
   useEffect(() => {
     selectedBookRef.current = selectedBookId;
   }, [selectedBookId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(eventsByBook));
+    } catch (err) {
+      console.warn('Failed to persist stream events:', err);
+    }
+  }, [eventsByBook]);
 
   // Refresh Books
   const refreshBooks = useCallback(async () => {
@@ -112,7 +144,7 @@ export const App: React.FC = () => {
           const existing = prev[targetBookId] || [];
           return {
             ...prev,
-            [targetBookId]: [...existing.slice(-300), evt],
+            [targetBookId]: [...existing.slice(-(MAX_STREAM_EVENTS_PER_BOOK - 1)), evt],
           };
         });
       }

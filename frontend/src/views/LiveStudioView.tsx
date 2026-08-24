@@ -19,6 +19,7 @@ interface LiveStudioViewProps {
   streamEvents: StreamEvent[];
   onRefreshTask: () => Promise<void>;
   onRefreshBooks: () => Promise<void>;
+  onClearEvents?: () => void;
 }
 
 export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
@@ -27,6 +28,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   streamEvents,
   onRefreshTask,
   onRefreshBooks,
+  onClearEvents,
 }) => {
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [isStarting, setIsStarting] = useState(false);
@@ -517,6 +519,16 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
             >
               降级容灾
             </button>
+
+            {onClearEvents && streamEvents.length > 0 && (
+              <button
+                onClick={onClearEvents}
+                className="px-2 py-1 rounded text-xs text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors ml-1"
+                title="清空当前日志流"
+              >
+                清空
+              </button>
+            )}
           </div>
         </div>
 

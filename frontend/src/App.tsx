@@ -16,7 +16,7 @@ export const App: React.FC = () => {
     return localStorage.getItem('selected_book_id') || null;
   });
   const [activeTask, setActiveTask] = useState<TaskStatusResponse | null>(null);
-  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
+  const [eventsByBook, setEventsByBook] = useState<Record<string, StreamEvent[]>>({});
   const [sseConnected, setSseConnected] = useState(false);
 
   // Refresh Books
@@ -76,22 +76,22 @@ export const App: React.FC = () => {
 
   // Global SSE Subscription
   useEffect(() => {
-    setStreamEvents([]); // Clear stale event history when book changes
     const unsubscribe = api.subscribeEvents((evt) => {
-      // Filter out connect events or data events from other books if book_id is strictly bound
-      if (selectedBookId) {
-        if (evt.event === 'connect' && evt.data?.book_id && evt.data.book_id !== selectedBookId) {
-          return;
-        }
-        if (evt.data?.book_id && evt.data.book_id !== selectedBookId && !evt.event.startsWith('queue_')) {
-          return;
-        }
-      }
-
       if (evt.event === 'connect') {
         setSseConnected(true);
       }
-      setStreamEvents((prev) => [...prev.slice(-200), evt]);
+
+      // Record event under target book ID
+      const targetBookId = evt.book_id || evt.data?.book_id || selectedBookId;
+      if (targetBookId) {
+        setEventsByBook((prev) => {
+          const existing = prev[targetBookId] || [];
+          return {
+            ...prev,
+            [targetBookId]: [...existing.slice(-300), evt],
+          };
+        });
+      }
 
       // 1. Queue event updates
       if (evt.event === 'queue_updated' && evt.data && typeof evt.data === 'object') {
@@ -138,14 +138,21 @@ export const App: React.FC = () => {
   const handleSelectBook = (bookId: string, targetTab?: string) => {
     setSelectedBookId(bookId);
     localStorage.setItem('selected_book_id', bookId);
-    setStreamEvents([]);
     if (targetTab) {
       setCurrentTab(targetTab);
     }
   };
 
+  const handleClearEvents = (bookId: string) => {
+    setEventsByBook((prev) => ({
+      ...prev,
+      [bookId]: [],
+    }));
+  };
+
   const queueCount = (queueStatus?.pending_count || 0) + (queueStatus?.running_count || 0);
   const isQueueRunning = (queueStatus?.running_count || 0) > 0;
+  const currentStreamEvents = (selectedBookId && eventsByBook[selectedBookId]) || [];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white">
@@ -178,9 +185,10 @@ export const App: React.FC = () => {
           <LiveStudioView
             book={selectedBook}
             activeTask={activeTask}
-            streamEvents={streamEvents}
+            streamEvents={currentStreamEvents}
             onRefreshTask={refreshTask}
             onRefreshBooks={refreshBooks}
+            onClearEvents={() => selectedBookId && handleClearEvents(selectedBookId)}
           />
         )}
 

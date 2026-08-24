@@ -332,7 +332,6 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
               支持多书籍批量排队、自由拖拽调整执行次序、动态并发槽位与断点续译。
             </p>
           </div>
-
           <div className="flex items-center gap-3">
             <input
               type="file"
@@ -576,7 +575,6 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         </button>
                       ) : isPendingInQueue ? (
                         <button
-                          onClick={(e) => handleCancelItem(queueItem!.id, e)}
                           className="flex items-center gap-1 px-2.5 py-1 rounded bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 text-amber-300 text-[11px] transition-all cursor-pointer"
                           title="从排队中移出"
                         >
@@ -744,7 +742,6 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
 
                         <button
                           onClick={(e) => handleCancelItem(item.id, e)}
-                          className="p-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800 transition-colors cursor-pointer"
                           title="终止该任务"
                         >
                           <X className="w-4 h-4" />
@@ -901,7 +898,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleClearQueue('all_finished')}
-                    className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+                    className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
                   >
                     全部清空
                   </button>
@@ -982,3 +979,4 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
     </div>
   );
 };
+

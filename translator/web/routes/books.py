@@ -14,6 +14,7 @@ from translator.core.layout import apply_horizontal_layout
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
 from translator.core.workspace import BookWorkspace, read_json, safe_book_name, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path, paragraph_map
+from translator.core.queue_manager import queue_manager
 from translator.web.models import (
     BookSummary,
     ChapterDetail,
@@ -363,6 +364,12 @@ def delete_book(book_id: str) -> dict[str, Any]:
     if data_book_dir.exists():
         shutil.rmtree(data_book_dir, ignore_errors=True)
 
+    # Cancel any queue items for this book
+    with queue_manager._lock:
+        to_cancel = [iid for iid, item in queue_manager._items.items() if item.book_id == book_id]
+    for iid in to_cancel:
+        queue_manager.cancel_item(iid)
+
     return {"status": "ok", "message": f"书籍 '{title}' 已彻底删除"}
 
 
@@ -390,5 +397,11 @@ def reset_book(book_id: str) -> dict[str, Any]:
 
     # 2. Reset ALL workspace files (progress, memory, glossary, reports, reviews, snapshots)
     workspace.reset(book_id=book_id)
+
+    # Cancel any queue items for this book
+    with queue_manager._lock:
+        to_cancel = [iid for iid, item in queue_manager._items.items() if item.book_id == book_id]
+    for iid in to_cancel:
+        queue_manager.cancel_item(iid)
 
     return {"status": "ok", "message": f"书籍 '{title}' 翻译进度、长期记忆、术语库与质检报告已全部清空重置"}

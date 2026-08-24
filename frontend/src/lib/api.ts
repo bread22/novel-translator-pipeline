@@ -9,6 +9,8 @@ import {
   PipelineStartRequest,
   PreflightResponse,
   PromptItem,
+  QueueStatusResponse,
+  EnqueueRequest,
   StreamEvent,
   SystemConfig,
   TaskStatusResponse,
@@ -141,6 +143,44 @@ export const api = {
       method: 'DELETE',
     }),
 
+  // Queue Management
+  getQueue: () => request<QueueStatusResponse>('/queue'),
+  enqueueBooks: (data: EnqueueRequest) =>
+    request<QueueStatusResponse>('/queue/items', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  cancelQueueItem: (itemId: string) =>
+    request<QueueStatusResponse>(`/queue/items/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+    }),
+  retryQueueItem: (itemId: string) =>
+    request<QueueStatusResponse>(`/queue/items/${encodeURIComponent(itemId)}/retry`, {
+      method: 'POST',
+    }),
+  moveQueueItem: (itemId: string, direction: 'up' | 'down' | 'top') =>
+    request<QueueStatusResponse>(`/queue/items/${encodeURIComponent(itemId)}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ direction }),
+    }),
+  reorderQueue: (itemIds: string[]) =>
+    request<QueueStatusResponse>('/queue/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ item_ids: itemIds }),
+    }),
+  pauseQueue: () => request<QueueStatusResponse>('/queue/pause', { method: 'POST' }),
+  resumeQueue: () => request<QueueStatusResponse>('/queue/resume', { method: 'POST' }),
+  clearQueue: (scope: 'completed' | 'failed' | 'all_finished' = 'completed') =>
+    request<QueueStatusResponse>('/queue/clear', {
+      method: 'POST',
+      body: JSON.stringify({ scope }),
+    }),
+  updateQueueConfig: (data: { concurrency?: number; stop_on_error?: boolean }) =>
+    request<QueueStatusResponse>('/queue/config', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   // SSE Stream
   subscribeEvents: (onEvent: (event: StreamEvent) => void, bookId?: string): (() => void) => {
     const url = bookId ? `${API_BASE}/events/stream?book_id=${encodeURIComponent(bookId)}` : `${API_BASE}/events/stream`;
@@ -175,6 +215,12 @@ export const api = {
       'pipeline_paused',
       'pipeline_resumed',
       'pipeline_stopped',
+      'queue_updated',
+      'queue_item_started',
+      'queue_item_completed',
+      'queue_item_failed',
+      'queue_paused',
+      'queue_resumed',
     ];
 
     registeredEvents.forEach((evt) => {
@@ -191,4 +237,5 @@ export const api = {
     };
   },
 };
+
 

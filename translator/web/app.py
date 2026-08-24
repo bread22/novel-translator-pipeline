@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from translator.web.routes.books import router as books_router
 from translator.web.routes.events import router as events_router
 from translator.web.routes.knowledge import router as knowledge_router
+from translator.web.routes.queue import router as queue_router
 from translator.web.routes.system import router as system_router
 from translator.web.routes.tasks import router as tasks_router
 
@@ -39,6 +40,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     # 2. Register API v1 routers
     api_v1 = APIRouter(prefix="/api/v1")
     api_v1.include_router(books_router)
+    api_v1.include_router(queue_router)
     api_v1.include_router(tasks_router)
     api_v1.include_router(knowledge_router)
     api_v1.include_router(system_router)

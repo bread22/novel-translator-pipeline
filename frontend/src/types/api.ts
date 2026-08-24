@@ -249,3 +249,42 @@ export interface StreamEvent {
   timestamp: string;
 }
 
+export interface QueueItem {
+  id: string;
+  book_id: string;
+  book_name: string;
+  source_type: string;
+  options: PipelineStartRequest;
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  order_index: number;
+  priority: number;
+  overall_progress: number;
+  current_chapter: string;
+  current_chapter_index: number;
+  total_chapters: number;
+  message: string;
+  error_detail?: string | null;
+  enqueued_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  retry_count: number;
+}
+
+export interface QueueStatusResponse {
+  is_paused: boolean;
+  concurrency: number;
+  total_items: number;
+  running_count: number;
+  pending_count: number;
+  completed_count: number;
+  failed_count: number;
+  items: QueueItem[];
+}
+
+export interface EnqueueRequest {
+  book_ids: string[];
+  options?: PipelineStartRequest;
+  insert_front?: boolean;
+}
+
+

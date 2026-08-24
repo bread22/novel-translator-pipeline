@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Activity, Compass, Cpu, BookMarked, Radio } from 'lucide-react';
+import { Layers, Activity, Compass, Cpu, BookMarked, Radio } from 'lucide-react';
 import { BookSummary, TaskStatusResponse } from '../types/api';
 
 interface NavbarProps {
@@ -10,6 +10,8 @@ interface NavbarProps {
   onSelectBookId: (id: string) => void;
   activeTask: TaskStatusResponse | null;
   sseConnected: boolean;
+  queueCount?: number;
+  isQueueRunning?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -20,12 +22,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectBookId,
   activeTask,
   sseConnected,
+  queueCount = 0,
+  isQueueRunning = false,
 }) => {
-  const isTaskRunning = activeTask && activeTask.status === 'running';
+  const isTaskRunning = (activeTask && activeTask.status === 'running') || isQueueRunning;
 
   return (
     <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/85 backdrop-blur-md px-6 py-3">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+      <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
         {/* Logo & Title */}
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 text-white font-bold text-lg">
@@ -45,15 +49,26 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Navigation Tabs */}
         <nav className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800/80">
           <button
-            onClick={() => onSelectTab('library')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              currentTab === 'library'
+            onClick={() => onSelectTab('queue')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all relative ${
+              currentTab === 'queue' || currentTab === 'library'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
             }`}
           >
-            <BookOpen className="w-4 h-4" />
-            书架中心
+            <Layers className="w-4 h-4" />
+            任务调度
+            {queueCount > 0 && (
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold leading-none ${
+                  isQueueRunning
+                    ? 'bg-emerald-500 text-white shadow-sm animate-pulse'
+                    : 'bg-slate-800 text-indigo-300 border border-slate-700'
+                }`}
+              >
+                {queueCount}
+              </span>
+            )}
           </button>
 
           <button

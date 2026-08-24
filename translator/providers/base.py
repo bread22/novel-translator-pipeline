@@ -208,6 +208,17 @@ def validate_translation_items(items: list[dict[str, str]], payload: dict[str, A
         for item in requested
         if isinstance(item, dict) and str(item.get("id", "")).strip()
     }
+    returned_ids = [str(item.get("id", "")).strip() for item in items]
+    missing_ids = [item_id for item_id in sources if item_id not in returned_ids]
+    unexpected_ids = [item_id for item_id in returned_ids if item_id not in sources]
+    duplicate_ids = sorted({item_id for item_id in returned_ids if item_id and returned_ids.count(item_id) > 1})
+    if missing_ids or unexpected_ids or duplicate_ids:
+        return {
+            "kind": "id_coverage",
+            "missing_ids": missing_ids,
+            "unexpected_ids": unexpected_ids,
+            "duplicate_ids": duplicate_ids,
+        }
     for item in items:
         item_id = str(item.get("id", "")).strip()
         text = str(item.get("text", "")).strip()

@@ -28,7 +28,9 @@ jobs:
       - name: Compile
         run: python -m compileall -q translator scripts tests
       - name: Test with coverage
-        run: python -m pytest -q --cov=translator --cov-report=term-missing --cov-report=xml
+        run: |
+          python -m pytest -q --cov=translator --cov-report=term-missing --cov-report=xml --cov-report=json:coverage.json --cov-fail-under=80
+          python scripts/check_coverage_thresholds.py coverage.json
       - name: Focused import and security regressions
         run: python -m pytest -q tests/test_import_order.py tests/test_security_regressions.py
 

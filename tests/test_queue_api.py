@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,7 @@ from translator.core.workspace import write_json
 from translator.web.app import create_app
 
 
+@unittest.skipIf(sys.version_info >= (3, 14), "Python 3.14 is outside the declared compatibility range")
 class QueueApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -44,9 +46,11 @@ class QueueApiTests(unittest.TestCase):
             )
 
         self.app = create_app()
-        self.client = TestClient(self.app)
+        self._client_context = TestClient(self.app)
+        self.client = self._client_context.__enter__()
 
     def tearDown(self) -> None:
+        self._client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def test_get_queue_empty(self) -> None:
@@ -123,4 +127,3 @@ class QueueApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

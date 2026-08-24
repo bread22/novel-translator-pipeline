@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,7 @@ from translator.web.events import EventBroadcaster
 from translator.web.task_manager import TaskManager
 
 
+@unittest.skipIf(sys.version_info >= (3, 14), "Python 3.14 is outside the declared compatibility range")
 class WebApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -80,9 +82,11 @@ class WebApiTests(unittest.TestCase):
         }
 
         self.app = create_app()
-        self.client = TestClient(self.app)
+        self._client_context = TestClient(self.app)
+        self.client = self._client_context.__enter__()
 
     def tearDown(self) -> None:
+        self._client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def test_health_check(self) -> None:
@@ -412,4 +416,3 @@ class WebApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -162,7 +162,13 @@ async def upload_book(file: UploadFile = File(...), replace: bool = Query(False)
             "--id",
             book_id,
         )
-        if result.get("status") != "ok":
+        registration_status = str(result.get("status", "")).strip().lower()
+        registration_returncode = result.get("returncode")
+        registration_succeeded = (
+            registration_status in {"ok", "success", "warning"}
+            and registration_returncode in {None, 0}
+        )
+        if not registration_succeeded:
             error_msg = "; ".join([e.get("message", "") for e in result.get("errors", [])]) or "Novel Translator 注册失败"
             raise HTTPException(status_code=500, detail=error_msg)
 

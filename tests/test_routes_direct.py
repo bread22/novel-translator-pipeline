@@ -97,7 +97,7 @@ def test_list_upload_and_export_book_routes(tmp_path: Path, monkeypatch) -> None
             write_json(books_root / uploaded_id / "manifest.json", {
                 "book": uploaded_id, "title": "Upload", "source_type": "txt", "chapters": [],
             })
-            return {"status": "ok", "summary": {"book": uploaded_id}}
+            return {"status": "warning", "returncode": 0, "warnings": ["fixture warning"], "summary": {"book": uploaded_id}}
         if args[0] == "export":
             target = Path(args[args.index("--output") + 1])
             target.parent.mkdir(parents=True, exist_ok=True)

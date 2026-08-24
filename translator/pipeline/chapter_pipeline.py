@@ -173,6 +173,7 @@ class IterativePipeline:
         translated_root: Path | None = None,
         on_batch_completed: Callable[[dict[str, Any]], None] | None = None,
         on_phase_changed: Callable[[dict[str, Any]], None] | None = None,
+        on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
         cancellation_token: CancellationToken | None = None,
         pause_gate: PauseGate | None = None,
     ) -> None:
@@ -233,6 +234,7 @@ class IterativePipeline:
         self.translated_root = translated_root or paths.translated_root(config)
         self.on_batch_completed = on_batch_completed
         self.on_phase_changed = on_phase_changed
+        self.on_reviewer_status = on_reviewer_status
         self.cancellation_token = cancellation_token or CancellationToken()
         self.pause_gate = pause_gate or PauseGate()
 
@@ -554,7 +556,16 @@ class IterativePipeline:
             "items": items,
             "glossary": glossary.get("terms", []),
         })
-        self.chapter_reviewer(input_path, output_path)
+        if self.chapter_reviewer is run_chapter_review:
+            run_chapter_review(
+                input_path,
+                output_path,
+                autonomous=self.autonomous,
+                backend=self.reviewer,
+                on_reviewer_status=self.on_reviewer_status,
+            )
+        else:
+            self.chapter_reviewer(input_path, output_path)
         self._checkpoint()
         review = read_json(output_path)
         if not isinstance(review, dict):
@@ -564,7 +575,16 @@ class IterativePipeline:
             if not missing_checked_ids(review, expected_ids):
                 break
             retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
-            self.chapter_reviewer(input_path, retry_path)
+            if self.chapter_reviewer is run_chapter_review:
+                run_chapter_review(
+                    input_path,
+                    retry_path,
+                    autonomous=self.autonomous,
+                    backend=self.reviewer,
+                    on_reviewer_status=self.on_reviewer_status,
+                )
+            else:
+                self.chapter_reviewer(input_path, retry_path)
             self._checkpoint()
             review = read_json(retry_path)
         validate_chapter_review_payload(review, expected_ids)

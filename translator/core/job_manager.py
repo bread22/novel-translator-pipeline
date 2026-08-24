@@ -157,6 +157,7 @@ class JobManager:
             book_id=item.book_id,
             status=item.status,
             phase=item.phase,
+            reviewer_states=item.reviewer_states,
             overall_progress=item.overall_progress,
             current_chapter=item.current_chapter,
             current_chapter_index=item.current_chapter_index,
@@ -726,6 +727,10 @@ class JobManager:
                 chapter_id = str(phase_info.get("chapter_id", item.current_chapter))
                 with self._lock:
                     item.phase = phase
+                    if phase == "translating":
+                        item.reviewer_states = {"primary": "standby", "secondary": "standby"}
+                    elif phase == "reviewing":
+                        item.reviewer_states = {"primary": "standby", "secondary": "standby"}
                     if chapter_id:
                         item.current_chapter = chapter_id
                     action = "翻译" if phase == "translating" else "审阅"
@@ -735,6 +740,23 @@ class JobManager:
                     payload = self._as_task(item).model_dump()
                 broadcaster.broadcast_sync("pipeline_phase_changed", payload, book_id=item.book_id)
                 self._emit_item_progress(item)
+
+            def handle_reviewer_status(status_info: dict[str, str]) -> None:
+                role = str(status_info.get("role", "")).strip()
+                status = str(status_info.get("status", "")).strip()
+                if role not in {"primary", "secondary"} or status not in {"standby", "reviewing", "completed", "failed"}:
+                    return
+                with self._lock:
+                    item.reviewer_states = {**item.reviewer_states, role: status}
+                    item.updated_at = utc_now()
+                    self._save_state()
+                    payload = {
+                        **self._as_task(item).model_dump(),
+                        "reviewer_role": role,
+                        "reviewer_backend": status_info.get("backend", ""),
+                        "reviewer_status": status,
+                    }
+                broadcaster.broadcast_sync("pipeline_reviewer_status", payload, book_id=item.book_id)
 
             # 2. Instantiate pipeline
             pipeline = ChapterPipeline(
@@ -754,6 +776,7 @@ class JobManager:
                 ),
                 on_batch_completed=handle_batch_completed,
                 on_phase_changed=handle_phase_changed,
+                on_reviewer_status=handle_reviewer_status,
                 cancellation_token=cancellation,
                 pause_gate=pause_gate,
             )
@@ -882,6 +905,7 @@ class JobManager:
                 "book_id": item.book_id,
                 "status": item.status,
                 "phase": item.phase,
+                "reviewer_states": item.reviewer_states,
                 "overall_progress": item.overall_progress,
                 "current_chapter": item.current_chapter,
                 "current_chapter_index": item.current_chapter_index,

@@ -263,6 +263,7 @@ export const api = {
       'pipeline_started',
       'pipeline_progress',
       'pipeline_phase_changed',
+      'pipeline_reviewer_status',
       'chapter_started',
       'batch_completed',
       'chapter_completed',

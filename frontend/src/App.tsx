@@ -140,6 +140,7 @@ export const App: React.FC = () => {
         'batch_completed',
         'pipeline_progress',
         'pipeline_phase_changed',
+        'pipeline_reviewer_status',
         'chapter_completed',
         'pipeline_completed',
         'pipeline_paused',

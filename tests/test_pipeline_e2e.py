@@ -58,7 +58,7 @@ class _MockResponse:
         pass
 
 
-def _mock_reviewer(input_path: Path, output_path: Path) -> None:
+def _mock_reviewer(input_path: Path, output_path: Path, **_kwargs: object) -> None:
     data = json.loads(input_path.read_text(encoding="utf-8"))
     ids = [item["id"] for item in data.get("items", [])]
     output_path.write_text(

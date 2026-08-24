@@ -119,7 +119,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const filteredEvents = streamEvents.filter((evt) => {
     if (eventFilter === 'fallback') return evt.event === 'fallback_triggered';
     if (eventFilter === 'pipeline') {
-      return ['pipeline_started', 'chapter_started', 'batch_completed', 'pipeline_progress', 'pipeline_phase_changed', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
+      return ['pipeline_started', 'chapter_started', 'batch_completed', 'pipeline_progress', 'pipeline_phase_changed', 'pipeline_reviewer_status', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
     }
     return true;
   });
@@ -236,6 +236,19 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         const isTranslationActive = activeTask?.phase === 'translating'
           || (!activeTask?.phase && !isFallbackActive && !isReviewActive);
         const hasRecovered = (activeTask?.recovered_paragraphs || 0) > 0;
+        const rev1Status = activeTask?.reviewer_states?.primary
+          || (isReviewActive ? 'reviewing' : 'standby');
+        const rev2Status = !isDualReview
+          ? 'disabled'
+          : activeTask?.reviewer_states?.secondary || (isReviewActive ? 'reviewing' : 'standby');
+        const reviewerBadge = (status: string) => ({
+          reviewing: '● REVIEWING',
+          completed: '✓ COMPLETED',
+          failed: '× FAILED',
+          disabled: 'DISABLED',
+          standby: 'STANDBY',
+        }[status] || 'STANDBY');
+        const reviewerActive = (status: string) => status === 'reviewing';
 
         return (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -351,28 +364,52 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 </div>
               </div>
 
-              {/* Chapter Consistency Reviewer Bar */}
-              <div
-                className={`mt-4 p-3.5 rounded-sm border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs ${
-                  isReviewActive
-                    ? 'bg-[#EFF6FF] border-[#1D4ED8] text-[#1D4ED8]'
-                    : 'bg-[#FAF9F6] border-[#E5E0D8] text-[#4A4A4A]'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <CheckCircle2
-                    className={`w-4 h-4 ${isReviewActive ? 'text-[#1D4ED8] animate-spin' : 'text-emerald-600'}`}
-                  />
-                  <div>
-                    <span className="font-serif font-bold text-[#1A1A1A] mr-2">章节一致性双盲审阅器:</span>
-                    <span className="font-mono text-[#666666]">
-                      {rev1Name} ({rev1Model}){isDualReview && ` + ${rev2Name} (${rev2Model})`}
-                    </span>
-                  </div>
+              {/* Independent Chapter Reviewers */}
+              <div className="mt-4">
+                <div className="flex items-center gap-2 mb-2 text-xs">
+                  <CheckCircle2 className={`w-4 h-4 ${isReviewActive ? 'text-[#1D4ED8]' : 'text-emerald-600'}`} />
+                  <span className="font-serif font-bold text-[#1A1A1A]">章节一致性双盲审阅器</span>
                 </div>
-                <span className="text-[11px] font-mono px-2 py-0.5 bg-white border border-[#E5E0D8] text-[#1A1A1A] rounded-sm">
-                  {isReviewActive ? '● 正在执行错译与术语审计' : '待触发'}
-                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    { role: 'REVIEWER #1 (主审)', name: rev1Name, model: rev1Model, status: rev1Status },
+                    { role: 'REVIEWER #2 (副审)', name: rev2Name, model: rev2Model, status: rev2Status },
+                  ].map((reviewer) => (
+                    <div
+                      key={reviewer.role}
+                      className={`p-3.5 rounded-sm border transition-all text-left ${
+                        reviewerActive(reviewer.status)
+                          ? 'bg-[#EFF6FF] border-[#1D4ED8] shadow-sm'
+                          : reviewer.status === 'failed'
+                          ? 'bg-rose-50 border-rose-400'
+                          : reviewer.status === 'completed'
+                          ? 'bg-emerald-50 border-emerald-300'
+                          : 'bg-[#FAF9F6] border-[#E5E0D8]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono mb-1">
+                        <span className="text-violet-700 font-bold">{reviewer.role}</span>
+                        <span className={`px-1.5 py-0.5 rounded-sm text-[9px] ${
+                          reviewerActive(reviewer.status)
+                            ? 'bg-[#1D4ED8] text-white font-bold animate-pulse'
+                            : reviewer.status === 'failed'
+                            ? 'bg-rose-600 text-white font-bold'
+                            : reviewer.status === 'completed'
+                            ? 'bg-emerald-600 text-white font-bold'
+                            : 'bg-[#E5E0D8] text-[#666666]'
+                        }`}>
+                          {reviewerBadge(reviewer.status)}
+                        </span>
+                      </div>
+                      <div className="font-serif font-bold text-xs text-[#1A1A1A] truncate" title={reviewer.name}>
+                        {reviewer.name}
+                      </div>
+                      <div className="text-[10px] text-[#666666] font-mono truncate mt-0.5" title={reviewer.model}>
+                        {reviewer.model}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 

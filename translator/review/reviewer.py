@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 from translator.core.config import load_config, setting
 from translator.core.novel_tool import call_novel_translator
@@ -447,25 +447,48 @@ def _execute_single_segment_review(
     backend: str | None = None,
     secondary_backend: str | None = None,
     is_dual: bool = False,
+    on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
 ) -> dict[str, Any]:
     """Execute single segment review with dual review (if configured) and backend failover."""
     primary_cand = backend
     sec_cand = secondary_backend
 
     if not is_dual or not sec_cand or sec_cand == primary_cand:
-        return _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
+        if on_reviewer_status:
+            on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "reviewing"})
+        try:
+            result = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
+        except Exception:
+            if on_reviewer_status:
+                on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "failed"})
+            raise
+        if on_reviewer_status:
+            on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "completed"})
+        return result
 
     primary_payload = None
     secondary_payload = None
     errors = []
+    if on_reviewer_status:
+        on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "reviewing"})
     try:
         primary_payload = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
+        if on_reviewer_status:
+            on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "completed"})
     except Exception as exc:
+        if on_reviewer_status:
+            on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "failed"})
         errors.append(f"primary ({primary_cand}) error: {exc}")
 
+    if on_reviewer_status:
+        on_reviewer_status({"role": "secondary", "backend": sec_cand or "", "status": "reviewing"})
     try:
         secondary_payload = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=sec_cand)
+        if on_reviewer_status:
+            on_reviewer_status({"role": "secondary", "backend": sec_cand or "", "status": "completed"})
     except Exception as exc:
+        if on_reviewer_status:
+            on_reviewer_status({"role": "secondary", "backend": sec_cand or "", "status": "failed"})
         errors.append(f"secondary ({sec_cand}) error: {exc}")
 
     if primary_payload and secondary_payload:
@@ -486,6 +509,7 @@ def _execute_segment_with_adaptive_split(
     backend: str | None = None,
     secondary_backend: str | None = None,
     is_dual: bool = False,
+    on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
     depth: int = 0,
     max_depth: int = 4,
 ) -> dict[str, Any]:
@@ -511,6 +535,7 @@ def _execute_segment_with_adaptive_split(
             backend=backend,
             secondary_backend=secondary_backend,
             is_dual=is_dual,
+            on_reviewer_status=on_reviewer_status,
         )
         res = validate_chapter_review_payload(res, expected_ids)
         return res
@@ -529,6 +554,7 @@ def _execute_segment_with_adaptive_split(
                 backend=backend,
                 secondary_backend=secondary_backend,
                 is_dual=is_dual,
+                on_reviewer_status=on_reviewer_status,
                 depth=depth + 1,
                 max_depth=max_depth,
             )
@@ -543,6 +569,7 @@ def _execute_segment_with_adaptive_split(
                 backend=backend,
                 secondary_backend=secondary_backend,
                 is_dual=is_dual,
+                on_reviewer_status=on_reviewer_status,
                 depth=depth + 1,
                 max_depth=max_depth,
             )
@@ -561,6 +588,7 @@ def run_chapter_review(
     secondary_backend: str | None = None,
     dual_review: bool | None = None,
     chunk_size: int = REVIEW_CHUNK_MAX_PARAGRAPHS,
+    on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
 ) -> None:
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -595,6 +623,7 @@ def run_chapter_review(
             backend=primary_cand,
             secondary_backend=sec_cand,
             is_dual=is_dual,
+            on_reviewer_status=on_reviewer_status,
         )
     else:
         # Super-large chapter chunked review with rolling context forwarding
@@ -611,6 +640,7 @@ def run_chapter_review(
                 backend=primary_cand,
                 secondary_backend=sec_cand,
                 is_dual=is_dual,
+                on_reviewer_status=on_reviewer_status,
             )
             chunk_results.append(chunk_res)
             rolling_payload = _update_rolling_payload(rolling_payload, chunk_res)

@@ -3,9 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from translator.review.models import ChapterReviewOutput
-from translator.review.reviewer import _combine_chunk_reviews, _update_rolling_payload, merge_chapter_reviews
+from translator.review.reviewer import (
+    _combine_chunk_reviews,
+    _execute_single_segment_review,
+    _update_rolling_payload,
+    merge_chapter_reviews,
+)
 
 
 def review(label: str) -> dict:
@@ -58,6 +64,29 @@ class ReviewSchemaContractTests(unittest.TestCase):
         shared = merged["memory_delta"]["update"][0]
         self.assertEqual(set(shared["reporters"]), {"primary", "secondary"})
         self.assertEqual(len(merged["glossary_delta"]["conflicts"]), 2)
+
+    def test_dual_review_reports_each_reviewer_state(self) -> None:
+        states: list[dict[str, str]] = []
+
+        def execute(_kind, _payload, _schema, *, backend=None, **_kwargs):
+            return review("primary" if backend == "reviewer-a" else "secondary")
+
+        with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=execute):
+            _execute_single_segment_review(
+                {},
+                Path("schema.json"),
+                backend="reviewer-a",
+                secondary_backend="reviewer-b",
+                is_dual=True,
+                on_reviewer_status=states.append,
+            )
+
+        self.assertEqual(states, [
+            {"role": "primary", "backend": "reviewer-a", "status": "reviewing"},
+            {"role": "primary", "backend": "reviewer-a", "status": "completed"},
+            {"role": "secondary", "backend": "reviewer-b", "status": "reviewing"},
+            {"role": "secondary", "backend": "reviewer-b", "status": "completed"},
+        ])
 
 
 if __name__ == "__main__":

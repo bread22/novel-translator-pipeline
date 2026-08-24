@@ -55,6 +55,7 @@ export interface TaskStatusResponse {
   book_id: string;
   status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
+  reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'reviewing' | 'completed' | 'failed'>>;
   overall_progress: number;
   current_chapter: string;
   current_chapter_index: number;
@@ -275,6 +276,7 @@ export interface QueueItem {
   options: PipelineStartRequest;
   status: 'pending' | 'recovery_pending' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
+  reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'reviewing' | 'completed' | 'failed'>>;
   order_index: number;
   priority: number;
   overall_progress: number;

@@ -11,7 +11,8 @@ describe('live model topology', () => {
         primary_translator: 'primary',
         fallback_translators: ['fallback-1', 'fallback-2'],
         reviewer: 'reviewer',
-        dual_review: false,
+        secondary_reviewer: 'reviewer-2',
+        dual_review: true,
       },
       providers: {},
     } as never);
@@ -28,6 +29,7 @@ describe('live model topology', () => {
         overall_progress: 1, current_chapter: 'c0001', current_chapter_index: 1,
         total_chapters: 1, current_batch: 1, total_batches: 1,
         recovered_paragraphs: 0, message: '正在审阅第 1/1 章：c0001',
+        reviewer_states: { primary: 'completed', secondary: 'reviewing' },
       }}
       streamEvents={[]}
       onRefreshTask={vi.fn(async () => undefined)}
@@ -38,6 +40,11 @@ describe('live model topology', () => {
     expect(primary).not.toBeNull();
     expect(within(primary!).getByText('STANDBY')).toBeInTheDocument();
     expect(screen.queryByText('● TRANSLATING')).not.toBeInTheDocument();
-    expect(screen.getByText('● 正在执行错译与术语审计')).toBeInTheDocument();
+    const primaryReviewer = screen.getByText('REVIEWER #1 (主审)').parentElement;
+    const secondaryReviewer = screen.getByText('REVIEWER #2 (副审)').parentElement;
+    expect(primaryReviewer).not.toBeNull();
+    expect(secondaryReviewer).not.toBeNull();
+    expect(within(primaryReviewer!).getByText('✓ COMPLETED')).toBeInTheDocument();
+    expect(within(secondaryReviewer!).getByText('● REVIEWING')).toBeInTheDocument();
   });
 });

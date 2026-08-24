@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### ⚡ 翻译控制台与实时事件流 (Live Studio & SSE Waterfall)
 - **实时模型拓扑大屏**：实时可视化 Primary、Fallback #1、Fallback #2 及双审阅者路由流向与救回段落统计；
 - **动态 Policy 规范切换**：在控制台直接为当前翻译任务选择不同的文学提示词规范（如情色小说规范、通用小说规范、轻小说规范等）；
-- **单书独立 SSE 日志持久化**：重构状态为 `eventsByBook: Record<string, StreamEvent[]>`，切换标签页或书籍时实时日志不丢失，支持分类过滤与手动一键清空。
+- **单书独立 SSE 会话日志**：状态为 `eventsByBook: Record<string, StreamEvent[]>`，当前页面会话内切换标签页或书籍时日志保留，支持分类过滤与手动清空。
 
 #### 📖 双语阅读器与审阅质检 (Bilingual Reader)
 - **目次索引与段落精细对照**：目录索引展示全书章节状态，正文日中双语段落精细对照并标注翻译来源与容灾救回标记；

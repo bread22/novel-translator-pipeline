@@ -42,7 +42,7 @@ graph TD
         FastAPI_App["FastAPI REST 路由 + 前端静态托管"]
         Queue_Manager["QueueManager (多书排队与并发槽位引擎)"]
         Task_Manager["TaskManager (异步任务引擎 & 断点自愈)"]
-        Event_Bus["SSE EventBroadcaster (实时事件单书持久化广播)"]
+        Event_Bus["SSE EventBroadcaster (实时事件单书分类广播)"]
     end
 
     subgraph Core_Engine ["流水线底层 (Pipeline Engine)"]
@@ -84,7 +84,7 @@ graph TD
 *   **动态 Policy 规范切换**：
     *   支持为当前任务指定不同的翻译提示词策略文档（如情色小说规范、通用小说规范、轻小说规范等）。
 *   **单书独立 SSE 实时事件瀑布流**：
-    *   全量推送章节启动、批次完成、全书进度、降级触发与审阅修复事件；单书独立持久化历史记录，切换页面不丢失，支持分类过滤与手动一键清空。
+    *   全量推送章节启动、批次完成、全书进度、降级触发与审阅修复事件；当前页面会话内按书保留历史，支持分类过滤与手动清空。
 
 ### 4.3 模块 3：双语阅读器与检验器 (Bilingual Reader & Inspector)
 *   **目录索引 (TOC)**：清晰展示全书章节列表与完成状态指示。

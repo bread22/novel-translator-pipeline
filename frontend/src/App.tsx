@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { QueueHubView } from './views/QueueHubView';
 import { LiveStudioView } from './views/LiveStudioView';
@@ -8,8 +8,13 @@ import { SettingsView } from './views/SettingsView';
 import { BookSummary, QueueStatusResponse, StreamEvent, TaskStatusResponse } from './types/api';
 import { api } from './lib/api';
 
+const VALID_TABS = ['queue', 'studio', 'reader', 'knowledge', 'settings'];
+
 export const App: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<string>('queue');
+  const [currentTab, setCurrentTab] = useState<string>(() => {
+    const tab = window.location.hash.replace(/^#\/?/, '');
+    return VALID_TABS.includes(tab) ? tab : 'queue';
+  });
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [queueStatus, setQueueStatus] = useState<QueueStatusResponse | null>(null);
   const [selectedBookId, setSelectedBookId] = useState<string | null>(() => {
@@ -18,11 +23,19 @@ export const App: React.FC = () => {
   const [activeTask, setActiveTask] = useState<TaskStatusResponse | null>(null);
   const [eventsByBook, setEventsByBook] = useState<Record<string, StreamEvent[]>>({});
   const [sseConnected, setSseConnected] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const selectedBookRef = useRef(selectedBookId);
+
+  useEffect(() => {
+    selectedBookRef.current = selectedBookId;
+  }, [selectedBookId]);
 
   // Refresh Books
   const refreshBooks = useCallback(async () => {
     try {
       const data = await api.getBooks();
+      setLoadError(null);
       setBooks(data);
       if (data.length > 0) {
         setSelectedBookId((prev) => {
@@ -38,6 +51,7 @@ export const App: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to fetch books:', err);
+      setLoadError(err instanceof Error ? err.message : '书籍列表加载失败');
     }
   }, []);
 
@@ -63,9 +77,22 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    refreshBooks();
-    refreshQueue();
+    Promise.allSettled([refreshBooks(), refreshQueue()]).finally(() => setIsInitialLoading(false));
   }, [refreshBooks, refreshQueue]);
+
+  useEffect(() => {
+    const handleHash = () => {
+      const tab = window.location.hash.replace(/^#\/?/, '');
+      if (VALID_TABS.includes(tab)) setCurrentTab(tab);
+    };
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
+
+  const selectTab = (tab: string) => {
+    setCurrentTab(tab);
+    window.history.replaceState(null, '', `#/${tab}`);
+  };
 
   useEffect(() => {
     if (selectedBookId) {
@@ -77,12 +104,8 @@ export const App: React.FC = () => {
   // Global SSE Subscription
   useEffect(() => {
     const unsubscribe = api.subscribeEvents((evt) => {
-      if (evt.event === 'connect') {
-        setSseConnected(true);
-      }
-
       // Record event under target book ID
-      const targetBookId = evt.book_id || evt.data?.book_id || selectedBookId;
+      const targetBookId = evt.book_id || evt.data?.book_id;
       if (targetBookId) {
         setEventsByBook((prev) => {
           const existing = prev[targetBookId] || [];
@@ -104,7 +127,7 @@ export const App: React.FC = () => {
 
       // 2. Direct activeTask state update from event payload if present
       if (evt.data && typeof evt.data === 'object' && evt.data.task_id && evt.data.status) {
-        if (!selectedBookId || evt.data.book_id === selectedBookId) {
+        if (!selectedBookRef.current || evt.data.book_id === selectedBookRef.current) {
           setActiveTask(evt.data as TaskStatusResponse);
         }
       }
@@ -122,16 +145,27 @@ export const App: React.FC = () => {
         'pipeline_stopped',
       ];
       if (pipelineEvents.includes(evt.event)) {
-        refreshTask();
+        if (selectedBookRef.current) {
+          api.getTaskStatus(selectedBookRef.current).then(setActiveTask).catch(() => setActiveTask(null));
+        }
         refreshBooks();
         refreshQueue();
       }
-    }, selectedBookId || undefined);
+    }, (state) => {
+      setSseConnected(state === 'live');
+      if (state === 'live') {
+        refreshBooks();
+        refreshQueue();
+        if (selectedBookRef.current) {
+          api.getTaskStatus(selectedBookRef.current).then(setActiveTask).catch(() => setActiveTask(null));
+        }
+      }
+    });
 
     return () => {
       unsubscribe();
     };
-  }, [selectedBookId, refreshTask, refreshBooks, refreshQueue]);
+  }, [refreshBooks, refreshQueue]);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
 
@@ -139,7 +173,7 @@ export const App: React.FC = () => {
     setSelectedBookId(bookId);
     localStorage.setItem('selected_book_id', bookId);
     if (targetTab) {
-      setCurrentTab(targetTab);
+      selectTab(targetTab);
     }
   };
 
@@ -159,7 +193,7 @@ export const App: React.FC = () => {
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}
-        onSelectTab={setCurrentTab}
+        onSelectTab={selectTab}
         books={books}
         selectedBookId={selectedBookId}
         onSelectBookId={setSelectedBookId}
@@ -171,6 +205,12 @@ export const App: React.FC = () => {
 
       {/* Main View Area */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto p-6">
+        {isInitialLoading && <p role="status" className="text-sm text-[#666666]">正在加载工作区…</p>}
+        {loadError && (
+          <div role="alert" className="mb-4 border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+            {loadError} <button className="underline" onClick={() => void refreshBooks()}>重试</button>
+          </div>
+        )}
         {(currentTab === 'queue' || currentTab === 'library') && (
           <QueueHubView
             books={books}

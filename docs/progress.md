@@ -18,7 +18,7 @@
 
 ### Component 2: 后端 API 与异步任务管理层 (FastAPI + TaskManager + SSE)
 - [x] **2.1** 创建 `translator/web/` 基础结构与 FastAPI 应用工厂 (`app.py`)
-- [x] **2.2** 实现 SSE 实时事件广播器 (`events.py`) 与单书持久化记录
+- [x] **2.2** 实现 SSE 实时事件广播器 (`events.py`) 与当前页面会话内的单书分类记录
 - [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`) 与队列管理层 (`queue_manager.py`)
 - [x] **2.4** 实现核心 REST API 路由 (`books.py`, `queue.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
 - [x] **2.5** 编写 `tests/test_web_api.py` 与 `tests/test_queue_api.py` 接口自动化测试 (87 项测试 100% 通过)

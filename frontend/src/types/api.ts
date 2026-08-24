@@ -229,6 +229,9 @@ export interface SystemConfig {
     model?: string;
     base_url?: string;
     api_key?: string;
+    api_key_ref?: string;
+    api_key_configured?: boolean;
+    api_key_preview?: string | null;
     temperature?: number;
     context_tokens?: number;
     timeout?: number;
@@ -257,8 +260,9 @@ export interface SystemConfig {
 export interface StreamEvent {
   event: string;
   data: any;
-  book_id?: string;
+  book_id?: string | null;
   timestamp: string;
+  event_id: string;
 }
 
 export interface QueueItem {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BookOpen,
   ChevronLeft,
@@ -31,39 +31,70 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const [editContent, setEditContent] = useState('');
   const [retranslatingParaId, setRetranslatingParaId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const listSequence = useRef(0);
+  const detailSequence = useRef(0);
+  const detailAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (book) {
-      loadChapters(book.id);
-    }
+    const controller = new AbortController();
+    const sequence = ++listSequence.current;
+    detailAbort.current?.abort();
+    setChapters([]);
+    setSelectedChapterId(null);
+    setChapterDetail(null);
+    setChapterReview(null);
+    setLoadError(null);
+    if (!book) return () => controller.abort();
+
+    void (async () => {
+      setIsLoading(true);
+      try {
+        const data = await api.getChapters(book.id, { signal: controller.signal });
+        if (sequence !== listSequence.current) return;
+        setChapters(data);
+        if (data.length > 0) {
+          setSelectedChapterId(data[0].id);
+          await loadChapterDetail(book.id, data[0].id);
+        }
+      } catch (err) {
+        if (controller.signal.aborted || sequence !== listSequence.current) return;
+        setLoadError(err instanceof Error ? err.message : '章节目录加载失败');
+      } finally {
+        if (sequence === listSequence.current && !detailAbort.current) setIsLoading(false);
+      }
+    })();
+    return () => controller.abort();
   }, [book]);
 
-  const loadChapters = async (bookId: string) => {
-    try {
-      const data = await api.getChapters(bookId);
-      setChapters(data);
-      if (data.length > 0) {
-        setSelectedChapterId(data[0].id);
-        loadChapterDetail(bookId, data[0].id);
-      }
-    } catch (err: any) {
-      console.error('Failed to load chapters:', err);
-    }
-  };
-
   const loadChapterDetail = async (bookId: string, chapterId: string) => {
+    detailAbort.current?.abort();
+    const controller = new AbortController();
+    detailAbort.current = controller;
+    const sequence = ++detailSequence.current;
     setIsLoading(true);
+    setLoadError(null);
+    setChapterDetail(null);
+    setChapterReview(null);
     try {
       const [detail, reviewRes] = await Promise.all([
-        api.getChapterDetail(bookId, chapterId),
-        api.getChapterReview(bookId, chapterId).catch(() => null),
+        api.getChapterDetail(bookId, chapterId, { signal: controller.signal }),
+        api.getChapterReview(bookId, chapterId, { signal: controller.signal }).catch((error) => {
+          if (controller.signal.aborted) throw error;
+          return null;
+        }),
       ]);
+      if (sequence !== detailSequence.current) return;
       setChapterDetail(detail);
       setChapterReview(reviewRes);
-    } catch (err: any) {
-      alert(`加载章节失败: ${err.message}`);
+    } catch (err) {
+      if (controller.signal.aborted || sequence !== detailSequence.current) return;
+      setLoadError(err instanceof Error ? err.message : '章节加载失败');
     } finally {
-      setIsLoading(false);
+      if (sequence === detailSequence.current) {
+        detailAbort.current = null;
+        setIsLoading(false);
+      }
     }
   };
 
@@ -84,12 +115,20 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     try {
       await api.updateParagraph(book.id, paraId, editContent);
       if (chapterDetail) {
+        const previous = chapterDetail.paragraphs.find((p) => p.id === paraId);
+        const newlyTranslated = !previous?.translated && Boolean(editContent);
         setChapterDetail({
           ...chapterDetail,
+          translated_paragraphs: chapterDetail.translated_paragraphs + (newlyTranslated ? 1 : 0),
           paragraphs: chapterDetail.paragraphs.map((p) =>
             p.id === paraId ? { ...p, translated: editContent, status: 'manually_edited' } : p
           ),
         });
+        if (newlyTranslated) {
+          setChapters((current) => current.map((chapter) => chapter.id === chapterDetail.id
+            ? { ...chapter, translated_paragraphs: chapter.translated_paragraphs + 1 }
+            : chapter));
+        }
       }
       setEditingParaId(null);
     } catch (err: any) {
@@ -184,6 +223,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
 
       {/* Main Content Area: Bilingual Reader */}
       <div className="lg:col-span-3 space-y-6">
+        {loadError && <div role="alert" className="border border-red-300 bg-red-50 p-3 text-xs text-red-800">加载失败：{loadError}</div>}
+        {isLoading && <div role="status" className="border border-[#E5E0D8] bg-white p-6 text-xs text-[#666666]">正在加载章节…</div>}
         
         {/* Chapter Header Banner & Nav */}
         <div className="bg-white border border-[#E5E0D8] p-6 rounded-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">

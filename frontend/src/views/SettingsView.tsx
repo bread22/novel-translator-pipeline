@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Zap,
   CheckCircle2,
@@ -11,8 +11,6 @@ import {
   Server,
   Plus,
   Trash2,
-  Eye,
-  EyeOff,
   Key,
   FileText,
   Edit3,
@@ -20,6 +18,8 @@ import {
 } from 'lucide-react';
 import { PreflightProviderResult, PreflightResponse, PromptItem, SystemConfig } from '../types/api';
 import { api } from '../lib/api';
+import { Modal } from '../components/Modal';
+import { providerRoleReferences } from './settingsUtils';
 
 export const SettingsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'routing' | 'prompts'>('routing');
@@ -29,8 +29,7 @@ export const SettingsView: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Show/Hide API Key toggles by provider name
-  const [showKeyMap, setShowKeyMap] = useState<Record<string, boolean>>({});
+  const lastSavedConfig = useRef<SystemConfig | null>(null);
 
   // Add Provider Modal State
   const [showAddProviderModal, setShowAddProviderModal] = useState(false);
@@ -63,6 +62,7 @@ export const SettingsView: React.FC = () => {
     try {
       const cfg = await api.getConfig();
       setConfig(cfg);
+      lastSavedConfig.current = structuredClone(cfg);
     } catch (err: any) {
       console.error('Failed to load config:', err);
     }
@@ -124,16 +124,20 @@ export const SettingsView: React.FC = () => {
     e.preventDefault();
     if (!newPromptFilename.trim() || !newPromptContent.trim()) return;
     try {
-      await api.savePrompt({
+      const saved = await api.savePrompt({
         filename: newPromptFilename,
         content: newPromptContent,
       });
       setShowAddPromptModal(false);
-      const savedId = newPromptFilename.endsWith('.md') ? newPromptFilename : `${newPromptFilename}.md`;
       setNewPromptFilename('');
       setNewPromptContent('');
-      await loadPrompts();
-      handleSelectPrompt(savedId);
+      const list = await api.getPrompts();
+      setPrompts(list);
+      const selected = list.find((prompt) => prompt.id === saved.id);
+      if (selected) {
+        setSelectedPromptId(selected.id);
+        setEditingPromptContent(selected.content);
+      }
     } catch (err: any) {
       alert(`创建提示词失败: ${err.message}`);
     }
@@ -151,8 +155,10 @@ export const SettingsView: React.FC = () => {
     setConfig(updated);
     try {
       await api.saveConfig(updated);
+      lastSavedConfig.current = structuredClone(updated);
       alert(`已将 '${policyPath}' 设为系统全局默认翻译规范！`);
     } catch (err: any) {
+      if (lastSavedConfig.current) setConfig(structuredClone(lastSavedConfig.current));
       alert(`设置默认规范失败: ${err.message}`);
     }
   };
@@ -176,10 +182,11 @@ export const SettingsView: React.FC = () => {
     setIsSaving(true);
     try {
       await api.saveConfig(config);
+      lastSavedConfig.current = structuredClone(config);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-      runPreflightTest();
     } catch (err: any) {
+      if (lastSavedConfig.current) setConfig(structuredClone(lastSavedConfig.current));
       alert(`保存配置失败: ${err.message}`);
     } finally {
       setIsSaving(false);
@@ -234,6 +241,11 @@ export const SettingsView: React.FC = () => {
 
   const handleDeleteProvider = (providerId: string) => {
     if (!config || !config.providers) return;
+    const references = providerRoleReferences(config, providerId);
+    if (references.length) {
+      alert(`Provider [${providerId}] 正被以下角色引用：${references.join('、')}。请先在角色路由中迁移这些角色。`);
+      return;
+    }
     if (!confirm(`确定要删除 Provider [${providerId}] 吗？`)) return;
     const { [providerId]: _, ...remaining } = config.providers;
     setConfig({
@@ -657,7 +669,6 @@ export const SettingsView: React.FC = () => {
                 <div className="space-y-4">
                   {providersList.map((pId) => {
                     const p = config.providers?.[pId] || { type: 'openai' };
-                    const isShowingKey = showKeyMap[pId] || false;
                     const isPrimary = config.roles?.primary_translator === pId;
                     const isReviewer = config.roles?.reviewer === pId;
                     const isFb1 = fb1 === pId;
@@ -702,6 +713,7 @@ export const SettingsView: React.FC = () => {
                             onClick={() => handleDeleteProvider(pId)}
                             className="text-[#888888] hover:text-rose-600 p-1.5 rounded-sm hover:bg-white transition-colors cursor-pointer"
                             title="删除该 Provider"
+                            aria-label={`删除 Provider ${pId}`}
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -740,23 +752,16 @@ export const SettingsView: React.FC = () => {
                             <div>
                               <label className="text-[#666666] block mb-1 font-medium font-serif flex items-center justify-between">
                                 <span>API Key (密钥)</span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setShowKeyMap((prev) => ({ ...prev, [pId]: !isShowingKey }))
-                                  }
-                                  className="text-[#888888] hover:text-[#1A1A1A] flex items-center gap-1 text-[10px] cursor-pointer"
-                                >
-                                  {isShowingKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                                  {isShowingKey ? '隐藏' : '显示'}
-                                </button>
+                                <span className="text-[10px] font-mono text-[#888888]">
+                                  {p.api_key_configured ? `已配置 ${p.api_key_preview || ''}` : '未配置'}
+                                </span>
                               </label>
                               <div className="relative">
                                 <input
-                                  type={isShowingKey ? 'text' : 'password'}
+                                  type="password"
                                   value={p.api_key || ''}
                                   onChange={(e) => handleUpdateProvider(pId, 'api_key', e.target.value)}
-                                  placeholder="$ENV_VAR 或 sk-..."
+                                  placeholder={p.api_key_ref || '$ENV_VAR 或新密钥（留空则保持）'}
                                   className="w-full bg-white border border-[#E5E0D8] rounded-sm p-2 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8] pr-8"
                                 />
                                 <Key className="w-3.5 h-3.5 text-[#888888] absolute right-2.5 top-3 pointer-events-none" />
@@ -1058,8 +1063,7 @@ export const SettingsView: React.FC = () => {
 
       {/* Add Provider Modal */}
       {showAddProviderModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white border border-[#E5E0D8] rounded-sm p-6 max-w-lg w-full shadow-2xl space-y-5">
+        <Modal title="新增 AI Provider" onClose={() => setShowAddProviderModal(false)} className="p-6 max-w-lg w-full space-y-5">
             <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-3">
               <h3 className="text-base font-serif font-bold text-[#1A1A1A] flex items-center gap-2">
                 <Plus className="w-4 h-4 text-[#1D4ED8]" />
@@ -1068,6 +1072,7 @@ export const SettingsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowAddProviderModal(false)}
+                aria-label="关闭新增 Provider 对话框"
                 className="text-[#888888] hover:text-[#1A1A1A] cursor-pointer"
               >
                 ✕
@@ -1108,7 +1113,7 @@ export const SettingsView: React.FC = () => {
                   <div>
                     <label className="text-[#4A4A4A] block mb-1 font-medium font-serif">Base URL</label>
                     <input
-                      type="text"
+                      type="password"
                       required
                       placeholder="例如: https://api.deepseek.com/v1"
                       value={newBaseUrl}
@@ -1187,14 +1192,12 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Add Prompt Modal */}
       {showAddPromptModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white border border-[#E5E0D8] rounded-sm p-6 max-w-xl w-full shadow-2xl space-y-5">
+        <Modal title="新建自定义 Prompt 规范" onClose={() => setShowAddPromptModal(false)} className="p-6 max-w-xl w-full space-y-5">
             <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-3">
               <h3 className="text-base font-serif font-bold text-[#1A1A1A] flex items-center gap-2">
                 <Plus className="w-4 h-4 text-[#1D4ED8]" />
@@ -1203,6 +1206,7 @@ export const SettingsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowAddPromptModal(false)}
+                aria-label="关闭新建 Prompt 对话框"
                 className="text-[#888888] hover:text-[#1A1A1A] cursor-pointer"
               >
                 ✕
@@ -1254,8 +1258,7 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

@@ -51,7 +51,8 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const pendingItems = queueStatus?.items.filter((i) => i.status === 'pending') || [];
-  const runningItems = queueStatus?.items.filter((i) => i.status === 'running') || [];
+  // Paused workers still own a concurrency slot and remain visible in the active area.
+  const runningItems = queueStatus?.items.filter((i) => i.status === 'running' || i.status === 'paused') || [];
   const finishedItems =
     queueStatus?.items.filter((i) => ['completed', 'failed', 'cancelled'].includes(i.status)) || [];
 
@@ -801,6 +802,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                             onClick={(e) => handleMoveItem(item.id, 'top', e)}
                             className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-white text-[#4A4A4A] transition-colors cursor-pointer"
                             title="置顶"
+                            aria-label={`将 ${item.book_name} 置顶`}
                           >
                             <ArrowUpToLine className="w-3.5 h-3.5" />
                           </button>
@@ -810,6 +812,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                             onClick={(e) => handleMoveItem(item.id, 'up', e)}
                             className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-white text-[#4A4A4A] transition-colors cursor-pointer"
                             title="上移一位"
+                            aria-label={`将 ${item.book_name} 上移一位`}
                           >
                             <ArrowUp className="w-3.5 h-3.5" />
                           </button>
@@ -819,6 +822,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                             onClick={(e) => handleMoveItem(item.id, 'down', e)}
                             className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-white text-[#4A4A4A] transition-colors cursor-pointer"
                             title="下移一位"
+                            aria-label={`将 ${item.book_name} 下移一位`}
                           >
                             <ArrowDown className="w-3.5 h-3.5" />
                           </button>
@@ -828,6 +832,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                           onClick={(e) => handleCancelItem(item.id, e)}
                           className="p-1 rounded-sm bg-[#F2EFE9] hover:bg-rose-50 text-[#666666] hover:text-rose-600 transition-colors cursor-pointer ml-1"
                           title="移出等待队列"
+                          aria-label={`将 ${item.book_name} 移出等待队列`}
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>

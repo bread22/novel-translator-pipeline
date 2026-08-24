@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from typing import Any, AsyncGenerator
+from uuid import uuid4
 
 
 logger = logging.getLogger("translator.web.events")
@@ -27,6 +28,7 @@ class EventBroadcaster:
             "data": data,
             "book_id": book_id or data.get("book_id", ""),
             "timestamp": utc_now(),
+            "event_id": uuid4().hex,
         }
         async with self._lock:
             dead_subscribers = []
@@ -46,6 +48,7 @@ class EventBroadcaster:
             "data": data,
             "book_id": book_id or data.get("book_id", ""),
             "timestamp": utc_now(),
+            "event_id": uuid4().hex,
         }
         for queue, sub_book_id in list(self._subscribers):
             if sub_book_id is None or sub_book_id == payload["book_id"]:
@@ -60,8 +63,17 @@ class EventBroadcaster:
         async with self._lock:
             self._subscribers.add(sub)
 
-        # Initial connect event
-        yield f"event: connect\ndata: {json.dumps({'status': 'connected', 'book_id': book_id, 'timestamp': utc_now()}, ensure_ascii=False)}\n\n"
+        # The browser remembers this ID across automatic reconnects. State snapshots
+        # are refreshed client-side on each open, so no durable replay is claimed.
+        connect_payload = {
+            "event": "connect",
+            "data": {"status": "connected"},
+            "book_id": book_id,
+            "timestamp": utc_now(),
+            "event_id": uuid4().hex,
+        }
+        connect_json = json.dumps(connect_payload, ensure_ascii=False)
+        yield f"id: {connect_payload['event_id']}\nevent: connect\ndata: {connect_json}\n\n"
 
         try:
             while True:
@@ -71,8 +83,8 @@ class EventBroadcaster:
                     if payload is None:
                         break
                     event_type = payload.get("event", "message")
-                    data_json = json.dumps(payload.get("data", {}), ensure_ascii=False)
-                    yield f"event: {event_type}\ndata: {data_json}\n\n"
+                    data_json = json.dumps(payload, ensure_ascii=False)
+                    yield f"id: {payload['event_id']}\nevent: {event_type}\ndata: {data_json}\n\n"
                 except asyncio.TimeoutError:
                     # Keep-alive heartbeat ping
                     yield f": ping {utc_now()}\n\n"
@@ -83,4 +95,3 @@ class EventBroadcaster:
 
 # Global singleton instance
 broadcaster = EventBroadcaster()
-

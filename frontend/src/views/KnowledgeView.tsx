@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BookMarked,
   Users,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { BookMemoryResponse, BookSummary, ChapterReviewReport, GlossaryItem } from '../types/api';
 import { api } from '../lib/api';
+import { Modal } from '../components/Modal';
 
 interface KnowledgeViewProps {
   book: BookSummary | null;
@@ -24,6 +25,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
   const [reports, setReports] = useState<ChapterReviewReport[]>([]);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   // New term form state
   const [newSource, setNewSource] = useState('');
@@ -32,23 +36,34 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
   const [newNotes, setNewNotes] = useState('');
 
   useEffect(() => {
-    if (book) {
-      loadData(book.id);
-    }
+    const controller = new AbortController();
+    const sequence = ++requestSequence.current;
+    setGlossaryTerms([]);
+    setMemory(null);
+    setReports([]);
+    setLoadError(null);
+    if (!book) return () => controller.abort();
+    setIsLoading(true);
+    void loadData(book.id, controller.signal, sequence);
+    return () => controller.abort();
   }, [book]);
 
-  const loadData = async (bookId: string) => {
+  const loadData = async (bookId: string, signal: AbortSignal, sequence: number) => {
     try {
       const [glossaryRes, memoryRes, reportsRes] = await Promise.all([
-        api.getGlossary(bookId).catch(() => ({ terms: [] })),
-        api.getMemory(bookId).catch(() => null),
-        api.getReports(bookId).catch(() => []),
+        api.getGlossary(bookId, { signal }),
+        api.getMemory(bookId, { signal }),
+        api.getReports(bookId, { signal }),
       ]);
+      if (sequence !== requestSequence.current) return;
       setGlossaryTerms(glossaryRes.terms || []);
       setMemory(memoryRes);
       setReports(reportsRes || []);
-    } catch (err: any) {
-      console.error('Failed to load knowledge:', err);
+    } catch (err) {
+      if (signal.aborted || sequence !== requestSequence.current) return;
+      setLoadError(err instanceof Error ? err.message : '知识库加载失败');
+    } finally {
+      if (sequence === requestSequence.current) setIsLoading(false);
     }
   };
 
@@ -94,6 +109,8 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16">
+      {isLoading && <div role="status" className="border border-[#E5E0D8] bg-white p-4 text-xs text-[#666666]">正在加载知识库…</div>}
+      {loadError && <div role="alert" className="border border-red-300 bg-red-50 p-4 text-xs text-red-800">知识库加载失败：{loadError}</div>}
       
       {/* Top Banner */}
       <div className="bg-white border border-[#E5E0D8] p-6 rounded-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">
@@ -366,12 +383,12 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
 
       {/* Add Term Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-[#E5E0D8] rounded-sm p-6 max-w-md w-full shadow-2xl space-y-4">
+        <Modal title="添加统一术语 / 人名地名" onClose={() => setShowAddModal(false)} className="p-6 max-w-md w-full space-y-4">
             <div className="flex items-center justify-between border-b border-[#E5E0D8] pb-3">
               <h3 className="font-serif font-bold text-sm text-[#1A1A1A]">添加统一术语 / 人名地名</h3>
               <button
                 onClick={() => setShowAddModal(false)}
+                aria-label="关闭添加术语对话框"
                 className="text-[#888888] hover:text-[#1A1A1A] cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -433,8 +450,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
     </div>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 import sys
 import tempfile
@@ -245,6 +246,28 @@ class WebApiTests(unittest.TestCase):
         broadcaster = EventBroadcaster()
         broadcaster.broadcast_sync("test_event", {"message": "hello"}, book_id="book-1")
         # Ensure it handles empty subscribers gracefully without exception
+
+    def test_event_broadcaster_emits_fixed_envelope_and_sse_id(self) -> None:
+        async def exercise() -> None:
+            broadcaster = EventBroadcaster()
+            stream = broadcaster.subscribe()
+            connected = await anext(stream)
+            self.assertIn("event: connect", connected)
+            self.assertIn("id: ", connected)
+
+            await broadcaster.broadcast("queue_updated", {"pending_count": 1})
+            message = await anext(stream)
+            data_line = next(line for line in message.splitlines() if line.startswith("data: "))
+            payload = json.loads(data_line.removeprefix("data: "))
+            self.assertEqual(
+                set(payload),
+                {"event", "data", "book_id", "timestamp", "event_id"},
+            )
+            self.assertEqual(payload["event"], "queue_updated")
+            self.assertIn(f"id: {payload['event_id']}", message)
+            await stream.aclose()
+
+        asyncio.run(exercise())
 
     @patch("translator.web.routes.tasks.manifest_path")
     @patch("translator.core.job_manager.manifest_path")

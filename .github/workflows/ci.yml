@@ -91,6 +91,8 @@ jobs:
     name: Integration / Uvicorn and Playwright
     runs-on: ubuntu-latest
     needs: [backend, frontend]
+    env:
+      NOVEL_TRANSLATOR_ROOT: ${{ github.workspace }}/tests/fixtures/novel-translator
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -119,7 +121,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:8000/api/v1/books > /dev/null
           curl --fail --silent http://127.0.0.1:8000/api/v1/queue > /dev/null
           printf 'Chapter One\nfixture text\n' > /tmp/fixture.txt
-          curl --fail --silent -F file=@/tmp/fixture.txt http://127.0.0.1:8000/api/v1/books/upload > /tmp/upload.json
+          curl --fail-with-body --silent --show-error -F file=@/tmp/fixture.txt http://127.0.0.1:8000/api/v1/books/upload > /tmp/upload.json
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
       - run: npm run test:e2e

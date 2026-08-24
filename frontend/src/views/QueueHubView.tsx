@@ -105,7 +105,9 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
         }
       }
 
-      const successText = `成功导入 ${importedBooks.length}/${files.length} 本`;
+      const successText = files.length === 1 && importedBooks.length === 1
+        ? `"${importedBooks[0].name}" 导入成功`
+        : `成功导入 ${importedBooks.length}/${files.length} 本`;
       setUploadMessage(failures.length > 0 ? `${successText}；失败：${failures.join('；')}` : `${successText}，已加入队列。`);
     } finally {
       setIsUploading(false);

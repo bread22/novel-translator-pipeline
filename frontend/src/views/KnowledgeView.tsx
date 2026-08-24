@@ -325,7 +325,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
             </div>
           ) : (
             reports.map((rep, idx) => (
-              <div key={idx} className="bg-white border border-[#E5E0D8] p-5 rounded-sm space-y-3 shadow-sm">
+              <div key={rep.chapter_id} className="bg-white border border-[#E5E0D8] p-5 rounded-sm space-y-4 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E5E0D8] pb-3">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs font-bold px-2 py-0.5 bg-[#F2EFE9] border border-[#E5E0D8] text-[#1A1A1A] rounded-sm">
@@ -343,12 +343,106 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                     <span className="text-amber-800">
                       发现 {rep.reported_issues || 0} 处缺陷
                     </span>
+                    {rep.reviewed_at && (
+                      <span className="hidden md:inline text-[#888888] ml-2">
+                        {new Date(rep.reviewed_at).toLocaleString()}
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <p className="text-xs text-[#4A4A4A] font-serif leading-relaxed bg-[#FAF9F6] p-3 rounded-sm border border-[#E5E0D8]">
                   已核查 {rep.checked_paragraphs} 段落，发现 {rep.reported_issues} 处客观问题，已自动修正 {rep.applied_fixes} 处。
                 </p>
+
+                {rep.chapter_state?.summary && (
+                  <div className="space-y-1.5">
+                    <h4 className="text-[11px] font-mono font-bold text-[#666666]">章节与长程记忆摘要</h4>
+                    <p className="text-xs text-[#4A4A4A] font-serif leading-relaxed border-l-2 border-[#BFDBFE] pl-3">
+                      {rep.chapter_state.summary}
+                    </p>
+                  </div>
+                )}
+
+                {rep.fixes?.length > 0 && (
+                  <div className="space-y-2.5" aria-label={`${rep.chapter_id} 缺陷详情`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-xs font-serif font-bold text-amber-900">
+                        客观缺陷与修正记录 ({rep.fixes.length} 处)
+                      </h4>
+                      {rep.dual_review?.enabled && (
+                        <span className="text-[10px] font-mono text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-sm">
+                          双审：主审 {rep.dual_review.primary_fixes_count || 0} · 副审 {rep.dual_review.secondary_fixes_count || 0} · 共识 {rep.dual_review.consensus_fixes_count || 0}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {rep.fixes.map((fix, fixIndex) => (
+                        <div
+                          key={`${fix.id}-${fixIndex}`}
+                          className="bg-amber-50/60 border border-amber-200 rounded-sm p-3.5 text-xs space-y-2"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono font-bold text-[#1A1A1A]">#{fix.id}</span>
+                              <span className="px-1.5 py-0.5 bg-white border border-amber-200 text-amber-900 uppercase font-mono text-[10px] rounded-sm">
+                                {fix.category || 'mistranslation'} · {fix.severity || 'major'}
+                              </span>
+                              {typeof fix.confidence === 'number' && (
+                                <span className="text-[10px] font-mono text-[#666666]">
+                                  置信度 {Math.round(fix.confidence * 100)}%
+                                </span>
+                              )}
+                              {fix.consensus && (
+                                <span className="text-[10px] font-mono text-violet-700 font-bold">双审共识</span>
+                              )}
+                            </div>
+                            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-sm border ${
+                              fix.applied === true
+                                ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                : fix.applied === false
+                                ? 'text-rose-700 bg-rose-50 border-rose-200'
+                                : 'text-amber-800 bg-white border-amber-200'
+                            }`}>
+                              {fix.applied === true ? '已自动修正' : fix.applied === false ? '未修正' : '写回状态未知'}
+                            </span>
+                          </div>
+                          {fix.reason && (
+                            <p className="text-[#4A4A4A] text-[11px] leading-relaxed break-words">
+                              <strong className="text-amber-900">问题原因：</strong>{fix.reason}
+                            </p>
+                          )}
+                          {fix.invalid_reason && (
+                            <p className="text-[10px] text-rose-700 bg-rose-50 p-2 border border-rose-200 rounded-sm">
+                              校验警告：{fix.invalid_reason}
+                            </p>
+                          )}
+                          {fix.applied === false && fix.not_applied_reason && (
+                            <p className="text-[11px] text-rose-800 bg-rose-50 p-2.5 border border-rose-200 rounded-sm leading-relaxed">
+                              <strong>未修正原因：</strong>{fix.not_applied_reason}
+                            </p>
+                          )}
+                          {(fix.replacement || fix.approved_translation) && (
+                            <div className="text-emerald-900 text-[11px] leading-relaxed bg-white p-2.5 border border-emerald-200 rounded-sm break-words">
+                              <strong className="text-emerald-700">{fix.applied === true ? '写回修正译文：' : '建议修正译文：'}</strong>{fix.replacement || fix.approved_translation}
+                            </div>
+                          )}
+                          {fix.reporters && fix.reporters.length > 0 && (
+                            <p className="text-[10px] font-mono text-[#888888]">
+                              报告来源：{fix.reporters.join(' + ')}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {rep.migration_warning && (
+                  <p className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-sm">
+                    旧版审阅记录兼容警告：{rep.migration_warning}
+                  </p>
+                )}
               </div>
             ))
           )}

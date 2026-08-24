@@ -266,3 +266,31 @@ def test_knowledge_memory_reports_and_invalid_review_warning(tmp_path: Path, mon
     review = knowledge.get_chapter_review("book", "c1")
     assert review["status"] == "ok" and review["migration_warning"]
     assert knowledge.get_chapter_review("book", "missing")["status"] == "not_found"
+
+
+def test_report_explains_why_each_unapplied_fix_was_skipped(tmp_path: Path, monkeypatch) -> None:
+    workspace = BookWorkspace.at(tmp_path, "Book")
+    workspace.initialize(book_id="book")
+    review = {
+        "checked_ids": ["p1", "p2"],
+        "fixes": [
+            {"id": "p1", "category": "mistranslation", "severity": "major", "confidence": 0.95,
+             "reason": "objective", "replacement": "修正", "auto_apply": True},
+            {"id": "p2", "category": "style", "severity": "minor", "confidence": 0.8,
+             "reason": "preference", "replacement": "建议", "auto_apply": False},
+        ],
+        "glossary_delta": {"add": [], "update": [], "conflicts": []},
+        "memory_delta": {"add": [], "update": [], "conflicts": []},
+        "chapter_state": {},
+    }
+    write_json(workspace.reviews_dir / "c1-output.json", review)
+    write_json(workspace.reports_dir / "c1.json", {
+        "checked_paragraphs": 2, "reported_issues": 2, "applied_fixes": 1,
+        "approved_fixes": [review["fixes"][0]], "applied": {"status": "ok"},
+    })
+    monkeypatch.setattr(knowledge, "get_workspace_for_book", lambda _book: workspace)
+
+    fixes = knowledge.list_chapter_reports("book")[0]["fixes"]
+    assert fixes[0]["applied"] is True and fixes[0]["not_applied_reason"] is None
+    assert fixes[1]["applied"] is False
+    assert "不在客观缺陷自动修正白名单" in fixes[1]["not_applied_reason"]

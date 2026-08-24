@@ -11,6 +11,7 @@ from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, read_json, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.review.models import normalize_review_for_display
+from translator.review.reviewer import OBJECTIVE_CATEGORIES, OBJECTIVE_SEVERITIES, has_japanese_kana
 from translator.web.models import (
     BookMemoryResponse,
     GlossaryCreateRequest,
@@ -20,6 +21,46 @@ from translator.web.models import (
 
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge"])
+
+
+def _not_applied_reason(fix: dict[str, Any], *, apply_disabled: bool) -> str:
+    if fix.get("invalid_reason"):
+        return f"审阅结果校验未通过：{fix['invalid_reason']}"
+    replacement = str(fix.get("replacement") or fix.get("approved_translation") or "").strip()
+    if not replacement:
+        return "审阅器没有提供可写回的修正译文"
+    if has_japanese_kana(replacement):
+        return "建议译文仍含日文假名，写回安全校验已拦截"
+    category = str(fix.get("category", ""))
+    severity = str(fix.get("severity", ""))
+    if category not in OBJECTIVE_CATEGORIES:
+        return f"问题分类 {category or 'unknown'} 不在客观缺陷自动修正白名单"
+    if severity not in OBJECTIVE_SEVERITIES:
+        return f"严重度 {severity or 'unknown'} 未达到 critical/major 自动修正门槛"
+    confidence = float(fix.get("confidence", 0) or 0)
+    if confidence < 0.9:
+        return f"置信度 {round(confidence * 100)}% 低于 90% 自动修正门槛"
+    if apply_disabled:
+        return "本次流水线未启用自动写回"
+    if fix.get("auto_apply") is not True:
+        return "审阅器未将此建议标记为可自动应用"
+    return "未进入最终批准或写回集合，需人工复核"
+
+
+def _decorate_fixes_for_display(
+    fixes: list[dict[str, Any]],
+    *,
+    applied_ids: set[str],
+    apply_disabled: bool,
+) -> list[dict[str, Any]]:
+    decorated: list[dict[str, Any]] = []
+    for raw in fixes:
+        fix = dict(raw)
+        applied = str(fix.get("id", "")) in applied_ids
+        fix["applied"] = applied
+        fix["not_applied_reason"] = None if applied else _not_applied_reason(fix, apply_disabled=apply_disabled)
+        decorated.append(fix)
+    return decorated
 
 
 def get_workspace_for_book(book_id: str) -> BookWorkspace:
@@ -170,8 +211,25 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
         st = read_json(state_files.get(ch_id, Path("nonexistent")), default={})
 
         fixes = rev.get("fixes", [])
+        if not fixes and isinstance(rep.get("approved_fixes"), list):
+            fixes = rep.get("approved_fixes", [])
         if not fixes and approved.get("items"):
             fixes = approved.get("items", [])
+
+        approved_items = rep.get("approved_fixes")
+        if not isinstance(approved_items, list):
+            approved_items = approved.get("items", []) if isinstance(approved.get("items"), list) else []
+        applied_count = int(rep.get("applied_fixes", 0) or 0)
+        applied_ids = {
+            str(item.get("id", ""))
+            for item in approved_items
+            if isinstance(item, dict) and item.get("id")
+        } if applied_count > 0 else set()
+        fixes = _decorate_fixes_for_display(
+            fixes,
+            applied_ids=applied_ids,
+            apply_disabled=rep.get("applied") is False,
+        )
 
         reviewed_at = rep.get("reviewed_at")
         if not reviewed_at:
@@ -183,7 +241,7 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
             "reviewed_at": reviewed_at,
             "checked_paragraphs": rep.get("checked_paragraphs") or len(rev.get("checked_ids", [])),
             "reported_issues": len(fixes),
-            "applied_fixes": rep.get("applied_fixes") or len([f for f in fixes if f.get("auto_apply")]),
+            "applied_fixes": applied_count,
             "fixes": fixes,
             "glossary_delta": rev.get("glossary_delta", {"add": [], "update": [], "conflicts": []}),
             "memory_delta": rev.get("memory_delta", {"add": [], "update": [], "conflicts": []}),

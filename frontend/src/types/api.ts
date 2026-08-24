@@ -153,8 +153,13 @@ export interface ChapterReviewReport {
     confidence?: number;
     reason?: string;
     replacement?: string;
+    approved_translation?: string | null;
     auto_apply?: boolean;
+    consensus?: boolean | null;
+    reporters?: string[];
     invalid_reason?: string;
+    applied?: boolean;
+    not_applied_reason?: string | null;
   }>;
   glossary_delta: {
     add: Array<{
@@ -195,6 +200,7 @@ export interface ChapterReviewReport {
     consensus_fixes_count?: number;
     merged_fixes_count?: number;
   };
+  migration_warning?: string | null;
 }
 
 export interface PreflightProviderResult {

@@ -405,6 +405,8 @@ class WebApiTests(unittest.TestCase):
         reports_list = res_reports.json()
         self.assertEqual(len(reports_list), 1)
         self.assertEqual(reports_list[0]["chapter_id"], "c0001")
+        self.assertTrue(reports_list[0]["fixes"][0]["applied"])
+        self.assertIsNone(reports_list[0]["fixes"][0]["not_applied_reason"])
 
         # 5. Get single chapter review
         res_single_rev = self.client.get(f"/api/v1/knowledge/{self.book_id}/reviews/c0001")

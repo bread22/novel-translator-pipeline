@@ -36,4 +36,43 @@ describe('Knowledge loading states', () => {
       terms: [expect.objectContaining({ occurrences: 9, sample_ids: ['p1'], first_seen_chunk: 'c1' })],
     }));
   });
+
+  it('renders every review issue with its reason and written replacement', async () => {
+    vi.spyOn(api, 'getGlossary').mockResolvedValue({ book_id: 'book', terms: [], conflicts: [] });
+    vi.spyOn(api, 'getMemory').mockResolvedValue({ book_id: 'book', characters: [], world_settings: [] });
+    vi.spyOn(api, 'getReports').mockResolvedValue([{
+      chapter_id: 'c0002', reviewed_at: '2026-08-24T05:08:37Z', checked_paragraphs: 11,
+      reported_issues: 3, applied_fixes: 2,
+      fixes: [{
+        id: 'c0002-p00005', category: 'terminology', severity: 'major', confidence: 0.95,
+        reason: '原译改变了原文语义强度。', replacement: '第四章 章子 惨烈的侵入',
+        auto_apply: true, consensus: false, reporters: ['primary'], applied: true,
+      }, {
+        id: 'c0002-p00010', category: 'terminology', severity: 'major', confidence: 0.95,
+        reason: '原译用词存在歧义。', replacement: '第九章 芙由子 后庭的锐痛',
+        auto_apply: true, consensus: true, reporters: ['primary', 'secondary'], applied: true,
+      }, {
+        id: 'c0002-p00011', category: 'style', severity: 'minor', confidence: 0.8,
+        reason: '仅为风格偏好。', replacement: '建议风格译文', auto_apply: false,
+        consensus: false, reporters: ['secondary'], applied: false,
+        not_applied_reason: '问题分类 style 不在客观缺陷自动修正白名单',
+      }],
+      glossary_delta: { add: [], update: [], conflicts: [] },
+      memory_delta: { add: [], update: [], conflicts: [] },
+      chapter_state: { summary: '本章为目录页。' },
+      dual_review: { enabled: true, primary_fixes_count: 2, secondary_fixes_count: 1, consensus_fixes_count: 1 },
+    }]);
+
+    render(<KnowledgeView book={{ id: 'book', name: 'Book' } as any} />);
+
+    expect(await screen.findByText('客观缺陷与修正记录 (3 处)')).toBeInTheDocument();
+    expect(screen.getByText('#c0002-p00005')).toBeInTheDocument();
+    expect(screen.getByText(/原译改变了原文语义强度/)).toBeInTheDocument();
+    expect(screen.getByText(/第四章 章子 惨烈的侵入/)).toBeInTheDocument();
+    expect(screen.getByText('双审共识')).toBeInTheDocument();
+    expect(screen.getAllByText('已自动修正')).toHaveLength(2);
+    expect(screen.getByText('未修正')).toBeInTheDocument();
+    expect(screen.getByText(/问题分类 style 不在客观缺陷自动修正白名单/)).toBeInTheDocument();
+    expect(screen.getByText(/建议风格译文/)).toBeInTheDocument();
+  });
 });

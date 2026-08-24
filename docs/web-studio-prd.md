@@ -40,8 +40,7 @@ graph TD
 
     subgraph Server ["服务端核心 (FastAPI Backend)"]
         FastAPI_App["FastAPI REST 路由 + 前端静态托管"]
-        Queue_Manager["QueueManager (多书排队与并发槽位引擎)"]
-        Task_Manager["TaskManager (异步任务引擎 & 断点自愈)"]
+        Job_Manager["JobManager (唯一队列、并发与任务状态机)"]
         Event_Bus["SSE EventBroadcaster (实时事件单书分类广播)"]
     end
 
@@ -53,9 +52,8 @@ graph TD
 
     Client <-->|REST API / HTTP| FastAPI_App
     Client <--|SSE 流式推送| Event_Bus
-    FastAPI_App --> Queue_Manager
-    Queue_Manager --> Task_Manager
-    Task_Manager --> Pipeline_Core
+    FastAPI_App --> Job_Manager
+    Job_Manager --> Pipeline_Core
     Pipeline_Core --> Workspace
     Pipeline_Core --> Providers_Layer
     Pipeline_Core -.->|Event Callback| Event_Bus

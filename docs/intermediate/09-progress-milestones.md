@@ -1,5 +1,8 @@
 # Novel Translator Pipeline & Studio - 实施进度看板 (Progress)
 
+> [!WARNING]
+> 历史里程碑快照，未完成项不代表当前状态；最新验收进度见 `docs/progress.md`，v0.3 已收敛为唯一 `JobManager` 和 Schema v2。
+
 ## 📌 里程碑概览
 
 - [x] **Release v0.1: CLI 核心流水线自包含版 (Component 1)**
@@ -44,4 +47,3 @@
 - [ ] **5.2** 封装 `/api/v1/queue` 完整 REST API 与 SSE 事件广播
 - [ ] **5.3** 开发前端 `QueueView.tsx` 队列管理看板与 Navbar/Library 联动
 - [ ] **5.4** CLI 批量脚本 `translation_queue.py` 升级与自动化测试验证
-

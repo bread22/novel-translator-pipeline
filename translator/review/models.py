@@ -85,14 +85,16 @@ class ChapterReviewOutput(StrictModel):
         if not isinstance(raw, dict):
             return raw
         value = dict(raw)
-        glossary = value.get("glossary_delta") if isinstance(value.get("glossary_delta"), dict) else {}
+        raw_glossary = value.get("glossary_delta")
+        glossary: dict[str, Any] = raw_glossary if isinstance(raw_glossary, dict) else {}
         value["glossary_delta"] = {
             "add": list(glossary.get("add", []) or []),
             "update": list(glossary.get("update", []) or []),
             "conflicts": list(glossary.get("conflicts", []) or []),
         }
 
-        memory = value.get("memory_delta") if isinstance(value.get("memory_delta"), dict) else {}
+        raw_memory = value.get("memory_delta")
+        memory: dict[str, Any] = raw_memory if isinstance(raw_memory, dict) else {}
         if any(key in memory for key in ("add", "update", "conflicts")):
             normalized_memory = {
                 "add": list(memory.get("add", []) or []),
@@ -115,8 +117,8 @@ class ChapterReviewOutput(StrictModel):
             normalized_memory = {"add": legacy_entries, "update": [], "conflicts": []}
         value["memory_delta"] = normalized_memory
 
-        state = value.get("chapter_state") if isinstance(value.get("chapter_state"), dict) else {}
-        state = dict(state)
+        raw_state = value.get("chapter_state")
+        state: dict[str, Any] = dict(raw_state) if isinstance(raw_state, dict) else {}
         if "important_changes" not in state and "significant_changes" in state:
             state["important_changes"] = state.pop("significant_changes")
         value["chapter_state"] = state

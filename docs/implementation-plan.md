@@ -1,5 +1,8 @@
 # Implementation Plan - Novel Translator Studio (Web & Desktop)
 
+> [!WARNING]
+> 本文是 v0.2 早期设计记录，其中 `TaskManager`/`QueueManager` 双引擎已由 v0.3 的唯一 `translator/core/job_manager.py` 取代；当前状态机与验收以代码、`docs/progress.md` 和 v0.3 发布说明为准。
+
 为 `novel-translator-pipeline` 构建面向**全自动 AI 翻译流水线**与**个人内网/桌面**的现代化图形工作台（Novel Translator Studio）。系统彻底去除过时的多人协同校对流程，全面拥抱全自动 AI 调度（主译、二分降级容灾、长程事实记忆沉淀与 AI 审阅自动写回），提供实时透明监控作战室、沉浸式双语检验阅读器、长程记忆透视台与 Docker 一键交付。
 
 ---

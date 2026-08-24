@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from translator.version import __version__
 from translator.web.routes.books import router as books_router
 from translator.web.routes.events import router as events_router
 from translator.web.routes.knowledge import router as knowledge_router
@@ -26,7 +27,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     app = FastAPI(
         title="Novel Translator Studio API",
         description="Universal AI Novel Translation and Consistency Review Pipeline API",
-        version="0.1.0",
+        version=__version__,
         docs_url="/docs",
         redoc_url="/redoc",
     )
@@ -75,7 +76,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     # 3. Basic health check
     @app.get("/health")
     def health_check() -> dict[str, str]:
-        return {"status": "ok", "app": "novel-translator-studio", "version": "0.1.0"}
+        return {"status": "ok", "app": "novel-translator-studio", "version": __version__}
 
     # 4. Mount Frontend Static Files if available
     dist_path = static_dir or (Path(__file__).resolve().parents[2] / "frontend" / "dist")

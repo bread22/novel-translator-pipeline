@@ -73,7 +73,7 @@ def _model(provider: str, _role: str, _novel_root: Path | None = None) -> str:
 
 
 def _provider_counts(provenance: dict[str, Any], providers: list[str]) -> tuple[dict[str, int], dict[str, str]]:
-    counts = Counter()
+    counts: Counter[str] = Counter()
     origins: dict[str, str] = {}
     for item_id, item in provenance.get("items", {}).items():
         provider = str(item.get("provider", "unknown"))
@@ -108,10 +108,10 @@ def _diagnostic_summary(diagnostics: dict[str, Any], primary: str, _fallback: st
 def _review_summary(workspace: Path, origins: dict[str, str], providers: list[str]) -> dict[str, Any]:
     reported = 0
     applied = 0
-    reported_by_origin = Counter()
-    applied_by_origin = Counter()
-    categories = Counter()
-    categories_by_origin: dict[str, Counter] = {p: Counter() for p in providers}
+    reported_by_origin: Counter[str] = Counter()
+    applied_by_origin: Counter[str] = Counter()
+    categories: Counter[str] = Counter()
+    categories_by_origin: dict[str, Counter[str]] = {p: Counter() for p in providers}
     categories_by_origin["unknown"] = Counter()
     chapters = 0
     paragraphs = 0
@@ -145,7 +145,7 @@ def _review_summary(workspace: Path, origins: dict[str, str], providers: list[st
     if reported_by_origin.get("unknown", 0) > 0 or applied_by_origin.get("unknown", 0) > 0:
         all_keys.append("unknown")
 
-    fallback_categories = Counter()
+    fallback_categories: Counter[str] = Counter()
     for p in providers[1:]:
         fallback_categories.update(categories_by_origin[p])
 

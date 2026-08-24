@@ -302,7 +302,7 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
             item["reporters"] = ["primary"]
             merged_fixes.append(item)
         else:
-            item = dict(in_b)
+            item = dict(in_b or {})
             item["consensus"] = False
             item["reporters"] = ["secondary"]
             merged_fixes.append(item)
@@ -677,7 +677,7 @@ def review_book(
         c_id = str(chapter["id"])
         input_path = workspace.reviews_dir / f"{c_id}-consistency-input.json"
         output_path = workspace.reviews_dir / f"{c_id}-consistency-output.json"
-        previous_state = {}
+        previous_state: dict[str, Any] = {}
         index = all_chapters.index(chapter)
         if index > 0:
             previous_id = str(all_chapters[index - 1].get("id", ""))
@@ -707,7 +707,7 @@ def review_book(
         fixes = approved_fixes(review["fixes"], autonomous=autonomous)
         fixes_path = workspace.reviews_dir / f"{c_id}-consistency-fixes.json"
         write_json(fixes_path, {"book": book, "items": fixes})
-        applied_fixes = False
+        applied_fixes: Any = False
         if apply and fixes:
             applied_fixes = call_novel_translator("apply-review-fixes", "--book", book, "--input", str(fixes_path))
             verify_applied_fixes(read_json(manifest_path(book)), fixes)

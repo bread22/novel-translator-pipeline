@@ -179,6 +179,7 @@ class IterativePipeline:
         self.workspace = workspace
         self.manifest = manifest
         self.tool_call = tool_call
+        self.targeted_translator: Callable[..., dict[str, Any]] | None
         if targeted_translator is not None:
             self.targeted_translator = targeted_translator
         elif tool_call is call_novel_translator:
@@ -568,7 +569,7 @@ class IterativePipeline:
         fixes = approved_fixes(review["fixes"], autonomous=self.autonomous)
         fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
         write_json(fixes_path, {"book": self.book, "items": fixes})
-        applied_fixes = False
+        applied_fixes: Any = False
         if self.apply and fixes:
             self._checkpoint()
             try:

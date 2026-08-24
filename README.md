@@ -1,10 +1,12 @@
 # Novel Translator Studio (Novel Translator Pipeline)
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
+[![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://www.python.org/downloads/)
+[![Node 20](https://img.shields.io/badge/node-20-339933.svg)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/react-19-61dafb.svg)](https://react.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/tailwind-v4-38bdf8.svg)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests: 87 Passed](https://img.shields.io/badge/tests-87%20passed-brightgreen.svg)](tests/)
 
 **Novel Translator Studio** 是日文轻小说/网络小说全自动 AI 翻译流水线与长程一致性审阅工坊。本项目基于 [`novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础解包能力，构建了完整的全自动生命周期编排、大模型并发调度、敏感词二分降级容灾、两级备用救回（Two-Level Fallback）、双盲章节一致性审阅与长程事实记忆追踪，并提供世界一流的 **「独立出版杂志 (Editorial Mag)」** 视觉交互工作台。
 
@@ -60,16 +62,26 @@ Studio 采用考究高雅的独立出版杂志风格，消除常规 AI 仪表盘
 git clone https://github.com/bread22/novel-translator-pipeline.git
 cd novel-translator-pipeline
 
-# 2. 创建并激活 Python 虚拟环境 (Python 3.11+)
+# 2. 创建并激活 Python 虚拟环境 (Python 3.10–3.13)
 python3 -m venv .venv
 source .venv/bin/activate  # Windows 用户: .venv\Scripts\Activate.ps1
 
-# 3. 安装依赖并配置环境变量
+# 3. 安装后端依赖并配置环境变量
 pip install -e .
 cp .env.example .env
 # 可选：在 .env 中填入 DEEPSEEK_API_KEY 等
 
-# 4. 启动 Web 工作台 (默认端口 8000)
+# 4. 安装并构建前端（Node.js 20）
+cd frontend && npm ci && npm run build && cd ..
+
+# 5. 准备上游运行时（首次安装）
+git clone https://github.com/OYcedar/novel-translator.git ~/src/novel-translator
+python3 -m venv ~/src/novel-translator/.venv
+~/src/novel-translator/.venv/bin/pip install -e "$HOME/src/novel-translator[epub]"
+export NOVEL_TRANSLATOR_ROOT="$HOME/src/novel-translator"
+export NOVEL_TRANSLATOR_PYTHON="$HOME/src/novel-translator/.venv/bin/python"
+
+# 6. 启动 Web 工作台（默认只监听 loopback）
 python scripts/start_web.py --port 8000
 ```
 
@@ -139,15 +151,22 @@ context_tokens = 1048576
 
 ## 🧪 自动化测试
 
-项目具备严苛的自动化测试套件（涵盖 Universal Providers、Two-Level Fallback、Chapter Reviewer、Queue Manager、REST API 及 SSE 事件流）：
+项目具备后端、前端和浏览器自动化测试套件；持续结果以页首 CI badge 为准，不在文档中固定测试数量或耗时：
 
 ```bash
-.venv/bin/pytest tests/ -v
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check translator scripts tests
+.venv/bin/mypy translator
+cd frontend
+npm run typecheck && npm run lint && npm test && npm run build && npm run test:e2e
 ```
 
-```text
-============================== 87 passed in 2.76s ==============================
-```
+## 🔐 备份、迁移与恢复
+
+- 配置保存采用校验后原子替换；成功替换前保留 `config.toml.bak`，`.env` 始终以 `0600` 权限写入。Provider 密钥仅在配置中使用 `$ENV_NAME` 引用。
+- Glossary v1 → v2 默认先 dry-run：`python scripts/migrate_glossary_v2.py --output-root output`；确认报告后追加 `--apply`，每本书会生成 `glossary.json.v1.bak`。
+- 队列状态保存在 `output/jobs/job_state.v2.json`；重启时活动任务转为 `recovery_pending` 并重新调度。回退旧版本前先备份整个 `output/jobs/`。
+- 前端 `dist/` 是构建产物，不纳入 Git；正式发布包由 `python scripts/build_release_archive.py` 在校验引用后生成。
 
 ---
 
@@ -158,9 +177,9 @@ novel-translator-pipeline/
 ├── frontend/                      # React 19 + Vite + Tailwind v4 前端工程
 │   ├── src/components/            # 报头、导航栏等共享组件
 │   ├── src/views/                 # 任务调度、控制台、阅读器、知识库、设置等视图
-│   └── dist/                      # 编译就绪的高性能生产前端静态包
+│   └── dist/                      # npm run build 生成的生产静态包（不纳入 Git）
 ├── translator/                    # 核心 Python 后端框架
-│   ├── core/                      # Workspace 工作区、配置与队列管理器
+│   ├── core/                      # Workspace、配置与唯一 JobManager
 │   ├── pipeline/                  # 章节翻译流水线、双审阅器与连通性预检
 │   ├── providers/                 # OpenAI、AGY、OpenCode、Codex 统一适配器
 │   └── web/                       # FastAPI 路由、SSE 广播器与 Web 容器

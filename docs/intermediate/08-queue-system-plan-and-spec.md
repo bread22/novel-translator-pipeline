@@ -1,5 +1,8 @@
 # 翻译任务与队列调度系统 (Queue & Task Hub) 设计规范与实施计划
 
+> [!WARNING]
+> 历史队列方案：独立 `QueueManager`/`TaskManager` 已删除。v0.3 由唯一 `JobManager` 管理 `pending → running ↔ paused → completed/failed/cancelled`，重启中的活动状态转为 `recovery_pending`。
+
 ## 概述与设计目标
 
 为 `novel-translator-pipeline` 构建生产级、高容错、可观测的**一站式任务与队列调度中心 (Queue Hub)**。

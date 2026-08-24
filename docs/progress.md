@@ -4,6 +4,7 @@
 
 - [x] **Release v0.1: CLI 核心流水线自包含版 (Component 1)**
 - [x] **Release v0.2: 现代化 Web 工作台与独立出版杂志视觉范式 (Components 2 ~ 4)**
+- [x] **Release v0.3: 安全、单一 JobManager、数据正确性与质量门禁**
 
 ---
 
@@ -16,12 +17,12 @@
 - [x] **1.4** 更新 `README.md` 与 `.env.example` 降低用户配置门槛
 - [x] **1.5** 运行全量测试验证 CLI 核心自包含闭环
 
-### Component 2: 后端 API 与异步任务管理层 (FastAPI + TaskManager + SSE)
+### Component 2: 后端 API 与统一任务管理层 (FastAPI + JobManager + SSE)
 - [x] **2.1** 创建 `translator/web/` 基础结构与 FastAPI 应用工厂 (`app.py`)
 - [x] **2.2** 实现 SSE 实时事件广播器 (`events.py`) 与当前页面会话内的单书分类记录
-- [x] **2.3** 实现非阻塞异步任务调度器 (`task_manager.py`) 与队列管理层 (`queue_manager.py`)
+- [x] **2.3** 使用唯一 `translator/core/job_manager.py` 管理队列、并发槽位、暂停/取消与重启恢复
 - [x] **2.4** 实现核心 REST API 路由 (`books.py`, `queue.py`, `tasks.py`, `knowledge.py`, `system.py`, `events.py`)
-- [x] **2.5** 编写 `tests/test_web_api.py` 与 `tests/test_queue_api.py` 接口自动化测试 (87 项测试 100% 通过)
+- [x] **2.5** 编写 Web、Queue、状态迁移、导入顺序与安全接口自动化测试，由 CI 持续验证
 
 ### Component 3: 现代化 Web 前端与出版杂志视觉范式 (React 19 + Vite + Tailwind v4)
 - [x] **3.1** 初始化 `frontend/` 项目结构与依赖配置 (Vite + React 19 + Tailwind v4)
@@ -37,3 +38,9 @@
 - [x] **4.2** 静态资源自动打包部署到 `frontend/dist/`
 - [x] **4.3** 修复沙箱外网出站 403 阻断，支持多模型线上 API 正常调用
 - [x] **4.4** 全量文档更新与 Release v0.2 打标
+
+### Component 5: v0.3 发布质量闭环
+- [x] **5.1** 配置/密钥/路径/上传安全边界与事务写入
+- [x] **5.2** Fallback、Review/Memory/Glossary 与 Finalize 数据契约
+- [x] **5.3** 前端 SSE、请求竞态、错误状态、可访问性与 Vitest/RTL/Playwright
+- [x] **5.4** Python 3.10–3.13、Node 20、构建、安装与版本一致性 CI 门禁

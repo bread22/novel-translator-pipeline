@@ -113,7 +113,7 @@ def _schema_errors(value: Any, schema: dict[str, Any], root: dict[str, Any], pat
         errors.append(f"{path}: {value!r} 不在 {schema['enum']!r} 中")
     if "const" in schema and value != schema["const"]:
         errors.append(f"{path}: 必须为 {schema['const']!r}")
-    expected = schema.get("type")
+    expected = str(schema.get("type", ""))
     type_ok = {
         "object": isinstance(value, dict),
         "string": isinstance(value, str),

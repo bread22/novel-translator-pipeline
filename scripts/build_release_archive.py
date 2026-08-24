@@ -6,12 +6,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore[no-redef]
 
 from verify_frontend_dist import verify_dist
+from translator.version import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +29,7 @@ def main() -> int:
     report = verify_dist(ROOT / "frontend" / "dist")
     if report["status"] != "ok":
         raise RuntimeError(f"frontend dist verification failed: {report['errors']}")
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    version = __version__
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
         package_root = Path(temporary) / f"novel-translator-pipeline-{version}"

@@ -1,5 +1,8 @@
 # Implementation Plan - Novel Translator Studio (Web & Desktop)
 
+> [!WARNING]
+> 历史实施计划：双 Manager、跟踪 `frontend/dist` 等方案已被 v0.3 取代；当前交付由唯一 `JobManager` 与构建时生成/校验 SPA 资源完成。
+
 为 `novel-translator-pipeline` 构建面向**全自动 AI 翻译流水线**与**个人内网/桌面**的现代化图形工作台（Novel Translator Studio）。系统彻底去除过时的多人协同校对流程，全面拥抱全自动 AI 调度（主译、二分降级容灾、长程事实记忆沉淀与 AI 审阅自动写回），提供实时透明监控作战室、沉浸式双语检验阅读器、长程记忆透视台与 Docker 一键交付。
 
 ---
@@ -138,4 +141,3 @@ Component 4: 容器化与一键交付脚本 (Docker + Startup Scripts)
 4. **实时流式翻译验证**：点击【开始翻译】，验证作战室实时显示 SSE 推送的段落流、进度百分比及降级拓扑动态高亮。
 5. **双语沉浸阅读验证**：在双语对照页面查看已完成章节，确认来源标签与 AI 审阅记录正常展示。
 6. **EPUB 导出与版式验证**：测试导出横排与原版 EPUB，确认阅读器排版正常。
-

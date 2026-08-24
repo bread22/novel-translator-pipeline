@@ -34,7 +34,14 @@ def _extract_placeholders(text: str) -> list[str]:
 
 def _terms(root: Path, book: str) -> list[dict[str, Any]]:
     raw = _load_json(root / "data" / "books" / book / "terms.json", {})
-    items = raw.get("items", raw.get("terms", raw if isinstance(raw, list) else [])) if isinstance(raw, (dict, list)) else []
+    if isinstance(raw, dict):
+        items = raw.get("items", raw.get("terms", []))
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    if not isinstance(items, list):
+        items = []
     return [item for item in items if isinstance(item, dict)]
 
 
@@ -81,7 +88,10 @@ class ProviderTranslator:
             missing = sorted(set(ids) - set(by_id))
             raise ValueError(f"manifest 缺少段落：{', '.join(missing)}")
         first_index = next(index for index, item in enumerate(paragraphs) if str(item.get("id")) == ids[0])
-        chapter = next((item for item in manifest.get("chapters", []) if any(str(p.get("id")) == ids[0] for p in item.get("paragraphs", []))), {})
+        chapter: dict[str, Any] = next(
+            (item for item in manifest.get("chapters", []) if any(str(p.get("id")) == ids[0] for p in item.get("paragraphs", []))),
+            {},
+        )
         previous = paragraphs[max(0, first_index - 3):first_index]
         next_index = first_index + len(selected)
         following = paragraphs[next_index:next_index + 2]

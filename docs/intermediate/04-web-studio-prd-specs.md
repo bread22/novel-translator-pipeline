@@ -1,5 +1,8 @@
 # Novel Translator Studio (Web & Desktop) - PRD & 技术规范说明书
 
+> [!WARNING]
+> 历史设计快照：双 Manager 与旧 Review/Memory 字段已过期。v0.3 使用唯一 `JobManager`、queue state v2 和 Review/Memory Schema v2。
+
 ## 1. 产品定位与目标 (Product Vision & Goals)
 
 **Novel Translator Studio** 是一款面向个人读者与自建服务用户的**全自动 AI 小说翻译与重构工作台**。核心理念是 **“Drop & Read”（投放即读）** —— 借助多大模型协同架构（主译 + 二分降级容灾救回 + 章节长程记忆与审阅自动写回 + 横排版式重构），实现从原始日文 EPUB 到高质量中文 EPUB 的全自动交付。
@@ -167,4 +170,3 @@ POST   /api/v1/system/preflight         # 执行 Provider 连通性与延迟预�
 1. 路径为 `vendor/novel-translator`；
 2. `translator/core/novel_tool.py` 优先读取 `vendor/novel-translator`；
 3. 用户使用 `git clone --recursive` 或 Docker 启动，零额外配置。
-

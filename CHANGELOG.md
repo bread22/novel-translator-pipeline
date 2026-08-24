@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.2.0] - 2026-08-24
+## [0.3.0] - 2026-08-23
+
+### Changed
+- 将 Web 单书执行与多书队列收敛到唯一 `JobManager`，补齐状态机、并发槽位、取消检查点、重启恢复和历史裁剪。
+- 统一 Review/Memory/Glossary v2 契约、Fallback 尝试记录、Finalize 校验与外部进程超时终止。
+- 前端改用单一全局 SSE、固定事件 envelope、可取消请求与最新请求获胜，并补齐 Modal 焦点管理和 URL tabs。
+- 前端生产资源改为可重复构建与发布归档交付，不再跟踪残缺 `dist`。
+
+### Security
+- 配置 API 不再返回明文密钥；配置与 `.env` 原子写入，Prompt/书籍路径封闭，上传与 EPUB 解压增加资源上限。
+- 默认仅监听 loopback，收紧 CORS，并增加可选 Bearer 管理认证、安全响应头和请求 ID。
+
+### Quality
+- 支持范围统一为 Python 3.10–3.13 与 Node 20；加入后端矩阵、Ruff/mypy、前端 Vitest/RTL、Playwright、构建产物与干净安装门禁。
+
+## [0.2.0] - 2026-08-23
 
 ### 🌟 Major Release: Novel Translator Studio Web 全功能工作台与独立出版杂志视觉范式
 
@@ -38,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2026-08-23
+## [0.1.0] - 2026-08-22
 
 ### 🚀 Initial Release (CLI 核心流水线自包含版)
 

@@ -10,6 +10,7 @@ from translator.core.novel_tool import (
     resolve_novel_translator_python,
     resolve_novel_translator_root,
 )
+from translator.core.paths import PathResolver
 from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
@@ -28,6 +29,7 @@ __all__ = [
     "BookWorkspace",
     "NOVEL_TRANSLATOR_PYTHON",
     "NOVEL_TRANSLATOR_ROOT",
+    "PathResolver",
     "apply_horizontal_layout",
     "call_novel_translator",
     "config_value",

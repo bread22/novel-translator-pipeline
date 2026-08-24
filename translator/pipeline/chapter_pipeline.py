@@ -27,6 +27,7 @@ from translator.core.novel_tool import (
     call_novel_translator,
     provider_failure_reason,
 )
+from translator.core.paths import PathResolver
 from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
@@ -221,12 +222,13 @@ class IterativePipeline:
         self.translation_max_tokens = max(512, eff_max_tokens)
         eff_max_batches = max_chapter_batches if max_chapter_batches is not None else int(pipeline_cfg.get("max_chapter_batches", 1000))
         self.max_chapter_batches = max(1, eff_max_batches)
-        self.translation_policy = translation_policy or ROOT / config.get("paths", {}).get("translation_policy", "docs/prompts/translation-policy.md")
+        paths = PathResolver.for_config()
+        self.translation_policy = translation_policy or paths.translation_policy(config)
         self.apply = apply
         self.autonomous = autonomous
         self.reviewer = reviewer or reviewer_name(config)
         self.layout = layout or str(pipeline_cfg.get("layout", "preserve"))
-        self.translated_root = translated_root or ROOT / "translated"
+        self.translated_root = translated_root or paths.translated_root(config)
         self.on_batch_completed = on_batch_completed
         self.cancellation_token = cancellation_token or CancellationToken()
         self.pause_gate = pause_gate or PauseGate()

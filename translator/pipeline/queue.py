@@ -11,6 +11,7 @@ from typing import Any
 
 from translator.core.config import load_config
 from translator.core.novel_tool import NOVEL_TRANSLATOR_PYTHON, NOVEL_TRANSLATOR_ROOT
+from translator.core.paths import PathResolver
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -113,9 +114,10 @@ class TranslationQueue:
     def __init__(self, config: dict[str, Any] | None = None, *, stop_on_error: bool | None = None) -> None:
         self.config = config or load_config()
         self.queue_cfg = self.config.get("queue", {})
-        self.source_root = ROOT / self.queue_cfg.get("source_root", "source")
-        self.output_root = ROOT / self.config.get("paths", {}).get("output_root", "output")
-        self.translated_root = ROOT / "translated"
+        paths = PathResolver.for_config()
+        self.source_root = paths.source_root(self.config)
+        self.output_root = paths.output_root(self.config)
+        self.translated_root = paths.translated_root(self.config)
         self.translated_root.mkdir(parents=True, exist_ok=True)
         self.stop_on_error = (
             stop_on_error

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from translator.core.config import load_config
+from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, read_json, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.web.models import (
@@ -25,7 +26,7 @@ def get_workspace_for_book(book_id: str) -> BookWorkspace:
     if not manifest:
         raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}")
     config = load_config()
-    output_root = Path(config["paths"]["output_root"]).resolve()
+    output_root = PathResolver.for_config().output_root(config)
     title = manifest.get("title", book_id)
     return BookWorkspace.at(output_root, title)
 

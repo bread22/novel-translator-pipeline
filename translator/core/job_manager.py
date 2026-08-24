@@ -12,6 +12,7 @@ import uuid
 from translator.core.config import load_config
 from translator.core.job_control import CancellationToken, JobCancelled, PauseGate
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT
+from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, read_json, write_json
 from translator.pipeline.chapter_pipeline import ChapterPipeline, manifest_path
 from translator.providers.translator import ProviderTranslator
@@ -50,7 +51,7 @@ class JobManager:
     """Thread-safe Queue Management and Execution Engine for multi-book batch translation."""
 
     def __init__(self, output_root: Path | None = None) -> None:
-        self.output_root = output_root or (ROOT / "output")
+        self.output_root = output_root or PathResolver.for_config().output_root(load_config())
         self._items: dict[str, QueueItem] = {}
         self._pending_order: list[str] = []
         self._running_threads: dict[str, threading.Thread] = {}

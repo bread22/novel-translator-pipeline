@@ -23,6 +23,7 @@ from translator.core.config import (
     write_env_keys,
 )
 from translator.providers.registry import create_provider
+from translator.core.paths import PathResolver
 from translator.web.models import PreflightProviderResult, PreflightResponse
 from translator.web.path_policy import resolve_under, validate_prompt_filename
 
@@ -132,7 +133,7 @@ def save_system_config(config_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_prompts_dir() -> Path:
-    p = (ROOT / "docs" / "prompts").resolve()
+    p = PathResolver.for_config(get_config_path()).prompts_root
     p.mkdir(parents=True, exist_ok=True)
     return p
 

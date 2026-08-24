@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from translator.core.config import load_config
 from translator.core.layout import apply_horizontal_layout
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
+from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, read_json, safe_book_name, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path, paragraph_map
 from translator.core.job_manager import job_manager
@@ -33,7 +34,7 @@ router = APIRouter(prefix="/books", tags=["Books"])
 
 def get_output_root() -> Path:
     config = load_config()
-    return Path(config["paths"]["output_root"]).resolve()
+    return PathResolver.for_config().output_root(config)
 
 
 def get_provenance_and_diagnostics(workspace: BookWorkspace) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -358,7 +359,7 @@ def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horiz
             raise HTTPException(status_code=502, detail=f"横排 EPUB 二次 validate payload 未通过：{validated}")
 
     # Copy to translated/ root directory
-    translated_dir = Path("translated").resolve()
+    translated_dir = PathResolver.for_config().translated_root(load_config())
     translated_dir.mkdir(parents=True, exist_ok=True)
     target_epub = translated_dir / workspace.epub_path.name
     temporary_target = translated_dir / f".{target_epub.name}.{uuid.uuid4().hex}.tmp"

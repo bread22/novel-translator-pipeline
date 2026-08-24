@@ -156,6 +156,7 @@ class JobManager:
             task_id=item.id,
             book_id=item.book_id,
             status=item.status,
+            phase=item.phase,
             overall_progress=item.overall_progress,
             current_chapter=item.current_chapter,
             current_chapter_index=item.current_chapter_index,
@@ -610,6 +611,7 @@ class JobManager:
                     self._transition_locked(item, {item.status}, "running")
                     item.started_at = utc_now()
                     item.process_id = self.process_id
+                    item.phase = "initializing"
                     item.message = "正在初始化流水线..."
                     items_to_start.append(item)
 
@@ -717,6 +719,23 @@ class JobManager:
                 )
                 self._emit_item_progress(item)
 
+            def handle_phase_changed(phase_info: dict[str, Any]) -> None:
+                phase = str(phase_info.get("phase", "")).strip()
+                if phase not in {"translating", "reviewing"}:
+                    return
+                chapter_id = str(phase_info.get("chapter_id", item.current_chapter))
+                with self._lock:
+                    item.phase = phase
+                    if chapter_id:
+                        item.current_chapter = chapter_id
+                    action = "翻译" if phase == "translating" else "审阅"
+                    item.message = f"正在{action}第 {item.current_chapter_index}/{item.total_chapters} 章：{chapter_id}"
+                    item.updated_at = utc_now()
+                    self._save_state()
+                    payload = self._as_task(item).model_dump()
+                broadcaster.broadcast_sync("pipeline_phase_changed", payload, book_id=item.book_id)
+                self._emit_item_progress(item)
+
             # 2. Instantiate pipeline
             pipeline = ChapterPipeline(
                 book=item.book_id,
@@ -734,6 +753,7 @@ class JobManager:
                     manifest=manifest_path(item.book_id),
                 ),
                 on_batch_completed=handle_batch_completed,
+                on_phase_changed=handle_phase_changed,
                 cancellation_token=cancellation,
                 pause_gate=pause_gate,
             )
@@ -790,7 +810,13 @@ class JobManager:
             # 4. Finalize
             if item.options.finalize:
                 checkpoint("before_finalize")
-                item.message = "全部章节翻译完成，正在导出与校验最终中文 EPUB..."
+                with self._lock:
+                    item.phase = "finalizing"
+                    item.message = "全部章节翻译完成，正在导出与校验最终中文 EPUB..."
+                    item.updated_at = utc_now()
+                    self._save_state()
+                    payload = self._as_task(item).model_dump()
+                broadcaster.broadcast_sync("pipeline_phase_changed", payload, book_id=item.book_id)
                 self._emit_item_progress(item)
                 pipeline.finalize()
                 checkpoint("after_finalize")
@@ -800,6 +826,7 @@ class JobManager:
                 if not self._transition_locked(item, {"running"}, "completed"):
                     raise JobCancelled("完成前任务状态已改变")
                 item.overall_progress = 1.0 if max_cycles >= len(chapters) else item.overall_progress
+                item.phase = "idle"
                 item.message = "全书翻译与审阅已完成！" if max_cycles >= len(chapters) else f"已达到 max_cycles={max_cycles} 检查点"
                 item.completed_at = utc_now()
                 self._save_state()
@@ -814,6 +841,7 @@ class JobManager:
                     item.status = "cancelled"
                     item.updated_at = utc_now()
                 item.message = "流水线已安全取消"
+                item.phase = "idle"
                 item.completed_at = utc_now()
                 self._save_state()
             broadcaster.broadcast_sync("pipeline_stopped", self._as_task(item).model_dump(), book_id=item.book_id)
@@ -823,6 +851,7 @@ class JobManager:
                 if item.status not in TERMINAL_STATUSES and item.status != "cancelling":
                     self._transition_locked(item, {item.status}, "failed")
                     item.message = f"执行出错: {exc}"
+                    item.phase = "idle"
                     item.error_detail = traceback.format_exc()
                     item.completed_at = utc_now()
                 self._save_state()
@@ -852,6 +881,7 @@ class JobManager:
                 "task_id": item.id,
                 "book_id": item.book_id,
                 "status": item.status,
+                "phase": item.phase,
                 "overall_progress": item.overall_progress,
                 "current_chapter": item.current_chapter,
                 "current_chapter_index": item.current_chapter_index,

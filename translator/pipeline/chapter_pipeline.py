@@ -172,6 +172,7 @@ class IterativePipeline:
         layout: str | None = None,
         translated_root: Path | None = None,
         on_batch_completed: Callable[[dict[str, Any]], None] | None = None,
+        on_phase_changed: Callable[[dict[str, Any]], None] | None = None,
         cancellation_token: CancellationToken | None = None,
         pause_gate: PauseGate | None = None,
     ) -> None:
@@ -231,6 +232,7 @@ class IterativePipeline:
         self.layout = layout or str(pipeline_cfg.get("layout", "preserve"))
         self.translated_root = translated_root or paths.translated_root(config)
         self.on_batch_completed = on_batch_completed
+        self.on_phase_changed = on_phase_changed
         self.cancellation_token = cancellation_token or CancellationToken()
         self.pause_gate = pause_gate or PauseGate()
 
@@ -628,6 +630,8 @@ class IterativePipeline:
             "last_chunk": "",
             "updated_at": utc_now(),
         })
+        if self.on_phase_changed:
+            self.on_phase_changed({"phase": "translating", "chapter_id": chapter_id})
         translated_summary = self._translate_chapter(chapter_id, cycle)
         progress.update({
             "state": "running",
@@ -638,6 +642,8 @@ class IterativePipeline:
         })
         write_json(self.workspace.progress_path, progress)
         self._checkpoint()
+        if self.on_phase_changed:
+            self.on_phase_changed({"phase": "reviewing", "chapter_id": chapter_id})
         reviewed_summary = self._review_chapter(chapter_id)
         self._checkpoint()
         progress.update({

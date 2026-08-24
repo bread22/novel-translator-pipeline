@@ -119,7 +119,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const filteredEvents = streamEvents.filter((evt) => {
     if (eventFilter === 'fallback') return evt.event === 'fallback_triggered';
     if (eventFilter === 'pipeline') {
-      return ['pipeline_started', 'chapter_started', 'batch_completed', 'pipeline_progress', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
+      return ['pipeline_started', 'chapter_started', 'batch_completed', 'pipeline_progress', 'pipeline_phase_changed', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
     }
     return true;
   });
@@ -231,7 +231,10 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
 
         const latestEvent = streamEvents[streamEvents.length - 1];
         const isFallbackActive = latestEvent?.event === 'fallback_triggered' || latestEvent?.event?.includes('fallback');
-        const isReviewActive = latestEvent?.event?.includes('review') || activeTask?.message?.includes('审阅') || activeTask?.message?.includes('一致性');
+        const isReviewActive = activeTask?.phase === 'reviewing'
+          || (!activeTask?.phase && (latestEvent?.event?.includes('review') || activeTask?.message?.includes('审阅') || activeTask?.message?.includes('一致性')));
+        const isTranslationActive = activeTask?.phase === 'translating'
+          || (!activeTask?.phase && !isFallbackActive && !isReviewActive);
         const hasRecovered = (activeTask?.recovered_paragraphs || 0) > 0;
 
         return (
@@ -255,7 +258,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 {/* Node 1: Primary */}
                 <div
                   className={`p-3.5 rounded-sm border transition-all text-left ${
-                    isRunning && !isFallbackActive && !isReviewActive
+                    isRunning && isTranslationActive && !isFallbackActive
                       ? 'bg-[#EFF6FF] border-[#1D4ED8] shadow-sm'
                       : isRunning && isFallbackActive
                       ? 'bg-amber-50 border-amber-400'
@@ -266,12 +269,12 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                     <span className="text-[#1D4ED8] font-bold">PRIMARY (主译)</span>
                     <span
                       className={`px-1.5 py-0.5 rounded-sm text-[9px] ${
-                        isRunning && !isFallbackActive && !isReviewActive
+                        isRunning && isTranslationActive && !isFallbackActive
                           ? 'bg-[#1D4ED8] text-white font-bold animate-pulse'
                           : 'bg-[#E5E0D8] text-[#666666]'
                       }`}
                     >
-                      {isRunning && !isFallbackActive && !isReviewActive ? '● TRANSLATING' : 'READY'}
+                      {isRunning && isTranslationActive && !isFallbackActive ? '● TRANSLATING' : 'STANDBY'}
                     </span>
                   </div>
                   <div className="font-serif font-bold text-xs text-[#1A1A1A] truncate" title={primaryName}>

@@ -181,6 +181,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 return {"status": "ok", "summary": {"command": args[0]}}
 
             reviewer_calls = 0
+            phases: list[dict[str, str]] = []
 
             def chapter_reviewer(input_path: Path, output_path: Path) -> None:
                 nonlocal reviewer_calls
@@ -199,6 +200,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=tool_call, chapter_reviewer=chapter_reviewer,
                 apply=True, autonomous=True, max_chapter_batches=5,
+                on_phase_changed=phases.append,
             )
             pipeline.initialize()
             result = pipeline.run_chapter("c1", 1)
@@ -206,6 +208,10 @@ class PipelineFunctionTests(unittest.TestCase):
             self.assertEqual(result["reviewed"], 2)
             self.assertEqual(reviewer_calls, 1)
             self.assertEqual(translate_count, 2)
+            self.assertEqual(phases, [
+                {"phase": "translating", "chapter_id": "c1"},
+                {"phase": "reviewing", "chapter_id": "c1"},
+            ])
             self.assertIn("apply-review-fixes", [call[0] for call in calls])
             memory = json.loads(workspace.book_memory_path.read_text(encoding="utf-8"))
             self.assertEqual(memory["entries"][0]["key"], "fact-1")

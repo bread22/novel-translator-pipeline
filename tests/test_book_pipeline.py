@@ -106,6 +106,41 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertTrue(approved[0]["auto_apply"])
         self.assertFalse(has_japanese_kana(approved[0]["replacement"]))
 
+    def test_review_persists_writeback_guard_findings_before_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest("「ヒクッ」")
+            raw["chapters"][0]["id"] = "c1"
+            raw["chapters"][0]["paragraphs"][0]["id"] = "p1"
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+
+            def chapter_reviewer(_input: Path, output: Path) -> None:
+                output.write_text(json.dumps({
+                    "checked_ids": ["p1"],
+                    "fixes": [],
+                    "glossary_delta": {"add": [], "update": [], "conflicts": []},
+                    "memory_delta": {"add": [], "update": [], "conflicts": []},
+                    "chapter_state": {"summary": "", "important_changes": []},
+                }, ensure_ascii=False), encoding="utf-8")
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+            )
+            pipeline.initialize()
+            with self.assertRaisesRegex(ValueError, "残留日文假名"):
+                pipeline._review_chapter("c1")
+
+            report = json.loads((workspace.reports_dir / "c1.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["reported_issues"], 1)
+            self.assertEqual(report["applied_fixes"], 0)
+            self.assertEqual(report["remaining_kana_ids"], ["p1"])
+            output = json.loads((workspace.reviews_dir / "c1-output.json").read_text(encoding="utf-8"))
+            self.assertEqual(output["fixes"][0]["id"], "p1")
+            self.assertEqual(output["fixes"][0]["category"], "policy_violation")
+
     def test_merge_chapter_reviews_consensus_and_deduplication(self) -> None:
         rev_a = {
             "checked_ids": ["p1", "p2"],

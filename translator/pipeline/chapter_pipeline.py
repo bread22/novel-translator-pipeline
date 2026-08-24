@@ -600,6 +600,7 @@ class IterativePipeline:
         fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
         write_json(fixes_path, {"book": self.book, "items": fixes})
         applied_fixes: Any = False
+        remaining_kana: list[str] = []
         if self.apply:
             if fixes:
                 self._checkpoint()
@@ -621,7 +622,22 @@ class IterativePipeline:
                 if item_id in expected_ids and has_japanese_kana(str(paragraph.get("translated", "")))
             ]
             if remaining_kana:
-                raise ValueError(f"章节 {chapter_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
+                guarded_fixes = list(review["fixes"])
+                guarded_fixes.extend({
+                    "id": item_id,
+                    "category": "policy_violation",
+                    "severity": "critical",
+                    "confidence": 1.0,
+                    "reason": "最终写回校验发现译文仍残留日文假名；审阅器未提供合格替换，已阻止章节完成。",
+                    "replacement": "",
+                    "auto_apply": False,
+                    "invalid_reason": "最终写回校验发现未解决的日文假名残留",
+                    "reporters": ["writeback_guard"],
+                } for item_id in remaining_kana)
+                review = {**review, "fixes": guarded_fixes}
+                # Persist the guard findings before failing, so the UI never reports 0 issues
+                # after earlier fixes have already been written to the manifest.
+                write_json(output_path, review)
         self._checkpoint()
         merged_terms, term_summary = merge_term_updates(
             glossary,
@@ -646,8 +662,11 @@ class IterativePipeline:
             "term_summary": term_summary,
             "memory_summary": mem_summary,
             "applied": applied_fixes,
+            "remaining_kana_ids": remaining_kana,
         })
         self._checkpoint()
+        if remaining_kana:
+            raise ValueError(f"章节 {chapter_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
         return {
             "chapter_id": chapter_id,
             "reviewed": len(expected_ids),

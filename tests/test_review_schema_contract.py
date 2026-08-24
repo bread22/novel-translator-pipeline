@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
 from translator.review.models import ChapterReviewOutput
+from translator.core.job_control import JobCancelled
 from translator.review.reviewer import (
     _combine_chunk_reviews,
     _execute_single_segment_review,
@@ -94,6 +96,53 @@ class ReviewSchemaContractTests(unittest.TestCase):
                 ("primary", "reviewer-a", "completed"),
                 ("secondary", "reviewer-b", "completed"),
             },
+        )
+
+    def test_cancellation_does_not_wait_for_blocked_reviewers(self) -> None:
+        states: list[dict[str, str]] = []
+        both_started = threading.Event()
+        release = threading.Event()
+        cancelled = threading.Event()
+        entered = 0
+        entered_lock = threading.Lock()
+
+        def execute(_kind, _payload, _schema, **_kwargs):
+            nonlocal entered
+            with entered_lock:
+                entered += 1
+                if entered == 2:
+                    both_started.set()
+            release.wait(timeout=2)
+            return review("blocked")
+
+        def cancel_check() -> None:
+            if cancelled.is_set():
+                raise JobCancelled("cancelled in test")
+
+        def trigger_cancel() -> None:
+            self.assertTrue(both_started.wait(timeout=1))
+            cancelled.set()
+
+        trigger = threading.Thread(target=trigger_cancel)
+        trigger.start()
+        started_at = time.monotonic()
+        try:
+            with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=execute):
+                with self.assertRaises(JobCancelled):
+                    _execute_single_segment_review(
+                        {}, Path("schema.json"), backend="reviewer-a",
+                        secondary_backend="reviewer-b", is_dual=True,
+                        on_reviewer_status=states.append,
+                        cancel_check=cancel_check,
+                    )
+        finally:
+            release.set()
+            trigger.join(timeout=1)
+
+        self.assertLess(time.monotonic() - started_at, 1)
+        self.assertEqual(
+            {item["role"] for item in states if item["status"] == "cancelled"},
+            {"primary", "secondary"},
         )
 
 

@@ -250,6 +250,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           reviewing: '● REVIEWING',
           completed: '✓ COMPLETED',
           failed: '× FAILED',
+          cancelled: 'CANCELLED',
           disabled: 'DISABLED',
           pending: 'PENDING',
           standby: 'STANDBY',
@@ -386,7 +387,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                       className={`p-3.5 rounded-sm border transition-all text-left ${
                         reviewerActive(reviewer.status)
                           ? 'bg-[#EFF6FF] border-[#1D4ED8] shadow-sm'
-                          : reviewer.status === 'failed'
+                          : reviewer.status === 'failed' || reviewer.status === 'cancelled'
                           ? 'bg-rose-50 border-rose-400'
                           : reviewer.status === 'completed'
                           ? 'bg-emerald-50 border-emerald-300'
@@ -400,7 +401,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                         <span className={`px-1.5 py-0.5 rounded-sm text-[9px] ${
                           reviewerActive(reviewer.status)
                             ? 'bg-[#1D4ED8] text-white font-bold animate-pulse'
-                            : reviewer.status === 'failed'
+                            : reviewer.status === 'failed' || reviewer.status === 'cancelled'
                             ? 'bg-rose-600 text-white font-bold'
                             : reviewer.status === 'completed'
                             ? 'bg-emerald-600 text-white font-bold'

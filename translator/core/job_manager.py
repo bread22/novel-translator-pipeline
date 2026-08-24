@@ -744,7 +744,7 @@ class JobManager:
             def handle_reviewer_status(status_info: dict[str, str]) -> None:
                 role = str(status_info.get("role", "")).strip()
                 status = str(status_info.get("status", "")).strip()
-                if role not in {"primary", "secondary"} or status not in {"standby", "pending", "reviewing", "completed", "failed"}:
+                if role not in {"primary", "secondary"} or status not in {"standby", "pending", "reviewing", "completed", "failed", "cancelled"}:
                     return
                 with self._lock:
                     item.reviewer_states = {**item.reviewer_states, role: status}
@@ -865,6 +865,10 @@ class JobManager:
                     item.updated_at = utc_now()
                 item.message = "流水线已安全取消"
                 item.phase = "idle"
+                item.reviewer_states = {
+                    role: "cancelled" if state in {"pending", "reviewing"} else state
+                    for role, state in item.reviewer_states.items()
+                }
                 item.completed_at = utc_now()
                 self._save_state()
             broadcaster.broadcast_sync("pipeline_stopped", self._as_task(item).model_dump(), book_id=item.book_id)

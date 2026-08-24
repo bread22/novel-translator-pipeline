@@ -563,6 +563,7 @@ class IterativePipeline:
                 autonomous=self.autonomous,
                 backend=self.reviewer,
                 on_reviewer_status=self.on_reviewer_status,
+                cancel_check=self.cancellation_token.check,
             )
         else:
             self.chapter_reviewer(input_path, output_path)
@@ -582,6 +583,7 @@ class IterativePipeline:
                     autonomous=self.autonomous,
                     backend=self.reviewer,
                     on_reviewer_status=self.on_reviewer_status,
+                    cancel_check=self.cancellation_token.check,
                 )
             else:
                 self.chapter_reviewer(input_path, retry_path)

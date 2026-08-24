@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
@@ -354,11 +354,14 @@ def _execute_review_with_fallbacks(
     autonomous: bool = False,
     backend: str | None = None,
     timeout: int | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     backends = _review_backends(backend)
     last_exc = None
     effective_timeout = timeout or dynamic_review_timeout(input_payload)
     for candidate in backends:
+        if cancel_check:
+            cancel_check()
         try:
             provider = get_provider(candidate)
             return provider.review(kind, input_payload, schema_path, autonomous=autonomous, timeout=effective_timeout)
@@ -449,20 +452,46 @@ def _execute_single_segment_review(
     secondary_backend: str | None = None,
     is_dual: bool = False,
     on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Execute single segment review with dual review (if configured) and backend failover."""
     primary_cand = backend
     sec_cand = secondary_backend
 
     if not is_dual or not sec_cand or sec_cand == primary_cand:
+        if cancel_check:
+            cancel_check()
         if on_reviewer_status:
             on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "reviewing"})
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Reviewer")
+        future = executor.submit(
+            _execute_review_with_fallbacks,
+            "chapter",
+            input_payload,
+            schema_path,
+            autonomous=autonomous,
+            backend=primary_cand,
+            cancel_check=cancel_check,
+        )
         try:
-            result = _execute_review_with_fallbacks("chapter", input_payload, schema_path, autonomous=autonomous, backend=primary_cand)
+            while not future.done():
+                if cancel_check:
+                    cancel_check()
+                wait({future}, timeout=0.1)
+            result = future.result()
         except Exception:
+            executor.shutdown(wait=False, cancel_futures=True)
+            if cancel_check:
+                try:
+                    cancel_check()
+                except Exception:
+                    if on_reviewer_status:
+                        on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "cancelled"})
+                    raise
             if on_reviewer_status:
                 on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "failed"})
             raise
+        executor.shutdown(wait=True)
         if on_reviewer_status:
             on_reviewer_status({"role": "primary", "backend": primary_cand or "", "status": "completed"})
         return result
@@ -474,28 +503,45 @@ def _execute_single_segment_review(
         for role, candidate in reviewers.items():
             on_reviewer_status({"role": role, "backend": candidate or "", "status": "reviewing"})
 
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="DualReviewer") as executor:
-        futures = {
-            executor.submit(
-                _execute_review_with_fallbacks,
-                "chapter",
-                input_payload,
-                schema_path,
-                autonomous=autonomous,
-                backend=candidate,
-            ): (role, candidate)
-            for role, candidate in reviewers.items()
-        }
-        for future in as_completed(futures):
+    if cancel_check:
+        cancel_check()
+    executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="DualReviewer")
+    futures: dict[Future[dict[str, Any]], tuple[str, str | None]] = {
+        executor.submit(
+            _execute_review_with_fallbacks,
+            "chapter",
+            input_payload,
+            schema_path,
+            autonomous=autonomous,
+            backend=candidate,
+            cancel_check=cancel_check,
+        ): (role, candidate)
+        for role, candidate in reviewers.items()
+    }
+    pending = set(futures)
+    try:
+        while pending:
+            if cancel_check:
+                cancel_check()
+            done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+            for future in done:
+                role, candidate = futures[future]
+                try:
+                    payloads[role] = future.result()
+                    if on_reviewer_status:
+                        on_reviewer_status({"role": role, "backend": candidate or "", "status": "completed"})
+                except Exception as exc:
+                    if on_reviewer_status:
+                        on_reviewer_status({"role": role, "backend": candidate or "", "status": "failed"})
+                    errors.append(f"{role} ({candidate}) error: {exc}")
+    except Exception:
+        for future in pending:
             role, candidate = futures[future]
-            try:
-                payloads[role] = future.result()
-                if on_reviewer_status:
-                    on_reviewer_status({"role": role, "backend": candidate or "", "status": "completed"})
-            except Exception as exc:
-                if on_reviewer_status:
-                    on_reviewer_status({"role": role, "backend": candidate or "", "status": "failed"})
-                errors.append(f"{role} ({candidate}) error: {exc}")
+            if on_reviewer_status:
+                on_reviewer_status({"role": role, "backend": candidate or "", "status": "cancelled"})
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown(wait=True)
 
     primary_payload = payloads.get("primary")
     secondary_payload = payloads.get("secondary")
@@ -519,6 +565,7 @@ def _execute_segment_with_adaptive_split(
     secondary_backend: str | None = None,
     is_dual: bool = False,
     on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
     depth: int = 0,
     max_depth: int = 4,
 ) -> dict[str, Any]:
@@ -532,6 +579,8 @@ def _execute_segment_with_adaptive_split(
             "chapter_state": base_payload.get("previous_chapter_state") or {},
         })
 
+    if cancel_check:
+        cancel_check()
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
     expected_ids = {str(item.get("id", "")) for item in items if item.get("id")}
@@ -545,6 +594,7 @@ def _execute_segment_with_adaptive_split(
             secondary_backend=secondary_backend,
             is_dual=is_dual,
             on_reviewer_status=on_reviewer_status,
+            cancel_check=cancel_check,
         )
         res = validate_chapter_review_payload(res, expected_ids)
         return res
@@ -564,6 +614,7 @@ def _execute_segment_with_adaptive_split(
                 secondary_backend=secondary_backend,
                 is_dual=is_dual,
                 on_reviewer_status=on_reviewer_status,
+                cancel_check=cancel_check,
                 depth=depth + 1,
                 max_depth=max_depth,
             )
@@ -579,6 +630,7 @@ def _execute_segment_with_adaptive_split(
                 secondary_backend=secondary_backend,
                 is_dual=is_dual,
                 on_reviewer_status=on_reviewer_status,
+                cancel_check=cancel_check,
                 depth=depth + 1,
                 max_depth=max_depth,
             )
@@ -598,6 +650,7 @@ def run_chapter_review(
     dual_review: bool | None = None,
     chunk_size: int = REVIEW_CHUNK_MAX_PARAGRAPHS,
     on_reviewer_status: Callable[[dict[str, str]], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> None:
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -633,6 +686,7 @@ def run_chapter_review(
             secondary_backend=sec_cand,
             is_dual=is_dual,
             on_reviewer_status=on_reviewer_status,
+            cancel_check=cancel_check,
         )
     else:
         # Super-large chapter chunked review with rolling context forwarding
@@ -641,6 +695,8 @@ def run_chapter_review(
         chunk_results = []
 
         for chunk_items in chunks:
+            if cancel_check:
+                cancel_check()
             chunk_res = _execute_segment_with_adaptive_split(
                 rolling_payload,
                 chunk_items,
@@ -650,6 +706,7 @@ def run_chapter_review(
                 secondary_backend=sec_cand,
                 is_dual=is_dual,
                 on_reviewer_status=on_reviewer_status,
+                cancel_check=cancel_check,
             )
             chunk_results.append(chunk_res)
             rolling_payload = _update_rolling_payload(rolling_payload, chunk_res)
@@ -658,6 +715,8 @@ def run_chapter_review(
         for next_res in chunk_results[1:]:
             merged_payload = _combine_chunk_reviews(merged_payload, next_res)
 
+    if cancel_check:
+        cancel_check()
     merged_payload = validate_chapter_review_payload(merged_payload, expected_ids)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

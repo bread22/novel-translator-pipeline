@@ -13,6 +13,7 @@ from translator.core.config import load_config
 from translator.core.job_control import CancellationToken, JobCancelled, PauseGate
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT
 from translator.core.paths import PathResolver
+from translator.core.state_migrations import migrate_queue_state_v1
 from translator.core.workspace import BookWorkspace, read_json, write_json
 from translator.pipeline.chapter_pipeline import ChapterPipeline, manifest_path
 from translator.providers.translator import ProviderTranslator
@@ -78,6 +79,10 @@ class JobManager:
         p = self.output_root / "jobs" / "job_state.v2.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def legacy_state_file(self) -> Path:
+        return self.output_root / "queue" / "queue_state.json"
 
     def get_status(self) -> QueueStatusResponse:
         with self._lock:
@@ -514,6 +519,19 @@ class JobManager:
             logger.warning("Failed to save queue state: %s", exc)
 
     def _load_state(self) -> None:
+        if not self.state_file.exists() and self.legacy_state_file.is_file():
+            report = migrate_queue_state_v1(
+                self.legacy_state_file,
+                self.state_file,
+                apply=True,
+                process_id=self.process_id,
+            )
+            logger.info(
+                "Migrated queue state v1 to v2: %d/%d items, backup=%s",
+                report["items_after"],
+                report["items_before"],
+                report["backup"],
+            )
         if not self.state_file.exists():
             return
         try:

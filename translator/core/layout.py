@@ -118,7 +118,99 @@ def _set_language(root: ET.Element, language: str) -> None:
     language_element.set(f"{{{XML_NS}}}lang", language)
 
 
-def _update_opf(root: ET.Element, opf_path: str, css_path: str) -> None:
+def _inject_metadata_to_opf(root: ET.Element, meta: dict[str, Any]) -> None:
+    metadata_el = next((element for element in root.iter() if _local_name(element.tag) == "metadata"), None)
+    if metadata_el is None:
+        return
+
+    title_zh = str(meta.get("title_zh", "")).strip()
+    title_ja = str(meta.get("title_ja", "")).strip()
+    author_zh = str(meta.get("author_zh", "")).strip()
+    author_ja = str(meta.get("author_ja", "")).strip()
+    description = str(meta.get("description", "")).strip()
+
+    # 1. Main title and Japanese original title / subtitle
+    if title_zh:
+        title_el = next((element for element in metadata_el if _local_name(element.tag) == "title"), None)
+        if title_el is None:
+            title_el = ET.Element(f"{{{DC_NS}}}title")
+            metadata_el.append(title_el)
+        title_el.text = title_zh
+        title_el.set("id", "title-main")
+
+        # Subtitle / Japanese original title if different
+        if title_ja and title_ja != title_zh:
+            sub_el = next((element for element in metadata_el if _local_name(element.tag) == "title" and element != title_el), None)
+            if sub_el is None:
+                sub_el = ET.Element(f"{{{DC_NS}}}title")
+                metadata_el.append(sub_el)
+            sub_el.text = title_ja
+            sub_el.set("id", "title-orig")
+
+            # EPUB 3 subtitle refine
+            sub_refine = next((el for el in metadata_el if _local_name(el.tag) == "meta" and el.attrib.get("refines") == "#title-orig"), None)
+            if sub_refine is None:
+                sub_refine = ET.Element(f"{{{OPF_NS}}}meta")
+                metadata_el.append(sub_refine)
+            sub_refine.set("refines", "#title-orig")
+            sub_refine.set("property", "title-type")
+            sub_refine.text = "subtitle"
+
+            # Legacy original-title meta for older readers/Calibre
+            orig_meta = next((el for el in metadata_el if _local_name(el.tag) == "meta" and el.attrib.get("name") == "original-title"), None)
+            if orig_meta is None:
+                orig_meta = ET.Element(f"{{{OPF_NS}}}meta")
+                metadata_el.append(orig_meta)
+            orig_meta.set("name", "original-title")
+            orig_meta.set("content", title_ja)
+
+        # EPUB 3 main title refine
+        main_refine = next((el for el in metadata_el if _local_name(el.tag) == "meta" and el.attrib.get("refines") == "#title-main"), None)
+        if main_refine is None:
+            main_refine = ET.Element(f"{{{OPF_NS}}}meta")
+            metadata_el.append(main_refine)
+        main_refine.set("refines", "#title-main")
+        main_refine.set("property", "title-type")
+        main_refine.text = "main"
+
+        # Calibre sort title
+        sort_meta = next((el for el in metadata_el if _local_name(el.tag) == "meta" and el.attrib.get("name") == "calibre:title_sort"), None)
+        if sort_meta is None:
+            sort_meta = ET.Element(f"{{{OPF_NS}}}meta")
+            metadata_el.append(sort_meta)
+        sort_meta.set("name", "calibre:title_sort")
+        sort_meta.set("content", title_zh)
+
+    # 2. Author / Creator
+    if author_zh:
+        creator_el = next((element for element in metadata_el if _local_name(element.tag) == "creator"), None)
+        if creator_el is None:
+            creator_el = ET.Element(f"{{{DC_NS}}}creator")
+            metadata_el.append(creator_el)
+        creator_el.text = author_zh
+        creator_el.set("id", "creator")
+        if author_ja:
+            creator_el.set(f"{{{OPF_NS}}}file-as", author_ja)
+
+    # 3. Synopsis / Description
+    if description:
+        desc_el = next((element for element in metadata_el if _local_name(element.tag) == "description"), None)
+        if desc_el is None:
+            desc_el = ET.Element(f"{{{DC_NS}}}description")
+            metadata_el.append(desc_el)
+        desc_el.text = description
+
+    # 4. Language & Contributor
+    _set_language(root, "zh-CN")
+
+    contributor_el = next((el for el in metadata_el if _local_name(el.tag) == "contributor" and el.attrib.get("id") == "translator"), None)
+    if contributor_el is None:
+        contributor_el = ET.Element(f"{{{DC_NS}}}contributor", {"id": "translator"})
+        metadata_el.append(contributor_el)
+    contributor_el.text = "Novel Translator Studio"
+
+
+def _update_opf(root: ET.Element, opf_path: str, css_path: str, metadata: dict[str, Any] | None = None) -> None:
     ET.register_namespace("", OPF_NS)
     ET.register_namespace("dc", DC_NS)
     manifest, items = _find_manifest(root)
@@ -142,6 +234,8 @@ def _update_opf(root: ET.Element, opf_path: str, css_path: str) -> None:
     if root_spine is not None:
         root_spine.set("page-progression-direction", "ltr")
     _set_language(root, "zh-CN")
+    if metadata:
+        _inject_metadata_to_opf(root, metadata)
 
 
 def _inject_stylesheet(data: bytes, href: str) -> bytes:
@@ -176,8 +270,8 @@ def _is_cover_document(data: bytes) -> bool:
     return "calibre:cover" in text or 'name="cover"' in text and 'content="true"' in text
 
 
-def apply_horizontal_layout(epub: Path) -> dict[str, Any]:
-    """Add a horizontal Chinese layout layer without changing translated text."""
+def apply_horizontal_layout(epub: Path, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Add a horizontal Chinese layout layer and inject rich metadata without changing translated text."""
     epub = epub.expanduser().resolve()
     if not epub.exists():
         raise FileNotFoundError(epub)
@@ -189,7 +283,7 @@ def apply_horizontal_layout(epub: Path) -> dict[str, Any]:
             opf_dir = posixpath.dirname(opf_path)
             css_path = posixpath.join(opf_dir, "Styles", "horizontal-zh.css")
             content_paths = _content_paths(root, opf_path)
-            _update_opf(root, opf_path, css_path)
+            _update_opf(root, opf_path, css_path, metadata=metadata)
             css_href_by_content = {
                 path: _relative_href(path, css_path)
                 for path in content_paths
@@ -220,4 +314,38 @@ def apply_horizontal_layout(epub: Path) -> dict[str, Any]:
         "content_documents": len(content_paths),
         "spine_direction": "ltr",
         "language": "zh-CN",
+        "metadata_injected": bool(metadata),
+    }
+
+
+def inject_epub_metadata(epub: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Inject rich metadata into an EPUB without applying layout transformation."""
+    epub = epub.expanduser().resolve()
+    if not epub.exists():
+        raise FileNotFoundError(epub)
+    temporary = Path(tempfile.mkstemp(prefix=f".{epub.name}.", suffix=".tmp", dir=epub.parent)[1])
+    try:
+        with zipfile.ZipFile(epub, "r") as src:
+            try:
+                opf_path = _rootfile_path(src)
+                root = _parse_opf(src.read(opf_path))
+            except (ValueError, KeyError, ET.ParseError):
+                return {"status": "ok", "metadata_injected": False, "metadata": metadata}
+            ET.register_namespace("", OPF_NS)
+            ET.register_namespace("dc", DC_NS)
+            _inject_metadata_to_opf(root, metadata)
+            updates: dict[str, bytes] = {
+                opf_path: ET.tostring(root, encoding="utf-8", xml_declaration=True),
+            }
+            with zipfile.ZipFile(temporary, "w") as dst:
+                for info in src.infolist():
+                    data = updates.get(info.filename, src.read(info.filename))
+                    _zip_write_info(dst, info, data, stored=info.filename == "mimetype")
+        temporary.replace(epub)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        "status": "ok",
+        "metadata_injected": True,
+        "metadata": metadata,
     }

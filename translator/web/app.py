@@ -91,7 +91,14 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
             file_candidate = dist_path / full_path
             if file_candidate.exists() and file_candidate.is_file():
                 return FileResponse(file_candidate)
-            return FileResponse(dist_path / "index.html")
+            return FileResponse(
+                dist_path / "index.html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
     else:
         @app.get("/")
         def root_redirect():

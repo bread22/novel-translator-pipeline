@@ -13,7 +13,8 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from translator.core.config import load_config
-from translator.core.layout import apply_horizontal_layout
+from translator.core.layout import apply_horizontal_layout, inject_epub_metadata
+from translator.core.metadata import extract_book_metadata, sanitize_epub_filename
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
 from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, read_json, safe_book_name, utc_now, write_json
@@ -354,20 +355,25 @@ def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horiz
         raise HTTPException(status_code=502, detail=f"EPUB export payload 未通过：{exported}")
     if not workspace.epub_path.is_file() or workspace.epub_path.stat().st_size == 0 or not zipfile.is_zipfile(workspace.epub_path):
         raise HTTPException(status_code=502, detail="EPUB export 产物无效")
-    validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
-    if validated.get("status") not in {"ok", "success", "valid"}:
-        raise HTTPException(status_code=502, detail=f"EPUB validate payload 未通过：{validated}")
-
+    meta = extract_book_metadata(book_id, manifest, workspace)
     if layout == "horizontal":
-        apply_horizontal_layout(workspace.epub_path)
-        validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
-        if validated.get("status") not in {"ok", "success", "valid"}:
-            raise HTTPException(status_code=502, detail=f"横排 EPUB 二次 validate payload 未通过：{validated}")
+        apply_horizontal_layout(workspace.epub_path, metadata=meta)
+    else:
+        inject_epub_metadata(workspace.epub_path, metadata=meta)
+
+    validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
+    if (
+        not isinstance(validated, dict)
+        or validated.get("status") not in {"ok", "success", "valid", "warning"}
+        or bool(validated.get("errors"))
+    ):
+        raise HTTPException(status_code=502, detail=f"EPUB validate payload 未通过：{validated}")
 
     # Copy to translated/ root directory
     translated_dir = PathResolver.for_config().translated_root(load_config())
     translated_dir.mkdir(parents=True, exist_ok=True)
-    target_epub = translated_dir / workspace.epub_path.name
+    target_name = sanitize_epub_filename(meta.get("title_zh", title), meta.get("author_zh", ""))
+    target_epub = translated_dir / target_name
     temporary_target = translated_dir / f".{target_epub.name}.{uuid.uuid4().hex}.tmp"
     shutil.copy2(workspace.epub_path, temporary_target)
     source_hash = hashlib.sha256(workspace.epub_path.read_bytes()).hexdigest()
@@ -381,6 +387,7 @@ def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horiz
         "status": "exported",
         "layout": layout,
         "epub_path": str(workspace.epub_path),
+        "target_filename": target_name,
         "download_url": f"/api/v1/books/{book_id}/download",
         "sha256": source_hash,
     }
@@ -399,9 +406,15 @@ def download_book_epub(book_id: str) -> FileResponse:
     if not workspace.epub_path.exists():
         raise HTTPException(status_code=404, detail="尚未生成导出 EPUB，请先执行导出")
 
+    meta = read_json(workspace.book_metadata_path, default=None)
+    if isinstance(meta, dict) and meta.get("title_zh"):
+        download_filename = sanitize_epub_filename(meta["title_zh"], meta.get("author_zh", ""))
+    else:
+        download_filename = workspace.epub_path.name
+
     return FileResponse(
         path=str(workspace.epub_path),
-        filename=workspace.epub_path.name,
+        filename=download_filename,
         media_type="application/epub+zip",
     )
 

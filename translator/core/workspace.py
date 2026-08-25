@@ -132,6 +132,10 @@ class BookWorkspace:
         return self.data_dir / "book_memory.json"
 
     @property
+    def book_metadata_path(self) -> Path:
+        return self.data_dir / "book_metadata.json"
+
+    @property
     def chapter_states_dir(self) -> Path:
         return self.data_dir / "chapter_states"
 

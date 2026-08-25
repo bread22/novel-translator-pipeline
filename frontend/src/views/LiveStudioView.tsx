@@ -37,7 +37,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const [layout, setLayout] = useState<'horizontal' | 'preserve'>('horizontal');
   const [eventFilter, setEventFilter] = useState<'all' | 'pipeline' | 'fallback'>('all');
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
-  const [selectedPolicy, setSelectedPolicy] = useState<string>('docs/prompts/erotic-novel-policy.md');
+  const [selectedPolicy, setSelectedPolicy] = useState<string>('docs/prompts/france-shoin-90s-classic.md');
   const feedBottomRef = useRef<HTMLDivElement>(null);
 
   const isRunning = activeTask && activeTask.status === 'running';
@@ -48,15 +48,40 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   }, [streamEvents]);
 
   useEffect(() => {
-    api.getConfig().then(setConfig).catch(() => {});
-    api.getPrompts().then((list) => {
-      setPrompts(list);
-      const defaultTranslation = list.find((p) => p.type === 'translation');
-      if (defaultTranslation) {
-        setSelectedPolicy(defaultTranslation.path);
+    Promise.all([
+      api.getConfig().catch(() => null),
+      api.getPrompts().catch(() => []),
+    ]).then(([cfg, list]) => {
+      if (cfg) setConfig(cfg);
+      if (list) setPrompts(list);
+      const serverDefault = cfg?.paths?.translation_policy;
+      const firstAvailable = list.find((p) => p.type === 'translation')?.path;
+      if (serverDefault && list.some((p) => p.path === serverDefault)) {
+        setSelectedPolicy(serverDefault);
+      } else if (firstAvailable) {
+        setSelectedPolicy(firstAvailable);
       }
-    }).catch(() => {});
+    });
   }, []);
+
+  const handlePolicyChange = async (newPolicy: string) => {
+    setSelectedPolicy(newPolicy);
+    if (config) {
+      const updated = {
+        ...config,
+        paths: {
+          ...config.paths,
+          translation_policy: newPolicy,
+        },
+      };
+      setConfig(updated);
+      try {
+        await api.saveConfig(updated);
+      } catch (e) {
+        console.error('Failed to sync policy to server config:', e);
+      }
+    }
+  };
 
   if (!book) {
     return (
@@ -521,17 +546,24 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                 
                 {/* Prompt Policy Selector */}
                 <div className="pt-2 border-t border-[#E5E0D8] space-y-1">
-                  <span className="text-[11px] font-medium text-[#4A4A4A] block font-serif">
-                    翻译提示词规范 (Policy Prompt):
-                  </span>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-medium text-[#4A4A4A] font-serif">
+                      翻译提示词规范 (Policy Prompt):
+                    </span>
+                    {config?.paths?.translation_policy === selectedPolicy && (
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 border border-emerald-300 font-mono">
+                        全局默认
+                      </span>
+                    )}
+                  </div>
                   <select
                     value={selectedPolicy}
-                    onChange={(e) => setSelectedPolicy(e.target.value)}
+                    onChange={(e) => handlePolicyChange(e.target.value)}
                     className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm px-2 py-1.5 text-xs text-[#1D4ED8] font-medium focus:outline-none focus:border-[#1D4ED8] cursor-pointer"
                   >
                     {prompts.filter(p => p.type === 'translation').map((p) => (
                       <option key={p.path} value={p.path}>
-                        {p.name}
+                        {p.name} {config?.paths?.translation_policy === p.path ? ' ★(全局默认)' : ''}
                       </option>
                     ))}
                   </select>

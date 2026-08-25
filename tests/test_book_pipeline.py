@@ -51,9 +51,18 @@ class PipelineFunctionTests(unittest.TestCase):
         items = [
             {"id": "a", "category": "mistranslation", "severity": "major", "confidence": 0.95, "replacement": "修复", "auto_apply": True},
             {"id": "b", "category": "explicitness_intensity", "severity": "major", "confidence": 0.99, "replacement": "风格改写", "auto_apply": True},
-            {"id": "c", "category": "terminology", "severity": "minor", "confidence": 0.99, "replacement": "轻微改写", "auto_apply": True},
+            {"id": "c", "category": "style_enhancement", "severity": "minor", "confidence": 0.99, "replacement": "轻微改写", "auto_apply": True},
         ]
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a"])
+
+    def test_approved_fixes_allows_objective_minor_and_lower_threshold_fixes(self) -> None:
+        items = [
+            {"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.85, "replacement": "修复1", "auto_apply": True},
+            {"id": "p2", "category": "terminology", "severity": "minor", "confidence": 0.80, "replacement": "修复2", "auto_apply": True},
+            {"id": "p3", "category": "mistranslation", "severity": "minor", "confidence": 0.79, "replacement": "修复3", "auto_apply": True},
+        ]
+        approved = approved_fixes(items, autonomous=True)
+        self.assertEqual([item["id"] for item in approved], ["p1", "p2"])
 
     def test_approved_fixes_rejects_japanese_kana_hallucinations(self) -> None:
         items = [
@@ -128,6 +137,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+                targeted_translator=lambda *args, **kwargs: {"status": "error"},
             )
             pipeline.initialize()
             with self.assertRaisesRegex(ValueError, "残留日文假名"):
@@ -140,6 +150,46 @@ class PipelineFunctionTests(unittest.TestCase):
             output = json.loads((workspace.reviews_dir / "c1-output.json").read_text(encoding="utf-8"))
             self.assertEqual(output["fixes"][0]["id"], "p1")
             self.assertEqual(output["fixes"][0]["category"], "policy_violation")
+
+    def test_review_triggers_micro_repair_for_remaining_kana(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest("「ヒクッ」")
+            raw["chapters"][0]["id"] = "c1"
+            raw["chapters"][0]["paragraphs"][0]["id"] = "p1"
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+
+            def chapter_reviewer(_input: Path, output: Path) -> None:
+                output.write_text(json.dumps({
+                    "checked_ids": ["p1"],
+                    "fixes": [],
+                    "glossary_delta": {"add": [], "update": [], "conflicts": []},
+                    "memory_delta": {"add": [], "update": [], "conflicts": []},
+                    "chapter_state": {"summary": "", "important_changes": []},
+                }, ensure_ascii=False), encoding="utf-8")
+
+            def mock_targeted_translator(provider, book, ids, source_chars=0, max_tokens=0):
+                # Simulate successful repair by updating manifest
+                m_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for p in m_data["chapters"][0]["paragraphs"]:
+                    if p["id"] == "p1":
+                        p["translated"] = "「抽泣」"
+                manifest_path.write_text(json.dumps(m_data, ensure_ascii=False), encoding="utf-8")
+                return {"status": "ok"}
+
+            pipeline = IterativePipeline(
+                book="book", workspace=workspace, manifest=manifest_path,
+                chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+                targeted_translator=mock_targeted_translator,
+            )
+            pipeline.initialize()
+            result = pipeline._review_chapter("c1")
+            self.assertEqual(result["chapter_id"], "c1")
+            # Verify p1 was repaired in manifest and no remaining kana
+            final_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(final_manifest["chapters"][0]["paragraphs"][0]["translated"], "「抽泣」")
 
     def test_merge_chapter_reviews_consensus_and_deduplication(self) -> None:
         rev_a = {
@@ -181,6 +231,32 @@ class PipelineFunctionTests(unittest.TestCase):
         
         # Glossary deduplication
         self.assertEqual(len(merged["glossary_delta"]["add"]), 2)
+
+    def test_merge_chapter_reviews_least_invasive_priority(self) -> None:
+        # Paragraph original: "这是原始译文，含有萨丁玫瑰花瓣。"
+        # Reviewer A suggests: "这是原始译文，含有缎面玫瑰花瓣。" (Edit distance: 2)
+        # Reviewer B suggests: "这里是全新的重写翻译，散落着色丁质感的玫瑰花瓣！" (Edit distance: 15)
+        rev_a = {
+            "checked_ids": ["p1"],
+            "fixes": [{"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.90, "replacement": "这是原始译文，含有缎面玫瑰花瓣。"}],
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
+            "chapter_state": {"summary": "s1"},
+        }
+        rev_b = {
+            "checked_ids": ["p1"],
+            "fixes": [{"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.95, "replacement": "这里是全新的重写翻译，散落着色丁质感的玫瑰花瓣！"}],
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
+            "chapter_state": {"summary": "s2"},
+        }
+        current_translations = {"p1": "这是原始译文，含有萨丁玫瑰花瓣。"}
+        merged = merge_chapter_reviews(rev_a, rev_b, current_translations=current_translations)
+        fix = merged["fixes"][0]
+        self.assertEqual(fix["id"], "p1")
+        # Reviewer A is chosen because it made the least extraneous edits (edit distance 2 vs 15)
+        self.assertEqual(fix["replacement"], "这是原始译文，含有缎面玫瑰花瓣。")
+        self.assertTrue(fix["consensus"])
 
     def test_chapter_validation_requires_exact_checked_ids(self) -> None:
         payload = {

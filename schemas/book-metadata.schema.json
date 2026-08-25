@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BookMetadataOutput",
+  "type": "object",
+  "required": ["title_zh", "title_ja", "author_zh", "author_ja", "description"],
+  "properties": {
+    "title_zh": {
+      "type": "string",
+      "minLength": 1,
+      "description": "规范且符合中文出版习惯的主书名（清洗掉杂质如 z-library 后缀）"
+    },
+    "title_ja": {
+      "type": "string",
+      "description": "清洗后的日文原书名"
+    },
+    "author_zh": {
+      "type": "string",
+      "description": "作者中文译名（若原作者为汉字姓名则保留）"
+    },
+    "author_ja": {
+      "type": "string",
+      "description": "作者日文原名"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "100~200字的故事背景、核心冲突与引人入胜的中文出版简介，严禁残留日文假名"
+    }
+  },
+  "additionalProperties": false
+}

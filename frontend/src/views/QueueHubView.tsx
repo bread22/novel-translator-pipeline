@@ -308,8 +308,17 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
     e.stopPropagation();
     setExportingBookId(bookId);
     try {
-      await api.exportBook(bookId, 'horizontal');
+      const res = await api.exportBook(bookId, 'horizontal');
       await onRefreshBooks();
+      const downloadPath = res.download_url.startsWith('http')
+        ? res.download_url
+        : `${window.location.origin}${res.download_url.startsWith('/') ? '' : '/'}${res.download_url}`;
+      const link = document.createElement('a');
+      link.href = downloadPath;
+      link.setAttribute('download', '');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } catch (err: any) {
       alert(`导出失败: ${err.message}`);
     } finally {

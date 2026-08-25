@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
 import time
@@ -20,7 +21,8 @@ from translator.core.config import (
     secondary_reviewer_name,
     setting,
 )
-from translator.core.layout import apply_horizontal_layout
+from translator.core.layout import apply_horizontal_layout, inject_epub_metadata
+from translator.core.metadata import extract_book_metadata, sanitize_epub_filename
 from translator.core.job_control import CancellationToken, JobCancelled, PauseGate
 from translator.core.novel_tool import (
     NOVEL_TRANSLATOR_ROOT,
@@ -318,13 +320,23 @@ class IterativePipeline:
         ]
 
     def is_chapter_completed(self, chapter_id: str) -> bool:
-        """Check if a chapter is completely translated and has a review state or report."""
+        """Check if a chapter is completely translated and reviewed without residual errors."""
         pending = self._chapter_pending_paragraphs(chapter_id)
         if pending:
             return False
+        # If any paragraph contains residual untranslated Japanese kana, chapter is NOT completed
+        chapter = self._chapter(chapter_id)
+        if any(has_japanese_kana(str(p.get("translated", ""))) for p in chapter.get("paragraphs", []) if isinstance(p, dict)):
+            return False
         state_path = self.workspace.chapter_states_dir / f"{chapter_id}.json"
         report_path = self.workspace.reports_dir / f"{chapter_id}.json"
-        return state_path.exists() or report_path.exists()
+        if not (state_path.exists() or report_path.exists()):
+            return False
+        if report_path.exists():
+            report_data = read_json(report_path, {})
+            if report_data.get("remaining_kana_ids"):
+                return False
+        return True
 
     @staticmethod
     def _window(paragraphs: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
@@ -538,6 +550,64 @@ class IterativePipeline:
             "attempts": len(attempts),
         }
 
+    def _repair_remaining_kana(self, chapter_id: str, remaining_kana_ids: list[str]) -> list[str]:
+        """Perform targeted micro-repair on paragraphs where Japanese kana remained after review writeback."""
+        repaired: list[str] = []
+        if not remaining_kana_ids:
+            return repaired
+
+        kana_shapes = [
+            (re.compile(r"[“\"「]?コ[”\"」]?の?字形?"), "“凹”字形"),
+            (re.compile(r"[“\"「]?ロ[”\"」]?の?字形?"), "“回”字形"),
+            (re.compile(r"[“\"「]?く[”\"」]?の?字形?"), "“折线”字形"),
+            (re.compile(r"[“\"「]?ヘ[”\"」]?の?字形?"), "“倒V”字形"),
+            (re.compile(r"[“\"「]?八[”\"」]?の?字形?"), "“八”字形"),
+            (re.compile(r"[“\"「]?丁[”\"」]?の?字形?"), "“丁”字形"),
+        ]
+
+        manifest_data = read_json(self.manifest)
+        p_map = paragraph_map(manifest_data)
+
+        # 1. First attempt deterministic shape normalization for common visual Katakana characters
+        remaining_after_shapes: list[str] = []
+        for item_id in remaining_kana_ids:
+            p_data = p_map.get(item_id, {})
+            current_trans = str(p_data.get("translated", ""))
+            cleaned = current_trans
+            for pattern, rep in kana_shapes:
+                cleaned = pattern.sub(rep, cleaned)
+            if cleaned != current_trans and not has_japanese_kana(cleaned):
+                p_data["translated"] = cleaned
+                write_json(self.manifest, manifest_data)
+                repaired.append(item_id)
+            else:
+                remaining_after_shapes.append(item_id)
+
+        if not remaining_after_shapes or self.targeted_translator is None:
+            return repaired
+
+        # 2. Targeted re-translation for any remaining paragraphs
+        providers_to_try = [self.primary_translator] + [p for p in self.fallback_translators if p != self.primary_translator]
+        for item_id in remaining_after_shapes:
+            p_data = p_map.get(item_id, {})
+            source_text = str(p_data.get("source", ""))
+            source_chars = len(source_text)
+            if not source_text:
+                continue
+            for provider in providers_to_try:
+                try:
+                    result = self._translate_target(provider, [item_id], source_chars)
+                    if result.get("status") == "ok":
+                        fresh_manifest = read_json(self.manifest)
+                        fresh_p_map = paragraph_map(fresh_manifest)
+                        new_trans = str(fresh_p_map.get(item_id, {}).get("translated", ""))
+                        if new_trans and not has_japanese_kana(new_trans):
+                            repaired.append(item_id)
+                            break
+                except Exception:
+                    continue
+        return repaired
+
     def _review_chapter(self, chapter_id: str) -> dict[str, Any]:
         self._checkpoint()
         chapter = self._chapter(chapter_id)
@@ -555,7 +625,7 @@ class IterativePipeline:
             "book_memory": memory,
             "previous_chapter_state": self._previous_chapter_state(chapter_id),
             "items": items,
-            "glossary": glossary.get("terms", []),
+            "glossary": glossary,
         })
         if self.chapter_reviewer is run_chapter_review:
             run_chapter_review(
@@ -622,13 +692,22 @@ class IterativePipeline:
                 if item_id in expected_ids and has_japanese_kana(str(paragraph.get("translated", "")))
             ]
             if remaining_kana:
+                repaired_ids = self._repair_remaining_kana(chapter_id, remaining_kana)
+                if repaired_ids:
+                    manifest_after_fixes = read_json(self.manifest)
+                    remaining_kana = [
+                        item_id
+                        for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
+                        if item_id in expected_ids and has_japanese_kana(str(paragraph.get("translated", "")))
+                    ]
+            if remaining_kana:
                 guarded_fixes = list(review["fixes"])
                 guarded_fixes.extend({
                     "id": item_id,
                     "category": "policy_violation",
                     "severity": "critical",
                     "confidence": 1.0,
-                    "reason": "最终写回校验发现译文仍残留日文假名；审阅器未提供合格替换，已阻止章节完成。",
+                    "reason": "最终写回校验发现译文仍残留日文假名；审阅器及定向微修复均未提供合格替换，已阻止章节完成。",
                     "replacement": "",
                     "auto_apply": False,
                     "invalid_reason": "最终写回校验发现未解决的日文假名残留",
@@ -748,19 +827,33 @@ class IterativePipeline:
         if not output.is_file() or output.stat().st_size == 0 or not zipfile.is_zipfile(output):
             raise ValueError(f"EPUB export 产物无效：{output}")
         self._checkpoint()
+        meta = extract_book_metadata(
+            self.book,
+            manifest,
+            self.workspace,
+            primary_provider=self.primary_translator,
+            fallback_providers=self.fallback_translators,
+        )
+        self._checkpoint()
+
+        if self.layout == "horizontal":
+            apply_horizontal_layout(output, metadata=meta)
+        else:
+            inject_epub_metadata(output, metadata=meta)
+        self._checkpoint()
+
         validation = self.tool_call("validate-epub", "--path", str(output))
-        if not isinstance(validation, dict) or validation.get("status") not in {"ok", "success", "valid"}:
+        if (
+            not isinstance(validation, dict)
+            or validation.get("status") not in {"ok", "success", "valid", "warning"}
+            or bool(validation.get("errors"))
+        ):
             raise ValueError(f"EPUB validate payload 未通过：{validation}")
         self._checkpoint()
-        if self.layout == "horizontal":
-            apply_horizontal_layout(output)
-            self._checkpoint()
-            validation = self.tool_call("validate-epub", "--path", str(output))
-            if not isinstance(validation, dict) or validation.get("status") not in {"ok", "success", "valid"}:
-                raise ValueError(f"横排 EPUB 二次 validate payload 未通过：{validation}")
-            self._checkpoint()
+
         self.translated_root.mkdir(parents=True, exist_ok=True)
-        destination = self.translated_root / output.name
+        target_filename = sanitize_epub_filename(meta.get("title_zh", ""), meta.get("author_zh", ""))
+        destination = self.translated_root / target_filename
         temporary_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         self._checkpoint()
         shutil.copy2(output, temporary_destination)
@@ -789,6 +882,8 @@ class IterativePipeline:
             "epub": str(output),
             "translated_output": str(destination),
             "translated_copy": str(destination),
+            "target_filename": target_filename,
+            "metadata": meta,
             "layout": self.layout,
             "exported": exported,
             "validation": validation,
@@ -797,8 +892,9 @@ class IterativePipeline:
         }
         write_json(self.workspace.reports_dir / "final-delivery.json", result)
         progress = read_json(self.workspace.progress_path, {"book": self.book})
-        progress.update({"state": "completed", "output": str(output), "updated_at": utc_now()})
+        progress.update({"state": "completed", "output": str(output), "updated_at": utc_now(), "target_filename": target_filename})
         write_json(self.workspace.progress_path, progress)
+
         return result
 
 

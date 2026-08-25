@@ -254,7 +254,7 @@ class JobManager:
         with self._lock:
             return [item.model_copy(deep=True) for item in self._items.values() if item.book_id == book_id and item.status in ACTIVE_STATUSES]
 
-    def cancel_book_and_wait(self, book_id: str, timeout: float = 15.0) -> bool:
+    def cancel_book_and_wait(self, book_id: str, timeout: float = 30.0) -> bool:
         active = self.active_items_for_book(book_id)
         for item in active:
             self.stop_pipeline(item.id)
@@ -564,9 +564,16 @@ class JobManager:
             self._pending_order = [
                 iid for iid in pending_raw if iid in self._items and self._items[iid].status in {"pending", "recovery_pending"}
             ]
-            # Also catch any pending items not in pending_order
+            # Interrupted / recovering items must be placed at the FRONT of pending_order so they resume first
+            recovering_items = [
+                iid for iid, it in self._items.items()
+                if it.status == "recovery_pending" and iid not in self._pending_order
+            ]
+            self._pending_order = recovering_items + self._pending_order
+
+            # Also catch any other pending items not in pending_order
             for iid, it in self._items.items():
-                if it.status in {"pending", "recovery_pending"} and iid not in self._pending_order:
+                if it.status == "pending" and iid not in self._pending_order:
                     self._pending_order.append(iid)
 
             self._recalculate_order_indexes()
@@ -700,7 +707,10 @@ class JobManager:
 
                 t_p, tot_p, prog_ratio = _get_paragraph_progress()
                 item.overall_progress = prog_ratio
-                item.message = f"第 {item.current_chapter_index}/{item.total_chapters} 章 · 批次 #{b_idx} 已译 {b_paras} 段 (进度 {int(round(prog_ratio * 100))}%)"
+                if rem_p > 0:
+                    item.message = f"第 {item.current_chapter_index}/{item.total_chapters} 章 · 正在准备批次 #{b_idx + 1} (本章剩余 {rem_p} 段)..."
+                else:
+                    item.message = f"第 {item.current_chapter_index}/{item.total_chapters} 章 · 章节翻译完成，准备进入一致性审阅..."
 
                 broadcaster.broadcast_sync(
                     "batch_completed",
@@ -715,7 +725,7 @@ class JobManager:
                         "translated_paragraphs": t_p,
                         "total_paragraphs": tot_p,
                         "overall_progress": prog_ratio,
-                        "message": item.message,
+                        "message": f"批次 #{b_idx} 翻译完成 (已译 {b_paras} 段)",
                     },
                     book_id=item.book_id,
                 )

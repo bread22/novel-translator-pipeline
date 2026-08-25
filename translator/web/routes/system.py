@@ -143,6 +143,7 @@ def list_prompts() -> list[dict[str, Any]]:
     prompts: list[dict[str, Any]] = []
 
     friendly_names = {
+        "france-shoin-90s-classic.md": "90年代法国书院文库典藏规范 (France Shoin 1990s Classic)",
         "erotic-novel-policy.md": "限制级/轻小说文学规范 (Erotic Policy)",
         "general-novel-policy.md": "通用全年龄小说文学规范 (General Policy)",
         "light-novel-policy.md": "日式轻小说与二次元风格规范 (Light Novel Policy)",
@@ -182,10 +183,25 @@ def get_prompt_detail(prompt_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"未找到提示词文件: {prompt_id}")
     content = file_path.read_text(encoding="utf-8")
     is_review = "review" in prompt_id
+    friendly_names = {
+        "france-shoin-90s-classic.md": "90年代法国书院文库典藏规范 (France Shoin 1990s Classic)",
+        "erotic-novel-policy.md": "限制级/轻小说文学规范 (Erotic Policy)",
+        "general-novel-policy.md": "通用全年龄小说文学规范 (General Policy)",
+        "light-novel-policy.md": "日式轻小说与二次元风格规范 (Light Novel Policy)",
+        "translation-policy.md": "标准文学严谨翻译规范 (Standard Policy)",
+        "consistency-review-policy.md": "长程一致性与客观缺陷审阅规范 (Consistency Review Policy)",
+    }
+    first_heading = ""
+    for line in content.splitlines():
+        if line.strip().startswith("#"):
+            first_heading = line.strip().lstrip("#").strip()
+            break
+    name = friendly_names.get(prompt_id, first_heading or prompt_id)
     return {
         "id": prompt_id,
         "filename": prompt_id,
         "path": f"docs/prompts/{prompt_id}",
+        "name": name,
         "type": "review" if is_review else "translation",
         "content": content,
     }

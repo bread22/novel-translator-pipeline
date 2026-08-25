@@ -44,7 +44,7 @@ OBJECTIVE_CATEGORIES = {
     "context_conflict",
     "policy_violation",
 }
-OBJECTIVE_SEVERITIES = {"critical", "major"}
+OBJECTIVE_SEVERITIES = {"critical", "major", "minor"}
 CATEGORY_ALIASES = {
     "translation_error": "mistranslation",
 }
@@ -105,9 +105,13 @@ def approved_fixes(
         # Quality Guardrail: Strictly reject any replacement that contains leftover Japanese kana
         if has_japanese_kana(replacement):
             continue
-        meets_approval_threshold = mandatory_kana_cleanup or (
+        conf = float(item.get("confidence", 0) or 0)
+        is_consensus = bool(item.get("consensus"))
+        # Category-based Dynamic Threshold: Objective categories qualify at 0.80+, consensus auto-qualifies
+        req_threshold = 0.8 if (is_new_contract and category in OBJECTIVE_CATEGORIES) else threshold
+        meets_approval_threshold = mandatory_kana_cleanup or is_consensus or (
             (autonomous or item.get("auto_apply") is True)
-            and float(item.get("confidence", 0) or 0) >= threshold
+            and conf >= req_threshold
         )
         if meets_approval_threshold and replacement:
             item["approved_translation"] = replacement
@@ -278,7 +282,30 @@ def _merge_chapter_state(left: dict[str, Any], right: dict[str, Any]) -> dict[st
     return merged
 
 
-def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict[str, Any]) -> dict[str, Any]:
+def edit_distance(s1: str, s2: str) -> int:
+    """Calculate Levenshtein edit distance between two strings."""
+    if len(s1) < len(s2):
+        return edit_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
+def merge_chapter_reviews(
+    primary_review: dict[str, Any],
+    secondary_review: dict[str, Any],
+    *,
+    current_translations: dict[str, str] | None = None,
+) -> dict[str, Any]:
     primary_review = _normalized_review(primary_review)
     secondary_review = _normalized_review(secondary_review)
     checked_a = primary_review.get("checked_ids", []) or []
@@ -308,7 +335,19 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
             elif kana_b and not kana_a:
                 chosen = dict(in_a)
             else:
-                chosen = dict(in_a if conf_a >= conf_b else in_b)
+                # Least Invasive Priority: choose the fix that makes the least extraneous modifications to the original translation
+                orig_text = str((current_translations or {}).get(fix_id, "")).strip()
+                if orig_text and rep_a and rep_b:
+                    dist_a = edit_distance(rep_a, orig_text)
+                    dist_b = edit_distance(rep_b, orig_text)
+                    if dist_a < dist_b:
+                        chosen = dict(in_a)
+                    elif dist_b < dist_a:
+                        chosen = dict(in_b)
+                    else:
+                        chosen = dict(in_a if conf_a >= conf_b else in_b)
+                else:
+                    chosen = dict(in_a if conf_a >= conf_b else in_b)
             chosen["confidence"] = max(conf_a, conf_b, 0.95)
             chosen["consensus"] = True
             chosen["reporters"] = ["primary", "secondary"]
@@ -353,7 +392,7 @@ def merge_chapter_reviews(primary_review: dict[str, Any], secondary_review: dict
     })
 
 
-REVIEW_CHUNK_MAX_PARAGRAPHS = 200
+REVIEW_CHUNK_MAX_PARAGRAPHS = 100
 
 
 def dynamic_review_timeout(input_payload: dict[str, Any]) -> int:
@@ -616,7 +655,13 @@ def _execute_single_segment_review(
     secondary_payload = payloads.get("secondary")
 
     if primary_payload and secondary_payload:
-        return merge_chapter_reviews(primary_payload, secondary_payload)
+        raw_items = input_payload.get("items", []) if isinstance(input_payload, dict) else []
+        current_trans = {
+            str(item.get("id", "")): str(item.get("translated", ""))
+            for item in raw_items
+            if isinstance(item, dict) and item.get("id")
+        }
+        return merge_chapter_reviews(primary_payload, secondary_payload, current_translations=current_trans)
     raise RuntimeError(f"双审阅未完整完成: {'; '.join(errors)}")
 
 
@@ -697,7 +742,12 @@ def _execute_segment_with_adaptive_split(
         primary_payload = payloads.get("primary")
         secondary_payload = payloads.get("secondary")
         if primary_payload and secondary_payload:
-            return merge_chapter_reviews(primary_payload, secondary_payload)
+            current_trans = {
+                str(item.get("id", "")): str(item.get("translated", ""))
+                for item in items
+                if isinstance(item, dict) and item.get("id")
+            }
+            return merge_chapter_reviews(primary_payload, secondary_payload, current_translations=current_trans)
         if primary_payload:
             return primary_payload
         if secondary_payload:

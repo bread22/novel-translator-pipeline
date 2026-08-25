@@ -17,15 +17,29 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _resolve_book_workspace(book_id_or_title: str, output_root: Path) -> BookWorkspace:
+    """Resolve the canonical BookWorkspace directory whether given slug ID or display title."""
+    from translator.pipeline.chapter_pipeline import manifest_path
+    from translator.core.workspace import read_json, BookWorkspace
+    mf = read_json(manifest_path(book_id_or_title), default=None)
+    title = mf.get("title", book_id_or_title) if mf else book_id_or_title
+    ws = BookWorkspace.at(output_root, title)
+    if ws.root.exists():
+        return ws
+    ws_slug = BookWorkspace.at(output_root, book_id_or_title)
+    if ws_slug.root.exists():
+        return ws_slug
+    return ws
+
+
 def append_book_event(book_id: str, payload: dict[str, Any], output_root: str | Path | None = None) -> None:
     """Append event payload to book's persistent events.jsonl on disk."""
     if not book_id:
         return
     try:
-        from translator.core.workspace import BookWorkspace
         from translator.core.config import load_config
         root = output_root or load_config().get("paths", {}).get("output_root", "output")
-        ws = BookWorkspace.at(Path(root), book_id)
+        ws = _resolve_book_workspace(book_id, Path(root))
         events_file = ws.data_dir / "events.jsonl"
         events_file.parent.mkdir(parents=True, exist_ok=True)
         with open(events_file, "a", encoding="utf-8") as f:
@@ -39,10 +53,9 @@ def read_book_events(book_id: str, limit: int = 500, output_root: str | Path | N
     if not book_id:
         return []
     try:
-        from translator.core.workspace import BookWorkspace
         from translator.core.config import load_config
         root = output_root or load_config().get("paths", {}).get("output_root", "output")
-        ws = BookWorkspace.at(Path(root), book_id)
+        ws = _resolve_book_workspace(book_id, Path(root))
         events_file = ws.data_dir / "events.jsonl"
         if not events_file.exists():
             return []
@@ -128,8 +141,8 @@ class EventBroadcaster:
         try:
             while True:
                 try:
-                    # Wait for next event or send ping every 15s
-                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    # Wait for next event or send ping every 10s
+                    payload = await asyncio.wait_for(queue.get(), timeout=10.0)
                     if payload is None:
                         break
                     event_type = payload.get("event", "message")

@@ -47,6 +47,7 @@ export const App: React.FC = () => {
   });
   const [eventsByBook, setEventsByBook] = useState<Record<string, StreamEvent[]>>(loadPersistedEvents);
   const [sseConnected, setSseConnected] = useState(false);
+  const [sseState, setSseState] = useState<'live' | 'reconnecting' | 'offline'>('reconnecting');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const selectedBookRef = useRef(selectedBookId);
@@ -222,6 +223,7 @@ export const App: React.FC = () => {
         refreshQueue();
       }
     }, (state) => {
+      setSseState(state);
       setSseConnected(state === 'live');
       if (state === 'live') {
         refreshBooks();
@@ -271,6 +273,7 @@ export const App: React.FC = () => {
         onSelectBookId={setSelectedBookId}
         activeTask={activeTask}
         sseConnected={sseConnected}
+        sseState={sseState}
         queueCount={queueCount}
         isQueueRunning={isQueueRunning}
       />

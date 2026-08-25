@@ -10,6 +10,7 @@ interface NavbarProps {
   onSelectBookId: (id: string) => void;
   activeTask: TaskStatusResponse | null;
   sseConnected: boolean;
+  sseState?: 'live' | 'reconnecting' | 'offline';
   queueCount?: number;
   isQueueRunning?: boolean;
 }
@@ -22,10 +23,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectBookId,
   activeTask,
   sseConnected,
+  sseState = sseConnected ? 'live' : 'reconnecting',
   queueCount = 0,
   isQueueRunning = false,
 }) => {
   const isTaskRunning = (activeTask && activeTask.status === 'running') || isQueueRunning;
+  const state = sseState || (sseConnected ? 'live' : 'offline');
 
   return (
     <header className="sticky top-0 z-50 border-b border-[#E5E0D8] bg-[#FAF9F6]/95 backdrop-blur-md px-6 py-3">
@@ -49,24 +52,22 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Navigation Tabs (Editorial Paper Tab Bar) */}
-        <nav className="flex items-center gap-1 bg-[#F2EFE9] p-1 rounded-sm border border-[#E5E0D8]">
+        {/* Navigation Tabs */}
+        <nav className="flex items-center gap-1 bg-[#EBE7DF]/80 p-1 rounded-sm border border-[#E5E0D8]">
           <button
             onClick={() => onSelectTab('queue')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all relative cursor-pointer ${
-              currentTab === 'queue' || currentTab === 'library'
-                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
-                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
+              currentTab === 'queue'
+                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
+                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>任务调度</span>
+            <span>队列枢纽 (QUEUE)</span>
             {queueCount > 0 && (
               <span
-                className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold leading-none ${
-                  isQueueRunning
-                    ? 'bg-emerald-600 text-white animate-pulse'
-                    : currentTab === 'queue' ? 'bg-white text-[#1D4ED8]' : 'bg-[#E5E0D8] text-[#1A1A1A]'
+                className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  currentTab === 'queue' ? 'bg-amber-400 text-black' : 'bg-[#D5D0C7] text-neutral-800'
                 }`}
               >
                 {queueCount}
@@ -76,65 +77,65 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onSelectTab('studio')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all relative cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
               currentTab === 'studio'
-                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
-                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
+                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
+                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
             }`}
           >
             <Activity className="w-3.5 h-3.5" />
-            <span>翻译控制台</span>
+            <span>流水车间 (STUDIO)</span>
             {isTaskRunning && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute top-1 right-1" />
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse ml-0.5" />
             )}
           </button>
 
           <button
             onClick={() => onSelectTab('reader')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
               currentTab === 'reader'
-                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
-                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
+                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
+                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
             }`}
           >
             <Compass className="w-3.5 h-3.5" />
-            <span>双语阅读器</span>
+            <span>双语对齐 (READER)</span>
           </button>
 
           <button
             onClick={() => onSelectTab('knowledge')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
               currentTab === 'knowledge'
-                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
-                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
+                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
+                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
             }`}
           >
             <BookMarked className="w-3.5 h-3.5" />
-            <span>记忆与术语库</span>
+            <span>设定与质检 (KNOWLEDGE)</span>
           </button>
 
           <button
             onClick={() => onSelectTab('settings')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
               currentTab === 'settings'
-                ? 'bg-[#1D4ED8] text-white font-semibold shadow-sm'
-                : 'text-[#4A4A4A] hover:text-[#1A1A1A] hover:bg-white/80'
+                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
+                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span>模型路由与预检</span>
+            <span>系统设置 (SYSTEM)</span>
           </button>
         </nav>
 
-        {/* Global Controls & Status */}
+        {/* Book Selector & Status Indicator */}
         <div className="flex items-center gap-3">
-          {/* Active Book Selector */}
           {books.length > 0 && (
-            <div className="relative">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono uppercase text-[#666666]">当前书籍:</span>
               <select
                 value={selectedBookId || ''}
                 onChange={(e) => onSelectBookId(e.target.value)}
-                className="bg-white border border-[#E5E0D8] text-[#1A1A1A] text-xs rounded-sm px-3 py-1.5 pr-8 focus:outline-none focus:border-[#1D4ED8] appearance-none font-medium max-w-[200px] truncate shadow-sm cursor-pointer"
+                className="text-xs bg-white border border-[#D5D0C7] rounded-sm px-2.5 py-1 text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A] max-w-[260px] truncate shadow-2xs font-serif"
               >
                 {books.map((b) => (
                   <option key={b.id} value={b.id}>
@@ -148,14 +149,32 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* SSE Live Pulse Indicator */}
           <div
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] font-mono font-medium border ${
-              sseConnected
+              state === 'live'
                 ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                : state === 'reconnecting'
+                ? 'bg-amber-50 border-amber-300 text-amber-800'
                 : 'bg-rose-50 border-rose-300 text-rose-800'
             }`}
-            title={sseConnected ? 'SSE 实时流水线连接正常' : 'SSE 连接断开，正在尝试重连'}
+            title={
+              state === 'live'
+                ? 'SSE 实时流水线长连接正常'
+                : state === 'reconnecting'
+                ? '正在同步连接实时流水线...'
+                : 'SSE 连接断开，正在尝试重连'
+            }
           >
-            <Radio className={`w-3 h-3 ${sseConnected ? 'animate-pulse text-emerald-600' : 'text-rose-600'}`} />
-            <span>{sseConnected ? 'LIVE' : 'OFFLINE'}</span>
+            <Radio
+              className={`w-3 h-3 ${
+                state === 'live'
+                  ? 'animate-pulse text-emerald-600'
+                  : state === 'reconnecting'
+                  ? 'animate-spin text-amber-600'
+                  : 'text-rose-600'
+              }`}
+            />
+            <span>
+              {state === 'live' ? 'LIVE' : state === 'reconnecting' ? 'SYNCING...' : 'OFFLINE'}
+            </span>
           </div>
         </div>
 

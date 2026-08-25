@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -93,7 +94,10 @@ class WebApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except Exception:
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def test_health_check(self) -> None:
         response = self.client.get("/health")

@@ -242,62 +242,90 @@ export const api = {
     onEvent: (event: StreamEvent) => void,
     onState?: (state: 'live' | 'reconnecting' | 'offline') => void,
   ): (() => void) => {
-    const eventSource = new EventSource(`${API_BASE}/events/stream`);
+    let eventSource: EventSource | null = null;
+    let isSubscribed = true;
+    let reconnectTimeout: any = null;
 
-    const handleAnyEvent = (e: MessageEvent, eventName: string) => {
+    const setupConnection = () => {
+      if (!isSubscribed) return;
       try {
-        const parsed = JSON.parse(e.data);
-        const envelope = parsed?.event && parsed?.data ? parsed : {
-          event: eventName,
-          data: parsed,
-          book_id: parsed?.book_id ?? null,
-          timestamp: parsed?.timestamp || new Date().toISOString(),
-          event_id: e.lastEventId || parsed?.event_id || '',
+        eventSource = new EventSource(`${API_BASE}/events/stream`);
+
+        const handleAnyEvent = (e: MessageEvent, eventName: string) => {
+          try {
+            const parsed = JSON.parse(e.data);
+            const envelope = parsed?.event && parsed?.data ? parsed : {
+              event: eventName,
+              data: parsed,
+              book_id: parsed?.book_id ?? null,
+              timestamp: parsed?.timestamp || new Date().toISOString(),
+              event_id: e.lastEventId || parsed?.event_id || '',
+            };
+            onEvent(envelope as StreamEvent);
+          } catch (err) {
+            console.warn('Error parsing SSE data:', err);
+          }
         };
-        onEvent(envelope as StreamEvent);
+
+        const registeredEvents = [
+          'connect',
+          'pipeline_started',
+          'pipeline_progress',
+          'pipeline_phase_changed',
+          'pipeline_reviewer_status',
+          'chapter_started',
+          'batch_completed',
+          'chapter_completed',
+          'fallback_triggered',
+          'review_completed',
+          'finalizing',
+          'pipeline_completed',
+          'pipeline_failed',
+          'pipeline_paused',
+          'pipeline_resumed',
+          'pipeline_stopped',
+          'queue_updated',
+          'queue_item_started',
+          'queue_item_completed',
+          'queue_item_failed',
+          'queue_paused',
+          'queue_resumed',
+        ];
+
+        registeredEvents.forEach((evt) => {
+          eventSource!.addEventListener(evt, (e) => handleAnyEvent(e as MessageEvent, evt));
+        });
+
+        eventSource.onmessage = (e) => handleAnyEvent(e, 'message');
+        eventSource.onopen = () => onState?.('live');
+        eventSource.onerror = (err) => {
+          console.warn('SSE connection error:', err);
+          if (eventSource?.readyState === EventSource.CLOSED) {
+            onState?.('offline');
+            if (isSubscribed) {
+              clearTimeout(reconnectTimeout);
+              reconnectTimeout = setTimeout(setupConnection, 2000);
+            }
+          } else {
+            onState?.('reconnecting');
+          }
+        };
       } catch (err) {
-        console.warn('Error parsing SSE data:', err);
+        console.error('Failed to initialize EventSource:', err);
+        onState?.('offline');
+        if (isSubscribed) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(setupConnection, 3000);
+        }
       }
     };
 
-    const registeredEvents = [
-      'connect',
-      'pipeline_started',
-      'pipeline_progress',
-      'pipeline_phase_changed',
-      'pipeline_reviewer_status',
-      'chapter_started',
-      'batch_completed',
-      'chapter_completed',
-      'fallback_triggered',
-      'review_completed',
-      'finalizing',
-      'pipeline_completed',
-      'pipeline_failed',
-      'pipeline_paused',
-      'pipeline_resumed',
-      'pipeline_stopped',
-      'queue_updated',
-      'queue_item_started',
-      'queue_item_completed',
-      'queue_item_failed',
-      'queue_paused',
-      'queue_resumed',
-    ];
-
-    registeredEvents.forEach((evt) => {
-      eventSource.addEventListener(evt, (e) => handleAnyEvent(e as MessageEvent, evt));
-    });
-
-    eventSource.onmessage = (e) => handleAnyEvent(e, 'message');
-    eventSource.onopen = () => onState?.('live');
-    eventSource.onerror = (err) => {
-      console.warn('SSE connection error:', err);
-      onState?.(eventSource.readyState === EventSource.CLOSED ? 'offline' : 'reconnecting');
-    };
+    setupConnection();
 
     return () => {
-      eventSource.close();
+      isSubscribed = false;
+      clearTimeout(reconnectTimeout);
+      eventSource?.close();
     };
   },
 };

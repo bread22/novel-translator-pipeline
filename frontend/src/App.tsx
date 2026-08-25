@@ -127,12 +127,41 @@ export const App: React.FC = () => {
     window.history.replaceState(null, '', `#/${tab}`);
   };
 
+  // Fetch persistent historical events from server
+  const fetchBookEvents = useCallback(async (bookId: string) => {
+    if (!bookId) return;
+    try {
+      const serverEvents = await api.getBookEvents(bookId);
+      if (Array.isArray(serverEvents) && serverEvents.length > 0) {
+        setEventsByBook((prev) => {
+          const current = prev[bookId] || [];
+          const seen = new Set<string>();
+          const combined: StreamEvent[] = [];
+          for (const ev of [...serverEvents, ...current]) {
+            const key = ev.event_id || `${ev.timestamp}_${ev.event}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              combined.push(ev);
+            }
+          }
+          return {
+            ...prev,
+            [bookId]: combined.slice(-MAX_STREAM_EVENTS_PER_BOOK),
+          };
+        });
+      }
+    } catch (err) {
+      console.debug('Failed to fetch server events for book:', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedBookId) {
       localStorage.setItem('selected_book_id', selectedBookId);
       refreshTask();
+      fetchBookEvents(selectedBookId);
     }
-  }, [selectedBookId, refreshTask]);
+  }, [selectedBookId, refreshTask, fetchBookEvents]);
 
   // Global SSE Subscription
   useEffect(() => {
@@ -142,6 +171,10 @@ export const App: React.FC = () => {
       if (targetBookId) {
         setEventsByBook((prev) => {
           const existing = prev[targetBookId] || [];
+          const key = evt.event_id || `${evt.timestamp}_${evt.event}`;
+          if (existing.some((e) => (e.event_id && e.event_id === evt.event_id) || `${e.timestamp}_${e.event}` === key)) {
+            return prev;
+          }
           return {
             ...prev,
             [targetBookId]: [...existing.slice(-(MAX_STREAM_EVENTS_PER_BOOK - 1)), evt],

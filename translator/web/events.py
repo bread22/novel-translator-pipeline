@@ -8,11 +8,57 @@ from typing import Any, AsyncGenerator
 from uuid import uuid4
 
 
+from pathlib import Path
+
 logger = logging.getLogger("translator.web.events")
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def append_book_event(book_id: str, payload: dict[str, Any], output_root: str | Path | None = None) -> None:
+    """Append event payload to book's persistent events.jsonl on disk."""
+    if not book_id:
+        return
+    try:
+        from translator.core.workspace import BookWorkspace
+        from translator.core.config import load_config
+        root = output_root or load_config().get("paths", {}).get("output_root", "output")
+        ws = BookWorkspace.at(Path(root), book_id)
+        events_file = ws.data_dir / "events.jsonl"
+        events_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(events_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug("Failed to append book event to disk: %s", e)
+
+
+def read_book_events(book_id: str, limit: int = 500, output_root: str | Path | None = None) -> list[dict[str, Any]]:
+    """Read last N events from book's persistent events.jsonl."""
+    if not book_id:
+        return []
+    try:
+        from translator.core.workspace import BookWorkspace
+        from translator.core.config import load_config
+        root = output_root or load_config().get("paths", {}).get("output_root", "output")
+        ws = BookWorkspace.at(Path(root), book_id)
+        events_file = ws.data_dir / "events.jsonl"
+        if not events_file.exists():
+            return []
+        events: list[dict[str, Any]] = []
+        with open(events_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        events.append(json.loads(line))
+                    except Exception:
+                        pass
+        return events[-limit:]
+    except Exception as e:
+        logger.debug("Failed to read book events: %s", e)
+        return []
 
 
 class EventBroadcaster:
@@ -30,6 +76,8 @@ class EventBroadcaster:
             "timestamp": utc_now(),
             "event_id": uuid4().hex,
         }
+        if payload["book_id"]:
+            append_book_event(payload["book_id"], payload)
         async with self._lock:
             dead_subscribers = []
             for queue, sub_book_id in self._subscribers:
@@ -50,6 +98,8 @@ class EventBroadcaster:
             "timestamp": utc_now(),
             "event_id": uuid4().hex,
         }
+        if payload["book_id"]:
+            append_book_event(payload["book_id"], payload)
         for queue, sub_book_id in list(self._subscribers):
             if sub_book_id is None or sub_book_id == payload["book_id"]:
                 try:

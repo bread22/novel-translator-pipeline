@@ -481,3 +481,20 @@ def reset_book(book_id: str) -> dict[str, Any]:
     workspace.reset(book_id=book_id)
 
     return {"status": "ok", "message": f"书籍 '{title}' 翻译进度、长期记忆、术语库与质检报告已全部清空重置"}
+
+
+@router.get("/{book_id}/events")
+def get_book_events(book_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    """Retrieve persistent historical event logs for this book."""
+    try:
+        validate_book_id(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    manifest = read_json(manifest_path(book_id), default=None)
+    title = manifest.get("title", book_id) if manifest else book_id
+    output_root = get_output_root()
+    from translator.web.events import read_book_events
+    events = read_book_events(title, limit=limit, output_root=output_root)
+    if not events and title != book_id:
+        events = read_book_events(book_id, limit=limit, output_root=output_root)
+    return events

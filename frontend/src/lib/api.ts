@@ -133,6 +133,8 @@ export const api = {
     request<{ status: string; message: string }>(`/books/${bookId}`, {
       method: 'DELETE',
     }),
+  getBookEvents: (bookId: string, limit: number = 500, options?: RequestOptions) =>
+    request<StreamEvent[]>(`/books/${bookId}/events?limit=${limit}`, undefined, options),
 
   // Tasks
   startPipeline: (data: PipelineStartRequest) =>

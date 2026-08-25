@@ -154,6 +154,28 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
         sanitized_fixes.append(item)
     normalized["fixes"] = sanitized_fixes
 
+    # Filter glossary_delta to ensure only clean naming entities (no metaphors, slashes, brackets)
+    def _is_valid_glossary_term(term: dict[str, Any]) -> bool:
+        src = str(term.get("source", "")).strip()
+        tgt = str(term.get("target", "")).strip()
+        if not src or not tgt:
+            return False
+        # Reject terms with candidate slashes, brackets or explanation notes in target
+        if any(char in tgt for char in ["/", "|", "（", "）", "(", ")", "【", "】", "[", "]"]):
+            return False
+        # Reject one-off metaphors, dialogue slang, descriptive phrases
+        invalid_sources = {"土筆", "温泉玉子", "蛤", "蟻の門渡り", "栗の花の匂い", "蜂胴", "アナルの溝", "ドスのきいた声", "エグい", "エゲツねぇ", "ダチ公", "はくいスケ"}
+        if src in invalid_sources:
+            return False
+        return True
+
+    if "glossary_delta" in normalized and isinstance(normalized["glossary_delta"], dict):
+        for key in ["add", "update"]:
+            normalized["glossary_delta"][key] = [
+                t for t in normalized["glossary_delta"].get(key, [])
+                if isinstance(t, dict) and _is_valid_glossary_term(t)
+            ]
+
     received = set(checked_ids)
     missing = sorted(expected_ids - received)
     if missing:

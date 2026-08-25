@@ -275,10 +275,13 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     - minor：微观语境精度纠偏、动词动作层次精度修正、地道口语化纠错（置信度 >= 0.8 时亦会自动采纳）。
   * 纯属两可的主观风格偏好或无实质改善的润色，不要输出 fix（fixes 数组保持精炼，只解决真正的问题）。
 - 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids（必须覆盖 items 中的全部段落 ID）。
-- 重点检查人物身份和关系、主客体、代词指代、漏译、擅自添加、术语固定译法、事实冲突、时间顺序、跨段落动作关系和明显改变的强度。
 - fixes 只输出确实存在的问题；replacement 必须是完整段落译文。
 - fixes.category 只能使用：mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation；译文残留日文假名必须使用 policy_violation。
-- glossary_delta 只收录后文仍有价值的人名、别名、组织、地点、特殊术语和固定称谓。
+- 【术语库收录规范（glossary_delta）】：
+  * 仅收录全书贯穿出现且具有长期锁定价值的【实体名词】（如核心人名、专有组织名、特定地名、特殊物理道具、特定医学/世界观专用术语）。
+  * 严禁收录一次性文学修辞或比喻（例如用「土筆/温泉玉子/蛤/栗の花/蜂胴」比喻身体部位或气味，绝对不得作为术语收录！）。
+  * 严禁收录日常口语、叹词、俚语、骂人粗话或形容词（如「エグい、エゲツねぇ、ダチ公、ドスのきいた声」等，严禁作为术语！）。
+  * target 必须是单一、确定、干净的简体中文译名，绝对严禁包含备选项斜杠（如“A/B”）、括号解释（如“A（解释）”）或词典释义！
 - memory_delta 只收录会影响后续章节翻译的人物、关系、别名、重要事实和持续状态。
 - chapter_state 只保存本章摘要和会影响后续理解的重要变化。
 """.strip()

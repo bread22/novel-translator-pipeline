@@ -25,6 +25,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [chapterDetail, setChapterDetail] = useState<ChapterDetail | null>(null);
   const [chapterReview, setChapterReview] = useState<any | null>(null);
+  const [chapterReviewError, setChapterReviewError] = useState<string | null>(null);
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [editingParaId, setEditingParaId] = useState<string | null>(null);
@@ -44,6 +45,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     setSelectedChapterId(null);
     setChapterDetail(null);
     setChapterReview(null);
+    setChapterReviewError(null);
     setLoadError(null);
     if (!book) return () => controller.abort();
 
@@ -76,17 +78,26 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     setLoadError(null);
     setChapterDetail(null);
     setChapterReview(null);
+    setChapterReviewError(null);
     try {
+      const reviewPromise = api.getChapterReview(bookId, chapterId, { signal: controller.signal }).then(
+        (value) => ({ value, error: null as string | null }),
+        (error) => {
+          if (controller.signal.aborted) throw error;
+          return {
+            value: null,
+            error: error instanceof Error ? error.message : '本章审阅报告加载失败',
+          };
+        },
+      );
       const [detail, reviewRes] = await Promise.all([
         api.getChapterDetail(bookId, chapterId, { signal: controller.signal }),
-        api.getChapterReview(bookId, chapterId, { signal: controller.signal }).catch((error) => {
-          if (controller.signal.aborted) throw error;
-          return null;
-        }),
+        reviewPromise,
       ]);
       if (sequence !== detailSequence.current) return;
       setChapterDetail(detail);
-      setChapterReview(reviewRes);
+      setChapterReview(reviewRes.value);
+      setChapterReviewError(reviewRes.error);
     } catch (err) {
       if (controller.signal.aborted || sequence !== detailSequence.current) return;
       setLoadError(err instanceof Error ? err.message : '章节加载失败');
@@ -222,6 +233,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
       {/* Main Content Area: Bilingual Reader */}
       <div className="lg:col-span-3 space-y-6">
         {loadError && <div role="alert" className="border border-red-300 bg-red-50 p-3 text-xs text-red-800">加载失败：{loadError}</div>}
+        {chapterReviewError && <div role="alert" className="border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">本章审阅报告加载失败：{chapterReviewError}</div>}
         {isLoading && <div role="status" className="border border-[#E5E0D8] bg-white p-6 text-xs text-[#666666]">正在加载章节…</div>}
         
         {/* Chapter Header Banner & Nav */}

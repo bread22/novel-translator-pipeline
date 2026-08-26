@@ -223,7 +223,26 @@ def save_prompt(prompt_data: dict[str, Any]) -> dict[str, Any]:
         target_file = resolve_under(prompts_dir, validate_prompt_filename(filename))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    target_file.write_text(content, encoding="utf-8")
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=prompts_dir,
+            prefix=f".{filename}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary_path = Path(stream.name)
+        os.replace(temporary_path, target_file)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
     return {
         "status": "ok",

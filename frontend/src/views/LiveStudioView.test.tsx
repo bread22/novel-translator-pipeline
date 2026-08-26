@@ -96,7 +96,7 @@ describe('live model topology', () => {
     expect(within(secondaryReviewer!).getByText('PENDING')).toBeInTheDocument();
   });
 
-  it.fails('does not start with a policy that failed to persist globally', async () => {
+  it('does not start with a policy that failed to persist globally', async () => {
     Element.prototype.scrollIntoView = vi.fn();
     vi.spyOn(api, 'getConfig').mockResolvedValue({
       paths: { translation_policy: 'old-policy.md' },

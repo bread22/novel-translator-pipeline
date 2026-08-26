@@ -38,6 +38,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const [eventFilter, setEventFilter] = useState<'all' | 'pipeline' | 'fallback'>('all');
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [selectedPolicy, setSelectedPolicy] = useState<string>('docs/prompts/france-shoin-90s-classic.md');
+  const policyChangeRequestRef = useRef(0);
   const feedBottomRef = useRef<HTMLDivElement>(null);
 
   const isRunning = activeTask && activeTask.status === 'running';
@@ -65,6 +66,9 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   }, []);
 
   const handlePolicyChange = async (newPolicy: string) => {
+    const requestId = ++policyChangeRequestRef.current;
+    const previousPolicy = selectedPolicy;
+    const previousConfig = config;
     setSelectedPolicy(newPolicy);
     if (config) {
       const updated = {
@@ -79,6 +83,10 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         await api.saveConfig(updated);
       } catch (e) {
         console.error('Failed to sync policy to server config:', e);
+        if (policyChangeRequestRef.current === requestId) {
+          setSelectedPolicy(previousPolicy);
+          setConfig(previousConfig);
+        }
       }
     }
   };

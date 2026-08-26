@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
+import os
+import threading
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from uuid import uuid4
 
@@ -13,6 +15,9 @@ if TYPE_CHECKING:
     from translator.core.workspace import BookWorkspace
 
 logger = logging.getLogger("translator.web.events")
+
+_event_file_locks: dict[Path, threading.Lock] = {}
+_event_file_locks_guard = threading.Lock()
 
 
 def utc_now() -> str:
@@ -34,18 +39,37 @@ def _resolve_book_workspace(book_id_or_title: str, output_root: Path) -> BookWor
     return ws
 
 
+def _event_output_root(output_root: str | Path | None = None) -> Path:
+    """Resolve event storage against the config file, not the server CWD."""
+    if output_root is not None:
+        return Path(output_root).expanduser().resolve()
+
+    from translator.core.config import load_config
+    from translator.core.paths import PathResolver
+
+    config = load_config()
+    return PathResolver.for_config().output_root(config)
+
+
+def _event_file_lock(events_file: Path) -> threading.Lock:
+    key = events_file.resolve()
+    with _event_file_locks_guard:
+        return _event_file_locks.setdefault(key, threading.Lock())
+
+
 def append_book_event(book_id: str, payload: dict[str, Any], output_root: str | Path | None = None) -> None:
     """Append event payload to book's persistent events.jsonl on disk."""
     if not book_id:
         return
     try:
-        from translator.core.config import load_config
-        root = output_root or load_config().get("paths", {}).get("output_root", "output")
-        ws = _resolve_book_workspace(book_id, Path(root))
+        ws = _resolve_book_workspace(book_id, _event_output_root(output_root))
         events_file = ws.data_dir / "events.jsonl"
-        events_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(events_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        with _event_file_lock(events_file):
+            events_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(events_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
     except Exception as e:
         logger.debug("Failed to append book event to disk: %s", e)
 
@@ -55,21 +79,20 @@ def read_book_events(book_id: str, limit: int = 500, output_root: str | Path | N
     if not book_id or limit <= 0:
         return []
     try:
-        from translator.core.config import load_config
-        root = output_root or load_config().get("paths", {}).get("output_root", "output")
-        ws = _resolve_book_workspace(book_id, Path(root))
+        ws = _resolve_book_workspace(book_id, _event_output_root(output_root))
         events_file = ws.data_dir / "events.jsonl"
         if not events_file.exists():
             return []
         events: list[dict[str, Any]] = []
-        with open(events_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        events.append(json.loads(line))
-                    except Exception:
-                        pass
+        with _event_file_lock(events_file):
+            with open(events_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            events.append(json.loads(line))
+                        except Exception:
+                            pass
         return events[-limit:]
     except Exception as e:
         logger.debug("Failed to read book events: %s", e)

@@ -280,6 +280,8 @@ class BookWorkspace:
             if self.chapter_states_dir.exists():
                 for p in self.chapter_states_dir.glob("*.json"):
                     p.unlink(missing_ok=True)
+            # Event history belongs to the resettable runtime state as well.
+            (self.data_dir / "events.jsonl").unlink(missing_ok=True)
 
         for dir_to_clean in (self.reviews_dir, self.reports_dir, self.snapshots_dir):
             if dir_to_clean.exists():

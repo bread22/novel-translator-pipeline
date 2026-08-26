@@ -41,6 +41,17 @@ def test_reset_failure_does_not_publish_partial_manifest(tmp_path: Path, monkeyp
     assert read_json(workspace.glossary_path)["terms"][0]["source"] == "原词"
 
 
+def test_reset_removes_persistent_event_history(tmp_path: Path) -> None:
+    workspace = BookWorkspace.at(tmp_path / "output", "Test Book")
+    workspace.initialize(book_id="book-1")
+    events_file = workspace.data_dir / "events.jsonl"
+    events_file.write_text('{"event":"pipeline_completed"}\n', encoding="utf-8")
+
+    workspace.reset(book_id="book-1")
+
+    assert not events_file.exists()
+
+
 def test_reset_manifest_publish_failure_restores_workspace(tmp_path: Path, monkeypatch) -> None:
     manifest_file = tmp_path / "data" / "books" / "book-1" / "manifest.json"
     write_json(

@@ -31,6 +31,7 @@ describe('global application state', () => {
     localStorage.clear();
     window.location.hash = '#/queue';
     localStorage.setItem('selected_book_id', 'selected-book');
+    vi.spyOn(api, 'getBookEvents').mockResolvedValue([]);
   });
 
   it('applies a global queue event even when it belongs to another book', async () => {
@@ -79,5 +80,51 @@ describe('global application state', () => {
 
     render(<App />);
     expect(await screen.findByText('events:0')).toBeInTheDocument();
+  });
+
+  it('hydrates the selected book waterfall from server history after a refresh', async () => {
+    window.location.hash = '#/studio';
+    vi.spyOn(api, 'getBooks').mockResolvedValue([{ id: 'selected-book' }] as any);
+    vi.spyOn(api, 'getQueue').mockResolvedValue(emptyQueue);
+    vi.spyOn(api, 'getTaskStatus').mockRejectedValue(new Error('not found'));
+    vi.spyOn(api, 'getBookEvents').mockResolvedValue([{
+      event: 'pipeline_completed',
+      book_id: 'selected-book',
+      timestamp: '2026-08-26T12:00:00Z',
+      event_id: 'server-event-1',
+      data: { book_id: 'selected-book', status: 'completed' },
+    }]);
+    vi.spyOn(api, 'subscribeEvents').mockImplementation(() => () => undefined);
+
+    render(<App />);
+
+    expect(await screen.findByText('events:1')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}')['selected-book'])
+      .toHaveLength(1);
+  });
+
+  it('keeps global queue events out of the selected book waterfall', async () => {
+    window.location.hash = '#/studio';
+    let emit!: (event: any) => void;
+    vi.spyOn(api, 'getBooks').mockResolvedValue([{ id: 'selected-book' }] as any);
+    vi.spyOn(api, 'getQueue').mockResolvedValue(emptyQueue);
+    vi.spyOn(api, 'getTaskStatus').mockRejectedValue(new Error('not found'));
+    vi.spyOn(api, 'subscribeEvents').mockImplementation((handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+
+    render(<App />);
+    expect(await screen.findByText('events:0')).toBeInTheDocument();
+
+    act(() => emit({
+      event: 'queue_updated',
+      book_id: null,
+      timestamp: '2026-08-26T12:00:00Z',
+      event_id: 'global-queue-1',
+      data: { ...emptyQueue, pending_count: 1 },
+    }));
+
+    expect(screen.getByText('events:0')).toBeInTheDocument();
   });
 });

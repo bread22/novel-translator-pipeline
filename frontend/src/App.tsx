@@ -14,6 +14,34 @@ const VALID_TABS = ['queue', 'studio', 'reader', 'knowledge', 'settings'];
 const STREAM_EVENTS_STORAGE_KEY = 'stream_events_by_book_v1';
 const MAX_STREAM_EVENTS_PER_BOOK = 300;
 
+function isStreamEvent(value: unknown): value is StreamEvent {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && typeof (value as StreamEvent).event === 'string'
+    && typeof (value as StreamEvent).timestamp === 'string'
+    && typeof (value as StreamEvent).event_id === 'string'
+  );
+}
+
+function eventKey(event: StreamEvent): string {
+  return event.event_id || `${event.timestamp}_${event.event}`;
+}
+
+function mergeEventHistory(...batches: unknown[][]): StreamEvent[] {
+  const seen = new Set<string>();
+  const merged: StreamEvent[] = [];
+  for (const event of batches.flat()) {
+    if (!isStreamEvent(event)) continue;
+    const key = eventKey(event);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(event);
+    }
+  }
+  return merged.slice(-MAX_STREAM_EVENTS_PER_BOOK);
+}
+
 function loadPersistedEvents(): Record<string, StreamEvent[]> {
   try {
     const parsed = JSON.parse(localStorage.getItem(STREAM_EVENTS_STORAGE_KEY) || '{}');
@@ -21,18 +49,41 @@ function loadPersistedEvents(): Record<string, StreamEvent[]> {
     return Object.fromEntries(
       Object.entries(parsed).flatMap(([bookId, events]) => (
         Array.isArray(events)
-          ? [[bookId, events.filter((event): event is StreamEvent => (
-            event !== null
-            && typeof event === 'object'
-            && typeof event.event === 'string'
-            && typeof event.timestamp === 'string'
-            && typeof event.event_id === 'string'
-          )).slice(-MAX_STREAM_EVENTS_PER_BOOK)]]
+          ? [[bookId, mergeEventHistory(events)]]
           : []
       )),
     );
   } catch {
     return {};
+  }
+}
+
+function persistEvents(eventsByBook: Record<string, StreamEvent[]>): void {
+  const snapshot = Object.fromEntries(
+    Object.entries(eventsByBook).map(([bookId, events]) => [
+      bookId,
+      mergeEventHistory(events),
+    ]),
+  ) as Record<string, StreamEvent[]>;
+
+  // Keep the newest events when a browser's localStorage quota is already full.
+  // The server history remains the durable source and will hydrate this cache later.
+  let remainingEvents = Object.values(snapshot).reduce((total, events) => total + events.length, 0);
+  while (remainingEvents >= 0) {
+    try {
+      localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(snapshot));
+      return;
+    } catch (err) {
+      const largestBook = Object.entries(snapshot)
+        .filter(([, events]) => events.length > 0)
+        .sort(([, left], [, right]) => right.length - left.length)[0];
+      if (!largestBook) {
+        console.warn('Failed to persist stream events:', err);
+        return;
+      }
+      snapshot[largestBook[0]] = snapshot[largestBook[0]].slice(1);
+      remainingEvents -= 1;
+    }
   }
 }
 
@@ -61,7 +112,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(eventsByBook));
+      persistEvents(eventsByBook);
     } catch (err) {
       console.warn('Failed to persist stream events:', err);
     }
@@ -141,19 +192,10 @@ export const App: React.FC = () => {
       const serverEvents = await api.getBookEvents(bookId);
       if (Array.isArray(serverEvents) && serverEvents.length > 0) {
         setEventsByBook((prev) => {
-          const current = prev[bookId] || [];
-          const seen = new Set<string>();
-          const combined: StreamEvent[] = [];
-          for (const ev of [...serverEvents, ...current]) {
-            const key = ev.event_id || `${ev.timestamp}_${ev.event}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              combined.push(ev);
-            }
-          }
+          const combined = mergeEventHistory(serverEvents, prev[bookId] || []);
           return {
             ...prev,
-            [bookId]: combined.slice(-MAX_STREAM_EVENTS_PER_BOOK),
+            [bookId]: combined,
           };
         });
       }
@@ -174,17 +216,24 @@ export const App: React.FC = () => {
   useEffect(() => {
     const unsubscribe = api.subscribeEvents((evt) => {
       // Record event under target book ID
-      const targetBookId = evt.book_id || evt.data?.book_id;
+      const explicitBookId = evt.book_id || evt.data?.book_id;
+      const targetBookId = explicitBookId || (
+        selectedBookRef.current
+        && evt.event !== 'connect'
+        && !evt.event.startsWith('queue_')
+          ? selectedBookRef.current
+          : null
+      );
       if (targetBookId) {
         setEventsByBook((prev) => {
           const existing = prev[targetBookId] || [];
-          const key = evt.event_id || `${evt.timestamp}_${evt.event}`;
-          if (existing.some((e) => (e.event_id && e.event_id === evt.event_id) || `${e.timestamp}_${e.event}` === key)) {
+          const next = mergeEventHistory(existing, [evt]);
+          if (next.length === existing.length && next.every((event, index) => event === existing[index])) {
             return prev;
           }
           return {
             ...prev,
-            [targetBookId]: [...existing.slice(-(MAX_STREAM_EVENTS_PER_BOOK - 1)), evt],
+            [targetBookId]: next,
           };
         });
       }

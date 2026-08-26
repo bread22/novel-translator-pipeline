@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -483,20 +484,37 @@ def reset_book(book_id: str) -> dict[str, Any]:
     if not job_manager.cancel_book_and_wait(book_id):
         raise HTTPException(status_code=409, detail="活动任务未在超时内停止；书籍与任务均保持不变")
 
-    # 1. Reset manifest paragraphs directly (100% reliable)
-    for ch in manifest.get("chapters", []):
-        for p in ch.get("paragraphs", []):
-            p["translated"] = ""
-    write_json(manifest_path(book_id), manifest)
+    manifest_file = manifest_path(book_id)
+    original_manifest = copy.deepcopy(manifest)
+    with tempfile.TemporaryDirectory(prefix="book-reset-") as backup_dir:
+        backup_root = Path(backup_dir) / "workspace"
+        workspace_existed = workspace.root.exists()
+        if workspace_existed:
+            shutil.copytree(workspace.root, backup_root, symlinks=True)
 
-    # Also try calling external CLI if available
-    try:
-        call_novel_translator("reset-translations", "--book", book_id, "--all")
-    except Exception:
-        pass
+        try:
+            # Also try calling external CLI if available.
+            try:
+                call_novel_translator("reset-translations", "--book", book_id, "--all")
+            except Exception:
+                pass
 
-    # 2. Reset ALL workspace files (progress, memory, glossary, reports, reviews, snapshots)
-    workspace.reset(book_id=book_id)
+            # Reset ALL workspace files (progress, memory, glossary, reports, reviews, snapshots).
+            workspace.reset(book_id=book_id)
+
+            # Publish the manifest reset only after the workspace reset succeeds.
+            for ch in manifest.get("chapters", []):
+                for p in ch.get("paragraphs", []):
+                    p["translated"] = ""
+            write_json(manifest_file, manifest)
+        except Exception:
+            # Restore both authorities so a failed reset cannot expose a partial state.
+            write_json(manifest_file, original_manifest)
+            if workspace.root.exists():
+                shutil.rmtree(workspace.root)
+            if workspace_existed:
+                shutil.copytree(backup_root, workspace.root, symlinks=True)
+            raise
 
     return {"status": "ok", "message": f"书籍 '{title}' 翻译进度、长期记忆、术语库与质检报告已全部清空重置"}
 

@@ -505,21 +505,18 @@ class JobManager:
                 self._items[item_id].order_index = idx
 
     def _save_state(self) -> None:
-        try:
-            self._prune_history_locked()
-            data = {
-                "schema_version": 2,
-                "process_id": self.process_id,
-                "is_paused": self.is_paused,
-                "concurrency": self.concurrency,
-                "stop_on_error": self.stop_on_error,
-                "pending_order": self._pending_order,
-                "items": {k: v.model_dump() for k, v in self._items.items()},
-                "updated_at": utc_now(),
-            }
-            write_json(self.state_file, data)
-        except Exception as exc:
-            logger.warning("Failed to save queue state: %s", exc)
+        self._prune_history_locked()
+        data = {
+            "schema_version": 2,
+            "process_id": self.process_id,
+            "is_paused": self.is_paused,
+            "concurrency": self.concurrency,
+            "stop_on_error": self.stop_on_error,
+            "pending_order": self._pending_order,
+            "items": {k: v.model_dump() for k, v in self._items.items()},
+            "updated_at": utc_now(),
+        }
+        write_json(self.state_file, data)
 
     def _load_state(self) -> None:
         if not self.state_file.exists() and self.legacy_state_file.is_file():

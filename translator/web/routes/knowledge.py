@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -23,6 +24,20 @@ from translator.web.models import (
 
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge"])
+_CHAPTER_ID_RE = re.compile(r"^c[^-]+$")
+
+
+def _chapter_files(directory: Path, suffix: str = "") -> dict[str, Path]:
+    """Return files belonging to chapter IDs, excluding pipeline sidecars."""
+    if not directory.exists():
+        return {}
+    marker = f"{suffix}.json"
+    files: dict[str, Path] = {}
+    for path in directory.glob("c*.json"):
+        chapter_id = path.name[:-len(marker)] if suffix and path.name.endswith(marker) else path.stem if not suffix else ""
+        if _CHAPTER_ID_RE.fullmatch(chapter_id):
+            files[chapter_id] = path
+    return files
 
 
 def _not_applied_reason(fix: dict[str, Any], *, apply_disabled: bool) -> str:
@@ -221,10 +236,10 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
         return []
 
     # Find all chapter report files
-    report_files = {p.stem: p for p in workspace.reports_dir.glob("c*.json")}
-    review_output_files = {p.stem.replace("-output", ""): p for p in workspace.reviews_dir.glob("c*-output.json")}
-    approved_fix_files = {p.stem.replace("-approved-fixes", ""): p for p in workspace.reviews_dir.glob("c*-approved-fixes.json")}
-    state_files = {p.stem: p for p in workspace.chapter_states_dir.glob("c*.json")}
+    report_files = _chapter_files(workspace.reports_dir)
+    review_output_files = _chapter_files(workspace.reviews_dir, "-output")
+    approved_fix_files = _chapter_files(workspace.reviews_dir, "-approved-fixes")
+    state_files = _chapter_files(workspace.chapter_states_dir)
 
     all_ch_ids = sorted(set(report_files.keys()) | set(review_output_files.keys()) | set(state_files.keys()))
 

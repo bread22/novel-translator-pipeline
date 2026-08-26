@@ -256,12 +256,18 @@ def test_knowledge_memory_reports_and_invalid_review_warning(tmp_path: Path, mon
         "timeline": [{"event": "start"}],
     })
     write_json(workspace.reviews_dir / "c1-output.json", {"checked_ids": [], "unexpected": True})
+    write_json(workspace.reviews_dir / "c1-glossary-extract-output.json", {
+        "schema_version": "3.0",
+        "checked_ids": ["p1"],
+        "candidates": [],
+    })
     write_json(workspace.reports_dir / "c1.json", {"checked_paragraphs": 2, "applied_fixes": 0})
     monkeypatch.setattr(knowledge, "get_workspace_for_book", lambda _book: workspace)
 
     memory = knowledge.get_book_memory("book")
     assert {item["name"] for item in memory.characters} == {"Legacy", "Alice", "Profiles", "Relations"}
     reports = knowledge.list_chapter_reports("book")
+    assert [item["chapter_id"] for item in reports] == ["c1"]
     assert reports[0]["migration_warning"]
     review = knowledge.get_chapter_review("book", "c1")
     assert review["status"] == "ok" and review["migration_warning"]

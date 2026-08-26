@@ -115,20 +115,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     try {
       await api.updateParagraph(book.id, paraId, editContent);
       if (chapterDetail) {
-        const previous = chapterDetail.paragraphs.find((p) => p.id === paraId);
-        const newlyTranslated = !previous?.translated && Boolean(editContent);
+        const updatedParagraphs = chapterDetail.paragraphs.map((p) =>
+          p.id === paraId ? { ...p, translated: editContent, status: 'manually_edited' as const } : p
+        );
+        const translatedParagraphs = updatedParagraphs.filter((p) => Boolean(p.translated)).length;
         setChapterDetail({
           ...chapterDetail,
-          translated_paragraphs: chapterDetail.translated_paragraphs + (newlyTranslated ? 1 : 0),
-          paragraphs: chapterDetail.paragraphs.map((p) =>
-            p.id === paraId ? { ...p, translated: editContent, status: 'manually_edited' } : p
-          ),
+          translated_paragraphs: translatedParagraphs,
+          paragraphs: updatedParagraphs,
         });
-        if (newlyTranslated) {
-          setChapters((current) => current.map((chapter) => chapter.id === chapterDetail.id
-            ? { ...chapter, translated_paragraphs: chapter.translated_paragraphs + 1 }
-            : chapter));
-        }
+        setChapters((current) => current.map((chapter) => chapter.id === chapterDetail.id
+          ? { ...chapter, translated_paragraphs: translatedParagraphs }
+          : chapter));
       }
       setEditingParaId(null);
     } catch (err: any) {

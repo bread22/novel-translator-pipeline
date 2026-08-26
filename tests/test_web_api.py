@@ -329,9 +329,18 @@ class WebApiTests(unittest.TestCase):
         mock_tasks_manifest.return_value = mock_manifest_file
 
         mock_pipeline_inst = MagicMock()
-        mock_pipeline_inst.run_chapter.return_value = {"status": "ok"}
+        mock_pipeline_inst.is_chapter_completed.return_value = False
+        run_chapter_started = threading.Event()
+        allow_run_chapter = threading.Event()
         finalize_started = threading.Event()
         allow_finalize = threading.Event()
+
+        def run_chapter(*_args: object, **_kwargs: object) -> dict[str, str]:
+            run_chapter_started.set()
+            allow_run_chapter.wait(timeout=2)
+            return {"status": "ok"}
+
+        mock_pipeline_inst.run_chapter.side_effect = run_chapter
 
         def finalize() -> dict[str, str]:
             finalize_started.set()
@@ -358,10 +367,12 @@ class WebApiTests(unittest.TestCase):
         # 2. Get status
         res_status = self.client.get(f"/api/v1/tasks/status/{self.book_id}")
         self.assertEqual(res_status.status_code, 200)
+        self.assertTrue(run_chapter_started.wait(timeout=1), "run_chapter 未在 1 秒内开始")
 
         # 3. Pause pipeline
         res_pause = self.client.post(f"/api/v1/tasks/pipeline/pause?task_or_book_id={self.book_id}")
         self.assertEqual(res_pause.status_code, 200)
+        allow_run_chapter.set()
 
         # 4. Pause completes asynchronously; wait for the stable paused state before resuming.
         for _ in range(100):

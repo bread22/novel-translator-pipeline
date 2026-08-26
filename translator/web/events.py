@@ -4,11 +4,13 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 from uuid import uuid4
 
-
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from translator.core.workspace import BookWorkspace
 
 logger = logging.getLogger("translator.web.events")
 
@@ -20,7 +22,7 @@ def utc_now() -> str:
 def _resolve_book_workspace(book_id_or_title: str, output_root: Path) -> BookWorkspace:
     """Resolve the canonical BookWorkspace directory whether given slug ID or display title."""
     from translator.pipeline.chapter_pipeline import manifest_path
-    from translator.core.workspace import read_json, BookWorkspace
+    from translator.core.workspace import BookWorkspace, read_json
     mf = read_json(manifest_path(book_id_or_title), default=None)
     title = mf.get("title", book_id_or_title) if mf else book_id_or_title
     ws = BookWorkspace.at(output_root, title)
@@ -90,7 +92,7 @@ class EventBroadcaster:
             "event_id": uuid4().hex,
         }
         if payload["book_id"]:
-            append_book_event(payload["book_id"], payload)
+            append_book_event(str(payload["book_id"]), payload)
         async with self._lock:
             dead_subscribers = []
             for queue, sub_book_id in self._subscribers:
@@ -112,7 +114,7 @@ class EventBroadcaster:
             "event_id": uuid4().hex,
         }
         if payload["book_id"]:
-            append_book_event(payload["book_id"], payload)
+            append_book_event(str(payload["book_id"]), payload)
         for queue, sub_book_id in list(self._subscribers):
             if sub_book_id is None or sub_book_id == payload["book_id"]:
                 try:

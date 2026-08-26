@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -17,7 +19,7 @@ from translator.web.events import EventBroadcaster
 from translator.core.job_manager import job_manager
 
 
-@unittest.skipIf(sys.version_info >= (3, 14), "Python 3.14 is outside the declared compatibility range")
+@unittest.skipIf(sys.version_info >= (3, 15), "Python 3.15+ is outside the declared compatibility range")
 class WebApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -328,7 +330,15 @@ class WebApiTests(unittest.TestCase):
 
         mock_pipeline_inst = MagicMock()
         mock_pipeline_inst.run_chapter.return_value = {"status": "ok"}
-        mock_pipeline_inst.finalize.return_value = {"status": "exported"}
+        finalize_started = threading.Event()
+        allow_finalize = threading.Event()
+
+        def finalize() -> dict[str, str]:
+            finalize_started.set()
+            allow_finalize.wait(timeout=2)
+            return {"status": "exported"}
+
+        mock_pipeline_inst.finalize.side_effect = finalize
         mock_pipeline_cls.return_value = mock_pipeline_inst
 
         # 1. Start pipeline
@@ -353,13 +363,34 @@ class WebApiTests(unittest.TestCase):
         res_pause = self.client.post(f"/api/v1/tasks/pipeline/pause?task_or_book_id={self.book_id}")
         self.assertEqual(res_pause.status_code, 200)
 
-        # 4. Resume pipeline
+        # 4. Pause completes asynchronously; wait for the stable paused state before resuming.
+        for _ in range(100):
+            status_response = self.client.get(f"/api/v1/tasks/status/{self.book_id}")
+            self.assertEqual(status_response.status_code, 200)
+            if status_response.json()["status"] == "paused":
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("任务未在 1 秒内进入 paused 状态")
+
+        # 5. Resume pipeline
         res_resume = self.client.post(f"/api/v1/tasks/pipeline/resume?task_or_book_id={self.book_id}")
         self.assertEqual(res_resume.status_code, 200)
 
-        # 5. Stop pipeline
+        self.assertTrue(finalize_started.wait(timeout=1), "finalize 未在 1 秒内开始")
+
+        # 6. Stop pipeline while the worker is still running.
         res_stop = self.client.post(f"/api/v1/tasks/pipeline/stop?task_or_book_id={self.book_id}")
         self.assertEqual(res_stop.status_code, 200)
+        allow_finalize.set()
+
+        for _ in range(100):
+            final_status = self.client.get(f"/api/v1/tasks/status/{self.book_id}").json()["status"]
+            if final_status == "cancelled":
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("任务未在 1 秒内收敛到 cancelled 状态")
 
     def test_prompts_crud(self) -> None:
         # 1. List prompts

@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 默认仅监听 loopback，收紧 CORS，并增加可选 Bearer 管理认证、安全响应头和请求 ID。
 
 ### Quality
-- 支持范围统一为 Python 3.10–3.13 与 Node 20；加入后端矩阵、Ruff/mypy、前端 Vitest/RTL、完整工作流 Playwright、构建产物与干净安装门禁。
+- 支持范围统一为 Python 3.10–3.14 与 Node 20；加入后端矩阵、Ruff/mypy、前端 Vitest/RTL、完整工作流 Playwright、构建产物与干净安装门禁。
 - 覆盖率门禁按关键配置/状态/合并逻辑 90%、Provider/API 85%、其余核心 Python 80% 分组强制执行。
+- Python 3.14 已加入后端、构建与集成验证矩阵。
 - CI 的干净 checkout 测试使用仓库内 fixture，不依赖开发机的队列状态、前端产物或外部 Novel Translator 安装；后端、前端和 Uvicorn/上传/Playwright 集成矩阵已通过。
 
 > 发布状态：0.3.0 代码与发布材料已就绪，正式 Git tag、GitHub Release 和产物发布暂缓。

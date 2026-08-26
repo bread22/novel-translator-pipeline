@@ -14,7 +14,7 @@ from translator.core.workspace import write_json
 from translator.web.app import create_app
 
 
-@unittest.skipIf(sys.version_info >= (3, 14), "Python 3.14 is outside the declared compatibility range")
+@unittest.skipIf(sys.version_info >= (3, 15), "Python 3.15+ is outside the declared compatibility range")
 class QueueApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()

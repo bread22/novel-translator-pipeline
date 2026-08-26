@@ -36,7 +36,11 @@ class NovelToolTests(unittest.TestCase):
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline:
                 stat_path = Path(f"/proc/{child_pid}/stat")
-                if not stat_path.exists() or stat_path.read_text().split()[2] == "Z":
+                try:
+                    process_state = stat_path.read_text().split()[2]
+                except OSError:
+                    break
+                if process_state == "Z":
                     break
                 time.sleep(0.05)
             else:

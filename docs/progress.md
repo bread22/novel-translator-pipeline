@@ -43,4 +43,4 @@
 - [x] **5.1** 配置/密钥/路径/上传安全边界与事务写入
 - [x] **5.2** Fallback、Review/Memory/Glossary 与 Finalize 数据契约
 - [x] **5.3** 前端 SSE、请求竞态、错误状态、可访问性与 Vitest/RTL/Playwright
-- [x] **5.4** Python 3.10–3.13、Node 20、构建、安装与版本一致性 CI 门禁
+- [x] **5.4** Python 3.10–3.14、Node 20、构建、安装与版本一致性 CI 门禁

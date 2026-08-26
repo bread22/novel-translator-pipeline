@@ -12,10 +12,13 @@ import shutil
 import tempfile
 import threading
 import zipfile
+from types import ModuleType
 from typing import Any, Iterable
 
+fcntl: ModuleType | None
 try:
-    import fcntl
+    import fcntl as _fcntl
+    fcntl = _fcntl
 except ImportError:  # pragma: no cover - Windows uses the process-local lock.
     fcntl = None
 

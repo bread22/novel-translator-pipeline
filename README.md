@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
-[![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10–3.14](https://img.shields.io/badge/python-3.10%E2%80%933.14-blue.svg)](https://www.python.org/downloads/)
 [![Node 20](https://img.shields.io/badge/node-20-339933.svg)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/react-19-61dafb.svg)](https://react.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/tailwind-v4-38bdf8.svg)](https://tailwindcss.com/)
@@ -62,7 +62,7 @@ Studio 采用考究高雅的独立出版杂志风格，消除常规 AI 仪表盘
 git clone https://github.com/bread22/novel-translator-pipeline.git
 cd novel-translator-pipeline
 
-# 2. 创建并激活 Python 虚拟环境 (Python 3.10–3.13)
+# 2. 创建并激活 Python 虚拟环境 (Python 3.10–3.14)
 python3 -m venv .venv
 source .venv/bin/activate  # Windows 用户: .venv\Scripts\Activate.ps1
 

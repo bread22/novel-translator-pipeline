@@ -1,4 +1,4 @@
-# Verified Web dependency family for Python 3.10-3.13.
+# Verified Web dependency family for Python 3.10-3.14.
 # Update policy: renovate as one set after the backend, import-order and health
 # smoke tests pass on the complete CI matrix. Last reviewed: 2026-08-23.
 fastapi>=0.115,<0.142

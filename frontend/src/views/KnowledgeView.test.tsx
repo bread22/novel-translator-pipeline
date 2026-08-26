@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
@@ -35,6 +35,30 @@ describe('Knowledge loading states', () => {
     await expect(update.mock.results[0].value).resolves.toEqual(expect.objectContaining({
       terms: [expect.objectContaining({ occurrences: 9, sample_ids: ['p1'], first_seen_chunk: 'c1' })],
     }));
+  });
+
+  it('renders category and status under their matching table headers', async () => {
+    vi.spyOn(api, 'getGlossary').mockResolvedValue({
+      book_id: 'book',
+      terms: [{
+        source: '凌辱看護婦学院',
+        target: '凌辱看护妇学院',
+        category: 'work_title',
+        status: 'active',
+        confidence: 0.95,
+        note: '作品标题证据 1 · 章节 1',
+      }],
+      conflicts: [],
+    });
+    vi.spyOn(api, 'getMemory').mockResolvedValue({ book_id: 'book', characters: [], world_settings: [] });
+    vi.spyOn(api, 'getReports').mockResolvedValue([]);
+
+    render(<KnowledgeView book={{ id: 'book', name: 'Book' } as any} />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: /术语表/ }));
+
+    const cells = within(screen.getAllByRole('row')[1]).getAllByRole('cell');
+    expect(cells[2]).toHaveTextContent('work_title');
+    expect(cells[3]).toHaveTextContent('active');
   });
 
   it('renders every review issue with its reason and written replacement', async () => {

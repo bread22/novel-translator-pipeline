@@ -257,6 +257,11 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                       <td className="py-3 px-4 text-[#1A1A1A] font-bold font-serif">{term.source}</td>
                       <td className="py-3 px-4 text-[#1D4ED8] font-serif font-bold">{term.target}</td>
                       <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded-sm text-[10px] font-mono bg-[#FAF9F6] border border-[#E5E0D8] text-[#4A4A4A]">
+                          {term.category}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
                         <span className={`px-2 py-0.5 rounded-sm text-[10px] font-mono border ${
                           term.status === 'active' || !term.status ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
                           term.status === 'disputed' ? 'bg-amber-50 border-amber-200 text-amber-800' :
@@ -264,11 +269,6 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                           'bg-blue-50 border-blue-200 text-blue-700'
                         }`}>
                           {term.status || 'active'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded-sm text-[10px] font-mono bg-[#FAF9F6] border border-[#E5E0D8] text-[#4A4A4A]">
-                          {term.category}
                         </span>
                       </td>
                       <td className="py-3 px-4">

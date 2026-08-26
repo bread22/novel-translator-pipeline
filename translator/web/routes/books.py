@@ -52,6 +52,16 @@ def get_provenance_and_diagnostics(workspace: BookWorkspace) -> tuple[dict[str, 
     return provenance, diagnostics
 
 
+def _has_valid_epub(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0 or not zipfile.is_zipfile(path):
+        return False
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return archive.testzip() is None and "META-INF/container.xml" in archive.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
 def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) -> BookSummary:
     title = manifest.get("title", book_id)
     source_type = manifest.get("source_type", "epub")
@@ -73,7 +83,7 @@ def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) ->
     progress = round(translated_paras / max(1, total_paras), 3) if total_paras > 0 else 0.0
 
     workspace = BookWorkspace.at(output_root, title)
-    has_output_epub = workspace.epub_path.exists()
+    has_output_epub = _has_valid_epub(workspace.epub_path)
     status = "completed" if (total_paras > 0 and translated_paras == total_paras) else "pending"
     active_task = job_manager.get_task(book_id)
     if active_task:

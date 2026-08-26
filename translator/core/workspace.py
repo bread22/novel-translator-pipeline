@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import stat
 import shutil
+import tempfile
+import threading
 import zipfile
 from typing import Any, Iterable
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows uses the process-local lock.
+    fcntl = None
+
 
 INVALID_DIRECTORY_CHARS = re.compile(r"[\\/:*?\"<>|\x00-\x1f]")
+_JSON_LOCKS: dict[Path, threading.RLock] = {}
+_JSON_LOCKS_GUARD = threading.Lock()
 
 
 def utc_now() -> str:
@@ -25,11 +36,46 @@ def safe_book_name(value: str) -> str:
     return name
 
 
+@contextmanager
+def json_file_lock(path: Path):
+    """Serialize read-modify-write operations for one JSON path."""
+    resolved = path.expanduser().resolve()
+    with _JSON_LOCKS_GUARD:
+        thread_lock = _JSON_LOCKS.setdefault(resolved, threading.RLock())
+
+    with thread_lock:
+        lock_path = resolved.with_name(f".{resolved.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def write_json(path: Path, payload: Any) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return path
 
 

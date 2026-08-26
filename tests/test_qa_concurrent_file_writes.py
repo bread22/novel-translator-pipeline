@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -30,14 +29,10 @@ def test_concurrent_reader_edits_preserve_both_paragraphs(tmp_path: Path, monkey
     write_json(manifest_path, initial)
     barrier = threading.Barrier(2)
 
-    def read_snapshot(_path: Path, default=None):
-        barrier.wait(2)
-        return copy.deepcopy(initial)
-
     monkeypatch.setattr(books, "manifest_path", lambda _book_id: manifest_path)
-    monkeypatch.setattr(books, "read_json", read_snapshot)
 
     def edit(paragraph_id: str, translated: str) -> dict:
+        barrier.wait(2)
         return books.update_paragraph(
             "book-1", paragraph_id, ParagraphUpdateRequest(translated=translated)
         )
@@ -60,22 +55,12 @@ def test_concurrent_glossary_updates_preserve_both_terms(tmp_path: Path, monkeyp
     initial = {"terms": [], "conflicts": []}
     write_json(workspace.glossary_path, initial)
     barrier = threading.Barrier(2)
-    read_count = 0
-    read_lock = threading.Lock()
 
-    def read_snapshot(path: Path, default=None):
-        nonlocal read_count
-        if path == workspace.glossary_path:
-            with read_lock:
-                is_initial_read = read_count < 2
-                read_count += 1
-            if is_initial_read:
-                barrier.wait(2)
-                return copy.deepcopy(initial)
-        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+    def get_workspace(_book_id: str) -> BookWorkspace:
+        barrier.wait(2)
+        return workspace
 
-    monkeypatch.setattr(knowledge, "get_workspace_for_book", lambda _book_id: workspace)
-    monkeypatch.setattr(knowledge, "read_json", read_snapshot)
+    monkeypatch.setattr(knowledge, "get_workspace_for_book", get_workspace)
 
     def add_term(source: str, target: str) -> dict:
         return knowledge.update_glossary(

@@ -124,7 +124,7 @@ export const api = {
   exportBook: (bookId: string, layout: 'horizontal' | 'preserve' = 'horizontal') =>
     request<{ status: string; download_url: string }>(`/books/${bookId}/export?layout=${layout}`, {
       method: 'POST',
-    }),
+    }, { timeoutMs: 120_000 }),
   resetBook: (bookId: string) =>
     request<{ status: string; message: string }>(`/books/${bookId}/reset`, {
       method: 'POST',

@@ -24,6 +24,7 @@ import { migrateProviderRoleReferences, providerRoleReferences } from './setting
 export const SettingsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'routing' | 'prompts'>('routing');
   const [config, setConfig] = useState<SystemConfig | null>(null);
+  const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [preflightData, setPreflightData] = useState<PreflightResponse | null>(null);
   const [isRunningPreflight, setIsRunningPreflight] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -61,12 +62,14 @@ export const SettingsView: React.FC = () => {
   }, []);
 
   const loadConfig = async () => {
+    setConfigLoadError(null);
     try {
       const cfg = await api.getConfig();
       setConfig(cfg);
       lastSavedConfig.current = structuredClone(cfg);
     } catch (err: any) {
       console.error('Failed to load config:', err);
+      setConfigLoadError(err instanceof Error ? err.message : '配置加载失败');
     }
   };
 
@@ -392,6 +395,13 @@ export const SettingsView: React.FC = () => {
           </span>
         </button>
       </div>
+
+      {configLoadError && (
+        <div role="alert" className="flex items-center justify-between gap-4 border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">
+          <span>配置加载失败：{configLoadError}</span>
+          <button type="button" className="shrink-0 underline" onClick={() => void loadConfig()}>重试</button>
+        </div>
+      )}
 
       {/* TAB 1: MODEL ROUTING & API KEY */}
       {activeTab === 'routing' && (

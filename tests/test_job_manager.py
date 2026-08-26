@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -196,6 +198,32 @@ class JobManagerTests(unittest.TestCase):
         recovered_item = recovered.get_status().items[0]
         self.assertEqual(recovered_item.status, "recovery_pending")
         self.assertIn("服务重启", recovered_item.recovery_reason or "")
+
+    def test_restart_recovery_survives_process_boundary(self) -> None:
+        item = self.qm.enqueue("book-1")
+        with self.qm._lock:
+            item.status = "running"
+            item.started_at = item.enqueued_at
+            self.qm._save_state()
+
+        probe = """
+import sys
+from pathlib import Path
+from translator.core.job_manager import JobManager
+
+manager = JobManager(Path(sys.argv[1]))
+item = manager.get_status().items[0]
+assert item.status == "recovery_pending", item.status
+assert item.recovery_reason == "服务重启：原状态 running", item.recovery_reason
+print(item.status)
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(self.output_root)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip().splitlines()[-1], "recovery_pending")
 
     def test_cancelled_last_chapter_never_finalizes(self) -> None:
         started = threading.Event()

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, request } from './api';
+import { api, request, withAuthQuery } from './api';
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  sessionStorage.removeItem('web_auth_token');
 });
 
 describe('API client', () => {
@@ -41,6 +42,19 @@ describe('API client', () => {
     const assertion = expect(pending).rejects.toMatchObject({ name: 'ApiError', code: 'REQUEST_TIMEOUT' });
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
+  });
+
+  it('adds a bearer token sourced from the browser session to API requests and downloads', async () => {
+    sessionStorage.setItem('web_auth_token', 'fixture-token');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await request('/protected');
+
+    const fetchInit = vi.mocked(fetch).mock.calls[0][1];
+    expect(new Headers(fetchInit?.headers).get('Authorization')).toBe('Bearer fixture-token');
+    expect(withAuthQuery('/api/v1/books/book/download')).toBe(
+      `${window.location.origin}/api/v1/books/book/download?access_token=fixture-token`,
+    );
   });
 });
 

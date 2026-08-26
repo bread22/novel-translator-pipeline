@@ -15,12 +15,12 @@ test('real service exposes health and the queue shell', async ({ page, request }
 });
 
 test('browser can reach the protected API when WEB_AUTH_TOKEN is enabled', async ({ page }) => {
-  test.skip(!process.env.E2E_AUTH, 'Set E2E_AUTH=1 with WEB_AUTH_TOKEN to exercise the protected browser path.');
-  test.fail(true, 'Confirmed gap: the frontend has no token source or Authorization injection.');
+  const token = process.env.E2E_AUTH_TOKEN;
+  test.skip(!process.env.E2E_AUTH || !token, 'Set E2E_AUTH=1 and E2E_AUTH_TOKEN with WEB_AUTH_TOKEN to exercise the protected browser path.');
 
   const queueResponse = page.waitForResponse(
     response => response.url().includes('/api/v1/queue') && response.request().method() === 'GET',
   );
-  await page.goto('/#/queue');
+  await page.goto(`/?access_token=${encodeURIComponent(token)}#/queue`);
   expect((await queueResponse).status()).toBe(200);
 });

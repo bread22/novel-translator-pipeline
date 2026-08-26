@@ -17,6 +17,40 @@ import {
 } from '../types/api';
 
 const API_BASE = '/api/v1';
+const AUTH_TOKEN_STORAGE_KEY = 'web_auth_token';
+
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  const queryToken = new URLSearchParams(window.location.search).get('access_token');
+  if (queryToken) {
+    try {
+      sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, queryToken);
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('access_token');
+      window.history.replaceState(null, '', `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    } catch {
+      // Storage/history can be unavailable in locked-down browser contexts.
+    }
+    return queryToken;
+  }
+
+  try {
+    return sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function withAuthQuery(path: string): string {
+  const token = getAuthToken();
+  if (!token || typeof window === 'undefined') return path;
+
+  const url = new URL(path, window.location.origin);
+  if (url.origin !== window.location.origin) return path;
+  url.searchParams.set('access_token', token);
+  return url.href;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -59,13 +93,18 @@ export async function request<T>(path: string, options?: RequestInit, requestOpt
   const url = `${API_BASE}${path}`;
   const { signal, didTimeOut, cleanup } = combinedSignal(requestOptions.signal, requestOptions.timeoutMs ?? 30_000);
   try {
+    const headers = new Headers(options?.headers);
+    if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    const token = getAuthToken();
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
     const response = await fetch(url, {
       ...options,
       signal,
-      headers: options?.body instanceof FormData ? options?.headers : {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -249,7 +288,7 @@ export const api = {
     const setupConnection = () => {
       if (!isSubscribed) return;
       try {
-        eventSource = new EventSource(`${API_BASE}/events/stream`);
+        eventSource = new EventSource(withAuthQuery(`${API_BASE}/events/stream`));
 
         const handleAnyEvent = (e: MessageEvent, eventName: string) => {
           try {

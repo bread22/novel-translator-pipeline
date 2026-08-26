@@ -19,7 +19,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { BookSummary, QueueItem, QueueStatusResponse } from '../types/api';
-import { api } from '../lib/api';
+import { api, withAuthQuery } from '../lib/api';
 
 interface QueueHubViewProps {
   books: BookSummary[];
@@ -314,7 +314,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
         ? res.download_url
         : `${window.location.origin}${res.download_url.startsWith('/') ? '' : '/'}${res.download_url}`;
       const link = document.createElement('a');
-      link.href = downloadPath;
+      link.href = withAuthQuery(downloadPath);
       link.setAttribute('download', '');
       document.body.appendChild(link);
       link.click();

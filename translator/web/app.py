@@ -23,6 +23,17 @@ from translator.web.routes.tasks import router as tasks_router
 logger = logging.getLogger("translator.web")
 
 
+def _authorization_value(request: Request) -> str:
+    supplied = request.headers.get("authorization", "")
+    if supplied:
+        return supplied
+
+    cookie_token = request.cookies.get("web_auth_token")
+    query_token = request.query_params.get("access_token")
+    token = cookie_token or query_token
+    return f"Bearer {token}" if token else ""
+
+
 def create_app(static_dir: Path | None = None) -> FastAPI:
     app = FastAPI(
         title="Novel Translator Studio API",
@@ -47,7 +58,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         configured_token = os.environ.get("WEB_AUTH_TOKEN", "")
         if configured_token and request.method != "OPTIONS" and request.url.path.startswith("/api/v1/"):
-            supplied = request.headers.get("authorization", "")
+            supplied = _authorization_value(request)
             expected = f"Bearer {configured_token}"
             if not secrets.compare_digest(supplied, expected):
                 response = JSONResponse(status_code=401, content={"detail": "认证凭据无效", "request_id": request_id})

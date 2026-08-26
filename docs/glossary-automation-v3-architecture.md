@@ -17,10 +17,12 @@
 
 ## 日常流水线
 
-1. 章节预提取器按段落分块，写入候选和诊断；失败时继续主翻译。
+1. 章节预提取器按段落分块，逐块重试并按配置尝试 fallback reviewer；每块完成后写入 schema-clean 输出和 checkpoint，失败时保留失败块诊断并继续主翻译。
 2. `BookWorkspace.glossary_path` 通过 `ProviderTranslator(glossary_path=...)` 显式进入当前 payload。
-3. 翻译后章节 reviewer 使用相同的 `apply_glossary_delta` 服务累计证据。
+3. 翻译后章节 reviewer 使用相同的 `apply_glossary_delta` 服务累计证据；reviewer 的兼容字段会在生命周期边界投影为 canonical candidate，`reporters` 只用于证据归属。
 4. target 修订生成 backfill affected/changed/unchanged/failed 记录；失败时章节状态为 `needs_retry`。
+
+证据验证采用“保留有效子集”策略：同一候选的部分证据 ID 不匹配时，保留真实包含 source 的证据，并在章节统计中记录 discarded 数量；全部证据失效时才拒绝候选。
 
 ## v2 迁移和回滚
 
@@ -40,4 +42,11 @@ python scripts/migrate_glossary_v3.py --output-root output --book BOOK_ID --appl
 
 ## 诊断字段
 
-章节报告的 `glossary` 区段记录 reported、accepted_candidates、activated、blocked、disputed、revised、实际注入数和 backfill 数；证据只保存 paragraph ID、reporter 和短 note。
+章节报告的 `preextract` 区段记录 extraction_status、failed_chunks 和 extraction_attempts；`glossary` 区段记录 reported、accepted_candidates、activated、blocked、shape_blocked、evidence_total、evidence_valid、evidence_discarded、disputed、revised、实际注入数和 backfill 数；证据只保存 paragraph ID、reporter 和短 note。
+
+历史工作区可先 dry-run 回放已持久化的预提取/审阅输出，再 apply。apply 会备份 authority glossary、重建投影、reopen 校验，翻译正文不写回：
+
+```bash
+python scripts/replay_glossary_v3.py --output-root output --book BOOK_ID
+python scripts/replay_glossary_v3.py --output-root output --book BOOK_ID --apply
+```

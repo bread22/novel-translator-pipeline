@@ -45,3 +45,24 @@ def test_projection_excludes_non_active_and_diagnostic_fields() -> None:
     glossary["terms"].append({"source": "身体", "target": "身体", "category": "body_part", "status": "retired", "evidence": [{"paragraph_id": "p2"}]})
     projection = build_translation_term_projection(glossary)
     assert projection["terms"] == [{"source": "人物", "target": "人物", "category": "person"}]
+
+
+def test_review_reporters_are_projected_into_independent_evidence() -> None:
+    candidate = {
+        "source": "人物",
+        "target": "人物",
+        "category": "person_alias",
+        "confidence": 0.96,
+        "evidence_ids": ["p1"],
+        "reporters": ["primary", "secondary"],
+    }
+    glossary, summary = merge_term_candidates(
+        empty(),
+        [candidate],
+        chapter_id="c1",
+        reporter="chapter_reviewer",
+        evidence_texts={"p1": "人物出现"},
+    )
+    assert summary["blocked_by_shape"] == 0
+    assert glossary["terms"][0]["status"] == "active"
+    assert {item["reporter"] for item in glossary["terms"][0]["evidence"]} == {"primary", "secondary"}

@@ -919,3 +919,14 @@ cd frontend && npm run build  # exit 0
 ```
 
 `tests/test_web_api.py` 在当前工作区已有持久化队列 worker 的环境中，TestClient 建立 lifespan 时会启动外部 provider 队列任务；该环境行为与 glossary API 直接调用无关，直接 glossary CRUD 路径已验证并保持现有 API 兼容。
+
+### 术语提取链路回归加固（2026-08-26）
+
+| 范围 | 结果 | 变更与验证 |
+|---|---|---|
+| 证据与审阅候选 | completed | `reporters` 在 lifecycle 边界投影为 canonical candidate；证据保留有效子集并记录 discarded 统计；新增对应 merge/validation 回归测试。 |
+| 预提取可靠性 | completed | 增加 429/5xx/网络类重试、fallback reviewer、chunk 级部分成功输出、checkpoint 和章节可观测性；新增 resilience 回归测试。 |
+| 历史工作区 | completed | 新增 `scripts/replay_glossary_v3.py`，默认 dry-run，`--apply` 备份 authority glossary、rebuild projection、reopen 校验；本机 27 个工作区 dry-run，19 个可回放，13 个含章节输出。 |
+| 发布门禁 | completed | 定向后端测试 14 passed；ruff、glossary/extractor mypy、release evidence 和前端 Knowledge 测试/typecheck 通过。全量 pytest 在既有 dependency runtime TestClient lifespan 阶段持续挂起，未作为通过结果记录。 |
+
+远端机器的统计报告未挂载到本工作区；将 `scripts/replay_glossary_v3.py` 带到数据所在环境后，先执行 dry-run，再按报告选择单书 `--apply`。

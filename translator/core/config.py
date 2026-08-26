@@ -299,6 +299,24 @@ def secondary_reviewer_name(config: dict[str, Any]) -> str:
     return str(roles.get("secondary_reviewer", "") or os.environ.get("SECONDARY_REVIEWER", "")).strip()
 
 
+def fallback_reviewers_names(config: dict[str, Any]) -> list[str]:
+    env_override = os.environ.get("FALLBACK_REVIEWERS")
+    if env_override:
+        return [item.strip() for item in env_override.split(",") if item.strip()]
+    roles = config.get("roles", {})
+    result: list[str] = []
+    secondary = str(roles.get("secondary_reviewer", "") or "").strip()
+    if secondary:
+        result.append(secondary)
+    configured = roles.get("fallback_reviewers", [])
+    if isinstance(configured, list):
+        for item in configured:
+            value = str(item).strip()
+            if value and value not in result:
+                result.append(value)
+    return result
+
+
 def dual_review_enabled(config: dict[str, Any]) -> bool:
     roles = config.get("roles", {})
     if "DUAL_REVIEW" in os.environ:

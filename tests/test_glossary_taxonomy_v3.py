@@ -48,3 +48,19 @@ def test_target_shape_and_kana_are_deterministic() -> None:
             evidence_texts={"p1": "人物出现"},
         )
         assert not result.valid
+
+
+def test_validator_keeps_valid_evidence_when_context_ids_do_not_match() -> None:
+    result = validate_term_candidate(
+        {
+            "source": "人物",
+            "target": "人物",
+            "category": "person",
+            "confidence": 0.96,
+            "evidence_ids": ["p1", "p2"],
+        },
+        evidence_texts={"p1": "人物出现", "p2": "“你来了。”"},
+    )
+    assert result.valid
+    assert result.evidence_ids == ("p1",)
+    assert result.discarded_evidence == (("p2", "source_not_in_evidence"),)

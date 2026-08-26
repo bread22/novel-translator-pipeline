@@ -15,6 +15,7 @@ import zipfile
 from translator.core.config import (
     dual_review_enabled,
     fallback_translators_names,
+    fallback_reviewers_names,
     load_config,
     primary_translator_name,
     reviewer_name,
@@ -551,6 +552,7 @@ class IterativePipeline:
                     output_path,
                     backend=self.reviewer,
                     cancel_check=self.cancellation_token.check,
+                    fallback_backends=fallback_reviewers_names(load_config()),
                 )
             else:
                 return {"reported": 0, "diagnostic": "extractor_not_configured"}
@@ -558,7 +560,7 @@ class IterativePipeline:
             raise
         except Exception as exc:  # extraction is diagnostic and must not stop main translation
             diagnostic = f"preextract_failed:{exc}"
-            report = {"reported": 0, "diagnostic": diagnostic}
+            report = {"reported": 0, "extraction_status": "failed", "failed_chunks": 0, "diagnostic": diagnostic}
             self._preextract_reports[chapter_id] = report
             write_json(self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-diagnostic.json", report)
             return report
@@ -587,7 +589,12 @@ class IterativePipeline:
         )
         persist_glossary(self.workspace, merged)
         summary_with_diagnostic: dict[str, Any] = dict(summary)
-        summary_with_diagnostic["diagnostic"] = diagnostic
+        extraction_status = str(payload.get("extraction_status", "completed")) if isinstance(payload, dict) else "completed"
+        failed_chunks = payload.get("failed_chunks", []) if isinstance(payload, dict) else []
+        summary_with_diagnostic["extraction_status"] = extraction_status
+        summary_with_diagnostic["failed_chunks"] = len(failed_chunks) if isinstance(failed_chunks, list) else 0
+        summary_with_diagnostic["extraction_attempts"] = len(payload.get("attempts", [])) if isinstance(payload, dict) and isinstance(payload.get("attempts", []), list) else 0
+        summary_with_diagnostic["diagnostic"] = diagnostic or (f"preextract_{extraction_status}" if extraction_status != "completed" else "")
         self._preextract_reports[chapter_id] = summary_with_diagnostic
         return summary_with_diagnostic
 
@@ -882,6 +889,7 @@ class IterativePipeline:
             "applied_fixes": len(fixes) if self.apply else 0,
             "approved_fixes": fixes,
             "term_summary": term_summary,
+            "preextract": self._preextract_reports.get(chapter_id, {}),
             "glossary": {
                 "reported": term_summary.get("reported", 0),
                 "accepted_candidates": term_summary.get("accepted_candidates", 0),
@@ -890,6 +898,9 @@ class IterativePipeline:
                 "blocked_by_category": term_summary.get("blocked_by_category", 0),
                 "blocked_by_shape": term_summary.get("blocked_by_shape", 0),
                 "blocked_by_evidence": term_summary.get("blocked_by_evidence", 0),
+                "evidence_total": term_summary.get("evidence_total", 0),
+                "evidence_valid": term_summary.get("evidence_valid", 0),
+                "evidence_discarded": term_summary.get("evidence_discarded", 0),
                 "disputed": term_summary.get("disputed", 0),
                 "revised": term_summary.get("revised", 0),
                 "retired": term_summary.get("retired", 0),

@@ -11,6 +11,17 @@ from translator.glossary.taxonomy import CategoryTier, canonical_category, categ
 from translator.glossary.validation import ValidationResult, validate_term_candidate
 
 
+CANDIDATE_FIELDS = frozenset({"source", "target", "category", "confidence", "evidence_ids", "note"})
+
+
+def _candidate_reporters(raw: Mapping[str, Any], fallback: str) -> tuple[str, ...]:
+    values = raw.get("reporters", [])
+    if isinstance(values, str):
+        values = [values]
+    reporters = tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip())) if isinstance(values, Sequence) else ()
+    return reporters or ((fallback,) if fallback else ())
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -63,9 +74,13 @@ def _proposal_evidence(
     candidate: GlossaryCandidate,
     *,
     chapter_id: str,
-    reporter: str,
+    reporters: Sequence[str],
 ) -> list[dict[str, Any]]:
-    return [_evidence_record(chapter_id, evidence_id, reporter, candidate.confidence) for evidence_id in candidate.evidence_ids]
+    return [
+        _evidence_record(chapter_id, evidence_id, reporter, candidate.confidence)
+        for evidence_id in candidate.evidence_ids
+        for reporter in reporters
+    ]
 
 
 def _gate_met(term: Mapping[str, Any], tier: CategoryTier | None) -> bool:
@@ -135,16 +150,19 @@ def merge_term_candidates(
     summary = {
         "reported": 0, "accepted_candidates": 0, "added": 0, "activated": 0, "confirmed": 0,
         "rejected": 0, "blocked_by_category": 0, "blocked_by_shape": 0, "blocked_by_evidence": 0,
+        "evidence_total": 0, "evidence_valid": 0, "evidence_discarded": 0,
         "conflicted": 0, "disputed": 0, "revised": 0, "retired": 0,
     }
     for raw in candidates:
         summary["reported"] += 1
         raw_dict = raw.model_dump() if isinstance(raw, GlossaryCandidate) else dict(raw) if isinstance(raw, Mapping) else {}
+        reporters = _candidate_reporters(raw_dict, reporter)
+        candidate_payload = {key: raw_dict[key] for key in CANDIDATE_FIELDS if key in raw_dict}
         try:
-            category = canonical_category(raw_dict.get("category", ""))
+            category = canonical_category(candidate_payload.get("category", ""))
             if category:
-                raw_dict["category"] = category
-            candidate = GlossaryCandidate.model_validate(raw_dict)
+                candidate_payload["category"] = category
+            candidate = GlossaryCandidate.model_validate(candidate_payload)
         except Exception:
             summary["rejected"] += 1
             summary["blocked_by_shape"] += 1
@@ -156,6 +174,9 @@ def merge_term_candidates(
         validation: ValidationResult = validate_term_candidate(candidate, evidence_texts=validation_texts)
         if not validation.valid:
             summary["rejected"] += 1
+            summary["evidence_total"] += len(validation.evidence_ids) + len(validation.discarded_evidence)
+            summary["evidence_valid"] += len(validation.evidence_ids)
+            summary["evidence_discarded"] += len(validation.discarded_evidence)
             if validation.reason == "blocked_category":
                 summary["blocked_by_category"] += 1
             elif "evidence" in validation.reason:
@@ -164,9 +185,12 @@ def merge_term_candidates(
                 summary["blocked_by_shape"] += 1
             continue
         candidate = validation.candidate or candidate
+        summary["evidence_total"] += len(validation.evidence_ids) + len(validation.discarded_evidence)
+        summary["evidence_valid"] += len(validation.evidence_ids)
+        summary["evidence_discarded"] += len(validation.discarded_evidence)
         summary["accepted_candidates"] += 1
         source_normalized = unicodedata.normalize("NFKC", candidate.source).strip()
-        evidence = _proposal_evidence(candidate, chapter_id=chapter_id, reporter=reporter)
+        evidence = _proposal_evidence(candidate, chapter_id=chapter_id, reporters=reporters)
         existing = by_source.get(source_normalized)
         if existing is None:
             now = _now()
@@ -250,8 +274,9 @@ def merge_term_candidates(
         existing["last_seen_chunk"] = chapter_id or existing.get("last_seen_chunk", "")
         if candidate.note:
             existing["note"] = candidate.note
-        if reporter and reporter not in existing.setdefault("provenance", []):
-            existing["provenance"].append(reporter)
+        for provenance in reporters:
+            if provenance and provenance not in existing.setdefault("provenance", []):
+                existing["provenance"].append(provenance)
         tier = category_tier(existing.get("category"))
         was_active = existing.get("status") == "active"
         if existing.get("status") not in {"retired", "revised"} and _gate_met(existing, tier):

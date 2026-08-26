@@ -40,7 +40,10 @@ def generate(output_dir: Path) -> dict[str, Any]:
     output_root = resolver.output_root(config)
     glossary_reports = [migrate(path) for path in sorted(output_root.glob("*/data/glossary.json")) if path.is_file()]
     glossary_runtime: dict[str, int] = {
-        "candidates": 0, "activated": 0, "category_blocked": 0, "evidence_insufficient": 0,
+        "reported": 0, "candidates": 0, "rejected": 0, "shape_blocked": 0,
+        "category_blocked": 0, "evidence_insufficient": 0, "evidence_total": 0,
+        "evidence_valid": 0, "evidence_discarded": 0,
+        "activated": 0,
         "conflicts": 0, "revisions": 0, "backfill_affected": 0, "backfill_changed": 0,
         "backfill_failed": 0, "injected": 0,
     }
@@ -49,10 +52,16 @@ def generate(output_dir: Path) -> dict[str, Any]:
         metrics = report.get("glossary", {}) if isinstance(report, dict) else {}
         if not isinstance(metrics, dict):
             continue
+        glossary_runtime["reported"] += int(metrics.get("reported", 0) or 0)
         glossary_runtime["candidates"] += int(metrics.get("accepted_candidates", 0) or 0)
+        glossary_runtime["rejected"] += int(metrics.get("rejected", 0) or 0)
+        glossary_runtime["shape_blocked"] += int(metrics.get("blocked_by_shape", 0) or 0)
         glossary_runtime["activated"] += int(metrics.get("activated", 0) or 0)
         glossary_runtime["category_blocked"] += int(metrics.get("blocked_by_category", 0) or 0)
         glossary_runtime["evidence_insufficient"] += int(metrics.get("blocked_by_evidence", 0) or 0)
+        glossary_runtime["evidence_total"] += int(metrics.get("evidence_total", 0) or 0)
+        glossary_runtime["evidence_valid"] += int(metrics.get("evidence_valid", 0) or 0)
+        glossary_runtime["evidence_discarded"] += int(metrics.get("evidence_discarded", 0) or 0)
         glossary_runtime["conflicts"] += int(metrics.get("disputed", 0) or 0)
         glossary_runtime["revisions"] += int(metrics.get("revised", 0) or 0)
         glossary_runtime["backfill_affected"] += int(metrics.get("backfill_affected", 0) or 0)
@@ -102,7 +111,7 @@ def generate(output_dir: Path) -> dict[str, Any]:
     evidence_files = sorted(path for path in output_dir.glob("*.json") if path.name != "manifest.json")
     manifest = {
         "version": __version__,
-        "status": "ok" if all(report.get("status", "ok") == "ok" for report in reports.values()) and queue_report["compatible"] else "error",
+        "status": "ok" if all(isinstance(report, dict) and report.get("status", "ok") == "ok" for report in reports.values()) and queue_report["compatible"] else "error",
         "files": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in evidence_files

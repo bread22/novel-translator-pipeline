@@ -21,6 +21,7 @@ class ValidationResult:
     category_tier: CategoryTier | None = None
     candidate: GlossaryCandidate | None = None
     evidence_ids: tuple[str, ...] = ()
+    discarded_evidence: tuple[tuple[str, str], ...] = ()
 
     @property
     def accepted(self) -> bool:
@@ -80,15 +81,33 @@ def validate_term_candidate(
         known_ids |= existing_evidence_ids
     if not evidence_ids:
         return ValidationResult(False, "missing_evidence", tier, model)
-    missing = [item for item in evidence_ids if item not in known_ids]
-    if missing:
-        return ValidationResult(False, "unknown_evidence_id:" + ",".join(sorted(missing)), tier, model, evidence_ids)
+    valid_evidence_ids: list[str] = []
+    discarded_evidence: list[tuple[str, str]] = []
     for evidence_id in evidence_ids:
+        if evidence_id not in known_ids:
+            discarded_evidence.append((evidence_id, "unknown_evidence_id"))
+            continue
         text = unicodedata.normalize("NFKC", _evidence_text(evidence_texts.get(evidence_id, source)))
         if source not in text:
-            return ValidationResult(False, f"source_not_in_evidence:{evidence_id}", tier, model, evidence_ids)
-    normalized = model.model_copy(update={"source": source, "target": target, "category": category, "note": note, "evidence_ids": list(evidence_ids)})
-    return ValidationResult(True, "", tier, normalized, evidence_ids)
+            discarded_evidence.append((evidence_id, "source_not_in_evidence"))
+            continue
+        valid_evidence_ids.append(evidence_id)
+
+    if not valid_evidence_ids:
+        reason = discarded_evidence[0][1] if discarded_evidence else "missing_evidence"
+        if reason == "unknown_evidence_id":
+            reason = "unknown_evidence_id:" + ",".join(sorted(item for item, _ in discarded_evidence))
+        elif reason == "source_not_in_evidence":
+            reason = "source_not_in_evidence:" + discarded_evidence[0][0]
+        return ValidationResult(False, reason, tier, model, evidence_ids, tuple(discarded_evidence))
+    normalized = model.model_copy(update={
+        "source": source,
+        "target": target,
+        "category": category,
+        "note": note,
+        "evidence_ids": valid_evidence_ids,
+    })
+    return ValidationResult(True, "", tier, normalized, tuple(valid_evidence_ids), tuple(discarded_evidence))
 
 
 def validate_glossary_document(document: Mapping[str, Any]) -> list[str]:

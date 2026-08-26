@@ -198,11 +198,9 @@ class JobManager:
                 gate = self._pause_events.get(item.id)
                 if gate:
                     gate.clear()
-                self._transition_locked(item, {"pausing"}, "paused")
-                item.message = "已暂停；当前 worker 槽位仍保留"
+                item.message = "正在等待安全暂停点..."
                 self._save_state()
             response = self._as_task(item)
-        broadcaster.broadcast_sync("pipeline_paused", response.model_dump(), book_id=item.book_id)
         self._emit_queue_updated()
         return response
 
@@ -224,6 +222,7 @@ class JobManager:
         return response
 
     def stop_pipeline(self, task_or_book_id: str) -> TaskStatusResponse | None:
+        emit_stopped = False
         with self._lock:
             item = self._find_item_locked(task_or_book_id)
             if item is None:
@@ -234,6 +233,7 @@ class JobManager:
                 self._transition_locked(item, {item.status}, "cancelled")
                 item.completed_at = utc_now()
                 item.message = "已从等待队列取消"
+                emit_stopped = True
             elif item.status in {"running", "pausing", "paused"}:
                 stop_event = self._stop_events.get(item.id)
                 pause_event = self._pause_events.get(item.id)
@@ -245,9 +245,11 @@ class JobManager:
                 item.message = "正在安全取消..."
             self._save_state()
             response = self._as_task(item)
-        broadcaster.broadcast_sync("pipeline_stopped", response.model_dump(), book_id=item.book_id)
+        if emit_stopped:
+            broadcaster.broadcast_sync("pipeline_stopped", response.model_dump(), book_id=item.book_id)
         self._emit_queue_updated()
-        self._dispatch()
+        if emit_stopped:
+            self._dispatch()
         return response
 
     def active_items_for_book(self, book_id: str) -> list[QueueItem]:
@@ -660,6 +662,17 @@ class JobManager:
         def checkpoint(boundary: str) -> None:
             item.checkpoint = {"boundary": boundary, "chapter": item.current_chapter, "updated_at": utc_now()}
             item.updated_at = utc_now()
+            paused_payload: dict[str, Any] | None = None
+            if not pause_event.is_set():
+                with self._lock:
+                    if item.status == "pausing":
+                        self._transition_locked(item, {"pausing"}, "paused")
+                        item.message = "已暂停；当前 worker 槽位仍保留"
+                        self._save_state()
+                        paused_payload = self._as_task(item).model_dump()
+                if paused_payload is not None:
+                    broadcaster.broadcast_sync("pipeline_paused", paused_payload, book_id=item.book_id)
+                    self._emit_queue_updated()
             pause_gate.wait(cancellation)
             cancellation.check()
 

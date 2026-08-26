@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+from pathlib import Path
 import unicodedata
 from typing import Any, Iterable, Mapping, Sequence
 
 from translator.glossary.models import GlossaryCandidate
+from translator.glossary.name_validation import append_name_mapping_review
 from translator.glossary.resolution import resolve_term_conflict
 from translator.glossary.taxonomy import CategoryTier, canonical_category, category_tier
 from translator.glossary.validation import ValidationResult, validate_term_candidate
@@ -123,6 +125,7 @@ def merge_term_candidates(
     chapter_id: str = "",
     reporter: str = "chapter_reviewer",
     evidence_texts: Mapping[str, Any] | None = None,
+    name_mapping_queue_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Merge v3 candidates idempotently and calculate lifecycle state in code."""
     current = dict(glossary or {})
@@ -152,6 +155,7 @@ def merge_term_candidates(
         "rejected": 0, "blocked_by_category": 0, "blocked_by_shape": 0, "blocked_by_evidence": 0,
         "evidence_total": 0, "evidence_valid": 0, "evidence_discarded": 0,
         "conflicted": 0, "disputed": 0, "revised": 0, "retired": 0,
+        "name_normalized": 0, "blocked_by_name": 0, "name_review_queued": 0,
     }
     for raw in candidates:
         summary["reported"] += 1
@@ -177,7 +181,18 @@ def merge_term_candidates(
             summary["evidence_total"] += len(validation.evidence_ids) + len(validation.discarded_evidence)
             summary["evidence_valid"] += len(validation.evidence_ids)
             summary["evidence_discarded"] += len(validation.discarded_evidence)
-            if validation.reason == "blocked_category":
+            if validation.reason.startswith("name_mapping_"):
+                summary["blocked_by_name"] += 1
+                if validation.name_check is not None and name_mapping_queue_path is not None:
+                    if append_name_mapping_review(
+                        name_mapping_queue_path,
+                        validation.name_check,
+                        chapter_id=chapter_id,
+                        reporter=reporter,
+                        evidence_ids=validation.evidence_ids or tuple(candidate.evidence_ids),
+                    ):
+                        summary["name_review_queued"] += 1
+            elif validation.reason == "blocked_category":
                 summary["blocked_by_category"] += 1
             elif "evidence" in validation.reason:
                 summary["blocked_by_evidence"] += 1
@@ -189,6 +204,8 @@ def merge_term_candidates(
         summary["evidence_valid"] += len(validation.evidence_ids)
         summary["evidence_discarded"] += len(validation.discarded_evidence)
         summary["accepted_candidates"] += 1
+        if validation.name_check is not None and validation.name_check.status == "corrected":
+            summary["name_normalized"] += 1
         source_normalized = unicodedata.normalize("NFKC", candidate.source).strip()
         evidence = _proposal_evidence(candidate, chapter_id=chapter_id, reporters=reporters)
         existing = by_source.get(source_normalized)

@@ -15,6 +15,7 @@ def apply_glossary_delta(
     chapter_id: str,
     reporter: str,
     evidence_texts: Mapping[str, Any],
+    name_mapping_queue_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     return merge_term_candidates(
         glossary,
@@ -22,6 +23,7 @@ def apply_glossary_delta(
         chapter_id=chapter_id,
         reporter=reporter,
         evidence_texts=evidence_texts,
+        name_mapping_queue_path=name_mapping_queue_path,
     )
 
 

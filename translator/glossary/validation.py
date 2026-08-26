@@ -6,6 +6,7 @@ import unicodedata
 from typing import Any, Mapping
 
 from translator.glossary.models import GlossaryCandidate
+from translator.glossary.name_validation import NameCheckResult, check_person_name
 from translator.glossary.taxonomy import CategoryTier, canonical_category, category_tier
 
 
@@ -22,6 +23,7 @@ class ValidationResult:
     candidate: GlossaryCandidate | None = None
     evidence_ids: tuple[str, ...] = ()
     discarded_evidence: tuple[tuple[str, str], ...] = ()
+    name_check: NameCheckResult | None = None
 
     @property
     def accepted(self) -> bool:
@@ -42,7 +44,7 @@ def validate_term_candidate(
     evidence_texts: Mapping[str, Any],
     existing_evidence_ids: set[str] | None = None,
 ) -> ValidationResult:
-    """Validate shape, taxonomy and evidence without consulting a language model."""
+    """Validate shape, taxonomy, deterministic names and evidence without an LLM."""
     raw = candidate.model_dump() if isinstance(candidate, GlossaryCandidate) else dict(candidate)
     if "confidence" not in raw:
         return ValidationResult(False, "missing_confidence")
@@ -63,24 +65,44 @@ def validate_term_candidate(
         return ValidationResult(False, "blocked_category", tier, model)
     if not source or not target:
         return ValidationResult(False, "empty_source_or_target", tier, model)
+
+    name_check = check_person_name(source, target, category)
+    if name_check is not None:
+        if name_check.status == "ambiguous":
+            return ValidationResult(
+                False,
+                f"name_mapping_ambiguous:{name_check.reason}",
+                tier,
+                model,
+                name_check=name_check,
+            )
+        # Glossary stores the bare name. Honorifics remain in paragraph text and
+        # are deliberately excluded from the candidate mapping.
+        model = model.model_copy(update={
+            "source": name_check.name_source,
+            "target": name_check.expected_target,
+        })
+        source = name_check.name_source
+        target = name_check.expected_target
+
     if TARGET_FORBIDDEN_RE.search(target) or "\t" in target:
-        return ValidationResult(False, "unclean_target", tier, model)
+        return ValidationResult(False, "unclean_target", tier, model, name_check=name_check)
     if KANA_RE.search(target):
-        return ValidationResult(False, "target_contains_japanese_kana", tier, model)
+        return ValidationResult(False, "target_contains_japanese_kana", tier, model, name_check=name_check)
     if len(source) > 80 or SOURCE_SENTENCE_RE.search(source):
-        return ValidationResult(False, "source_is_sentence_or_too_long", tier, model)
+        return ValidationResult(False, "source_is_sentence_or_too_long", tier, model, name_check=name_check)
     if len(source.split()) > 8 or len(target) > 80:
-        return ValidationResult(False, "term_shape_too_long", tier, model)
+        return ValidationResult(False, "term_shape_too_long", tier, model, name_check=name_check)
     note = str(model.note or "").strip()
     if len(note) > 120 or "\n" in note or "\r" in note:
-        return ValidationResult(False, "note_too_long", tier, model)
+        return ValidationResult(False, "note_too_long", tier, model, name_check=name_check)
 
     evidence_ids = tuple(dict.fromkeys(str(item).strip() for item in model.evidence_ids if str(item).strip()))
     known_ids = set(evidence_texts)
     if existing_evidence_ids:
         known_ids |= existing_evidence_ids
     if not evidence_ids:
-        return ValidationResult(False, "missing_evidence", tier, model)
+        return ValidationResult(False, "missing_evidence", tier, model, name_check=name_check)
     valid_evidence_ids: list[str] = []
     discarded_evidence: list[tuple[str, str]] = []
     for evidence_id in evidence_ids:
@@ -99,7 +121,7 @@ def validate_term_candidate(
             reason = "unknown_evidence_id:" + ",".join(sorted(item for item, _ in discarded_evidence))
         elif reason == "source_not_in_evidence":
             reason = "source_not_in_evidence:" + discarded_evidence[0][0]
-        return ValidationResult(False, reason, tier, model, evidence_ids, tuple(discarded_evidence))
+        return ValidationResult(False, reason, tier, model, evidence_ids, tuple(discarded_evidence), name_check)
     normalized = model.model_copy(update={
         "source": source,
         "target": target,
@@ -107,7 +129,7 @@ def validate_term_candidate(
         "note": note,
         "evidence_ids": valid_evidence_ids,
     })
-    return ValidationResult(True, "", tier, normalized, tuple(valid_evidence_ids), tuple(discarded_evidence))
+    return ValidationResult(True, "", tier, normalized, tuple(valid_evidence_ids), tuple(discarded_evidence), name_check)
 
 
 def validate_glossary_document(document: Mapping[str, Any]) -> list[str]:

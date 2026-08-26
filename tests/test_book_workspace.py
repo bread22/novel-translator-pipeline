@@ -25,12 +25,12 @@ class BookWorkspaceTests(unittest.TestCase):
         glossary = {
             "book": "b1",
             "terms": [
-                {"source": "美樹", "target": "美树", "confidence": 0.95, "first_seen_chunk": "c1", "last_seen_chunk": "c1"}
+                {"source": "作品A", "target": "作品甲", "category": "work_title", "confidence": 0.95, "first_seen_chunk": "c1", "last_seen_chunk": "c1"}
             ],
             "conflicts": [],
         }
         updates = [
-            {"source": "美樹", "target": "美姬", "confidence": 0.95},
+            {"source": "作品A", "target": "作品乙", "category": "work_title", "confidence": 0.95},
             {"source": "高志", "target": "高志", "confidence": 0.95},
             {"source": "低置信", "target": "无效", "confidence": 0.8},
         ]
@@ -38,9 +38,9 @@ class BookWorkspaceTests(unittest.TestCase):
         self.assertEqual(summary["added"], 1)
         self.assertEqual(summary["conflicted"], 1)
         self.assertEqual(summary["rejected"], 1)
-        self.assertEqual(merged["terms"][0]["target"], "美树")
+        self.assertEqual(merged["terms"][0]["target"], "作品甲")
         self.assertEqual(merged["terms"][1]["target"], "高志")
-        self.assertEqual(merged["conflicts"][0]["proposed_target"], "美姬")
+        self.assertEqual(merged["conflicts"][0]["proposed_target"], "作品乙")
 
     def test_initialize_copies_and_unpacks_epub(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -586,6 +586,7 @@ class IterativePipeline:
             chapter_id=chapter_id,
             reporter="preextractor",
             evidence_texts=evidence_texts,
+            name_mapping_queue_path=self.workspace.name_mapping_review_path,
         )
         persist_glossary(self.workspace, merged)
         summary_with_diagnostic: dict[str, Any] = dict(summary)
@@ -866,6 +867,7 @@ class IterativePipeline:
             chapter_id=chapter_id,
             reporter="chapter_reviewer",
             evidence_texts=evidence_texts,
+            name_mapping_queue_path=self.workspace.name_mapping_review_path,
         )
         backfill = self._backfill_revisions(merged_terms.get("revisions", [])[previous_revision_count:])
         term_summary.update({
@@ -901,6 +903,9 @@ class IterativePipeline:
                 "evidence_total": term_summary.get("evidence_total", 0),
                 "evidence_valid": term_summary.get("evidence_valid", 0),
                 "evidence_discarded": term_summary.get("evidence_discarded", 0),
+                "name_normalized": term_summary.get("name_normalized", 0),
+                "blocked_by_name": term_summary.get("blocked_by_name", 0),
+                "name_review_queued": term_summary.get("name_review_queued", 0),
                 "disputed": term_summary.get("disputed", 0),
                 "revised": term_summary.get("revised", 0),
                 "retired": term_summary.get("retired", 0),

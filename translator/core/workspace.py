@@ -176,6 +176,10 @@ class BookWorkspace:
         return self.novel_translator_terms_path
 
     @property
+    def name_mapping_review_path(self) -> Path:
+        return self.data_dir / "name-mapping-review.jsonl"
+
+    @property
     def progress_path(self) -> Path:
         return self.data_dir / "progress.json"
 
@@ -282,6 +286,8 @@ class BookWorkspace:
                     p.unlink(missing_ok=True)
             # Event history belongs to the resettable runtime state as well.
             (self.data_dir / "events.jsonl").unlink(missing_ok=True)
+            self.name_mapping_review_path.unlink(missing_ok=True)
+            self.name_mapping_review_path.with_name(f".{self.name_mapping_review_path.name}.lock").unlink(missing_ok=True)
 
         for dir_to_clean in (self.reviews_dir, self.reports_dir, self.snapshots_dir):
             if dir_to_clean.exists():
@@ -301,6 +307,7 @@ def merge_term_updates(
     threshold: float = 0.9,
     reporter: str = "legacy_merge",
     evidence_texts: dict[str, Any] | None = None,
+    name_mapping_queue_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     prepared: list[dict[str, Any]] = []
     for index, raw in enumerate(updates):
@@ -330,6 +337,7 @@ def merge_term_updates(
         chapter_id=chunk_id,
         reporter=reporter,
         evidence_texts=supplied_texts,
+        name_mapping_queue_path=name_mapping_queue_path,
     )
     rejected_by_threshold = sum(1 for item in prepared if not item)
     summary["rejected"] = int(summary.get("rejected", 0)) + rejected_by_threshold

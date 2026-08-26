@@ -147,6 +147,7 @@ def replay_workspace(path: Path, *, apply: bool = False) -> dict[str, Any]:
             chapter_id=chapter_id,
             reporter=reporter,
             evidence_texts=evidence_texts,
+            name_mapping_queue_path=(path / "data" / "name-mapping-review.jsonl") if apply else None,
         )
         chapter_summaries.append({"chapter_id": chapter_id, "stage": stage, **summary})
 

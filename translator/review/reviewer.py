@@ -165,7 +165,8 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
             probe = dict(term)
             probe["category"] = "person"
             probe["evidence_ids"] = ["__review_candidate__"]
-            return validate_term_candidate(probe, evidence_texts={"__review_candidate__": str(term.get("source", ""))}).valid
+            validation = validate_term_candidate(probe, evidence_texts={"__review_candidate__": str(term.get("source", ""))})
+            return validation.valid or validation.reason.startswith("name_mapping_ambiguous:")
         if category_tier(term.get("category")) is not CategoryTier.DIRECT_ALLOWED and category_tier(term.get("category")) is not CategoryTier.GATED_ALLOWED:
             return False
         evidence_ids = [str(item) for item in term.get("evidence_ids", []) if str(item).strip()]
@@ -177,7 +178,10 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
         evidence_texts = {item: str(term.get("source", "")) for item in evidence_ids}
         probe = dict(term)
         probe["evidence_ids"] = evidence_ids
-        return validate_term_candidate(probe, evidence_texts=evidence_texts).valid
+        validation = validate_term_candidate(probe, evidence_texts=evidence_texts)
+        # Preserve deterministic name-queue candidates for lifecycle handling.
+        # Shape-valid but ambiguous names are intentionally not discarded here.
+        return validation.valid or validation.reason.startswith("name_mapping_ambiguous:")
 
     if "glossary_delta" in normalized and isinstance(normalized["glossary_delta"], dict):
         for key in ["add", "update"]:
@@ -1063,6 +1067,7 @@ def review_book(
             chapter_id=c_id,
             reporter="chapter_reviewer",
             evidence_texts=evidence_texts,
+            name_mapping_queue_path=workspace.name_mapping_review_path,
         )
         memory, mem_summary = merge_memory_delta(memory, review["memory_delta"], c_id)
         persist_glossary(workspace, glossary)

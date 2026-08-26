@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 from typing import Any
 import uuid
 import zipfile
@@ -32,6 +34,11 @@ from translator.web.path_policy import book_id_from_title, validate_book_id
 
 
 router = APIRouter(prefix="/books", tags=["Books"])
+
+
+@lru_cache(maxsize=None)
+def _export_lock(book_id: str) -> threading.Lock:
+    return threading.Lock()
 
 
 def get_output_root() -> Path:
@@ -348,8 +355,7 @@ def update_paragraph(book_id: str, paragraph_id: str, request: ParagraphUpdateRe
     return {"status": "ok", "paragraph_id": paragraph_id, "translated": request.translated}
 
 
-@router.post("/{book_id}/export")
-def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horizontal|preserve)$")) -> dict[str, Any]:
+def _export_book_locked(book_id: str, layout: str = Query("horizontal", pattern="^(horizontal|preserve)$")) -> dict[str, Any]:
     manifest = read_json(manifest_path(book_id), default=None)
     if not manifest:
         raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}")
@@ -410,6 +416,12 @@ def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horiz
         "download_url": f"/api/v1/books/{book_id}/download",
         "sha256": source_hash,
     }
+
+
+@router.post("/{book_id}/export")
+def export_book(book_id: str, layout: str = Query("horizontal", pattern="^(horizontal|preserve)$")) -> dict[str, Any]:
+    with _export_lock(book_id):
+        return _export_book_locked(book_id, layout)
 
 
 @router.get("/{book_id}/download")

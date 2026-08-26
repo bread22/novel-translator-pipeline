@@ -4,16 +4,11 @@ import time
 import zipfile
 
 from fastapi import HTTPException
-import pytest
 
 from translator.core.workspace import write_json
 from translator.web.routes import books
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="export_book has no per-book lock around the shared workspace EPUB",
-)
 def test_concurrent_exports_both_publish_valid_artifacts(tmp_path: Path, monkeypatch) -> None:
     books_root = tmp_path / "data" / "books"
     manifest_file = books_root / "book-1" / "manifest.json"
@@ -22,9 +17,9 @@ def test_concurrent_exports_both_publish_valid_artifacts(tmp_path: Path, monkeyp
     })
     output = tmp_path / "output"
     translated = tmp_path / "translated"
-    first_ready = threading.Event()
-    second_started = threading.Event()
-    state = {"export_calls": 0}
+    first_started = threading.Event()
+    release_first = threading.Event()
+    state = {"export_calls": 0, "active": 0, "max_active": 0}
     state_lock = threading.Lock()
 
     def valid_epub(path: Path) -> None:
@@ -37,19 +32,23 @@ def test_concurrent_exports_both_publish_valid_artifacts(tmp_path: Path, monkeyp
             with state_lock:
                 state["export_calls"] += 1
                 current = state["export_calls"]
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
             target = Path(args[args.index("--output") + 1])
             target.parent.mkdir(parents=True, exist_ok=True)
-            if current == 1:
+            try:
+                if current == 1:
+                    first_started.set()
+                    release_first.wait(0.2)
+                else:
+                    first_started.wait(1)
+                    release_first.set()
+                time.sleep(0.05)
                 valid_epub(target)
-                first_ready.set()
-                second_started.wait(1)
-            else:
-                first_ready.wait(1)
-                target.write_bytes(b"partial concurrent output")
-                second_started.set()
-                time.sleep(0.1)
-                valid_epub(target)
-            return {"status": "ok"}
+                return {"status": "ok"}
+            finally:
+                with state_lock:
+                    state["active"] -= 1
         return {"status": "valid"}
 
     monkeypatch.setattr(books, "manifest_path", lambda _book: manifest_file)
@@ -77,5 +76,6 @@ def test_concurrent_exports_both_publish_valid_artifacts(tmp_path: Path, monkeyp
         thread.join()
 
     assert len(results) == 2
+    assert state["max_active"] == 1
     assert all(result.get("status") == "exported" for result in results if isinstance(result, dict))
     assert all(isinstance(result, dict) for result in results)

@@ -52,6 +52,8 @@ export const App: React.FC = () => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const selectedBookRef = useRef(selectedBookId);
   const requestCache = useRef(createRequestCache()).current;
+  const booksRevision = useRef(0);
+  const queueRevision = useRef(0);
 
   useEffect(() => {
     selectedBookRef.current = selectedBookId;
@@ -67,8 +69,10 @@ export const App: React.FC = () => {
 
   // Refresh Books
   const refreshBooks = useCallback(async () => {
+    const revision = ++booksRevision.current;
     try {
       const data = await requestCache('books', () => api.getBooks());
+      if (revision !== booksRevision.current) return;
       setLoadError(null);
       dispatchServer({ type: 'books', value: data });
       if (data.length > 0) {
@@ -102,8 +106,10 @@ export const App: React.FC = () => {
 
   // Refresh Queue
   const refreshQueue = useCallback(async () => {
+    const revision = ++queueRevision.current;
     try {
       const q = await requestCache('queue', () => api.getQueue());
+      if (revision !== queueRevision.current) return;
       dispatchServer({ type: 'queue', value: q });
     } catch (err) {
       console.error('Failed to fetch queue:', err);
@@ -185,6 +191,7 @@ export const App: React.FC = () => {
 
       // 1. Queue event updates
       if (evt.event === 'queue_updated' && evt.data && typeof evt.data === 'object') {
+        queueRevision.current += 1;
         dispatchServer({ type: 'queue', value: evt.data as QueueStatusResponse });
         refreshBooks();
       } else if (evt.event.startsWith('queue_')) {

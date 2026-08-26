@@ -67,6 +67,14 @@ def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) ->
     workspace = BookWorkspace.at(output_root, title)
     has_output_epub = workspace.epub_path.exists()
     status = "completed" if (total_paras > 0 and translated_paras == total_paras) else "pending"
+    active_task = job_manager.get_task(book_id)
+    if active_task:
+        if active_task.status == "paused":
+            status = "paused"
+        elif active_task.status == "failed":
+            status = "error"
+        elif active_task.status in {"running", "pausing", "cancelling", "recovery_pending"}:
+            status = active_task.phase if active_task.phase in {"translating", "reviewing"} else "translating"
 
     return BookSummary(
         id=book_id,
@@ -206,6 +214,7 @@ def list_chapters(book_id: str) -> list[ChapterSummary]:
     if not manifest:
         raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}")
 
+    workspace = BookWorkspace.at(get_output_root(), manifest.get("title", book_id))
     summaries = []
     for idx, ch in enumerate(manifest.get("chapters", []), start=1):
         ch_id = ch.get("id", f"c{idx:04d}")
@@ -213,7 +222,15 @@ def list_chapters(book_id: str) -> list[ChapterSummary]:
         paras = ch.get("paragraphs", [])
         total_p = len(paras)
         trans_p = sum(1 for p in paras if bool(str(p.get("translated", "")).strip()))
-        status = "reviewed" if (total_p > 0 and trans_p == total_p) else ("translated" if trans_p > 0 else "pending")
+        has_review_artifact = any(
+            artifact.is_file()
+            for artifact in (
+                workspace.reviews_dir / f"{ch_id}-output.json",
+                workspace.reviews_dir / f"{ch_id}-approved-fixes.json",
+                workspace.reports_dir / f"{ch_id}.json",
+            )
+        )
+        status = "reviewed" if (total_p > 0 and trans_p == total_p and has_review_artifact) else ("translated" if trans_p > 0 else "pending")
         summaries.append(
             ChapterSummary(
                 id=ch_id,

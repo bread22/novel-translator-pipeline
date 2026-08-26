@@ -52,7 +52,7 @@ def append_book_event(book_id: str, payload: dict[str, Any], output_root: str | 
 
 def read_book_events(book_id: str, limit: int = 500, output_root: str | Path | None = None) -> list[dict[str, Any]]:
     """Read last N events from book's persistent events.jsonl."""
-    if not book_id:
+    if not book_id or limit <= 0:
         return []
     try:
         from translator.core.config import load_config

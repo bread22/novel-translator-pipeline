@@ -1,15 +1,9 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
 from translator.web.events import append_book_event, read_book_events
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="read_book_events uses events[-limit:], so limit=0 returns the complete history",
-)
 def test_event_history_zero_limit_returns_no_events() -> None:
     with TemporaryDirectory() as directory:
         root = Path(directory)

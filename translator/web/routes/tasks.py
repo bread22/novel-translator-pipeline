@@ -32,7 +32,8 @@ def start_pipeline(request: PipelineStartRequest) -> TaskStatusResponse:
 def pause_pipeline(task_or_book_id: str) -> TaskStatusResponse:
     res = job_manager.pause_pipeline(task_or_book_id)
     if not res:
-        raise HTTPException(status_code=404, detail=f"未找到运行中任务: {task_or_book_id}")
+        status_code = 409 if job_manager.get_task(task_or_book_id) else 404
+        raise HTTPException(status_code=status_code, detail=f"任务当前状态不支持暂停: {task_or_book_id}" if status_code == 409 else f"未找到运行中任务: {task_or_book_id}")
     return res
 
 
@@ -40,7 +41,8 @@ def pause_pipeline(task_or_book_id: str) -> TaskStatusResponse:
 def resume_pipeline(task_or_book_id: str) -> TaskStatusResponse:
     res = job_manager.resume_pipeline(task_or_book_id)
     if not res:
-        raise HTTPException(status_code=404, detail=f"未找到已暂停任务: {task_or_book_id}")
+        status_code = 409 if job_manager.get_task(task_or_book_id) else 404
+        raise HTTPException(status_code=status_code, detail=f"任务当前状态不支持继续: {task_or_book_id}" if status_code == 409 else f"未找到已暂停任务: {task_or_book_id}")
     return res
 
 
@@ -48,7 +50,8 @@ def resume_pipeline(task_or_book_id: str) -> TaskStatusResponse:
 def stop_pipeline(task_or_book_id: str) -> TaskStatusResponse:
     res = job_manager.stop_pipeline(task_or_book_id)
     if not res:
-        raise HTTPException(status_code=404, detail=f"未找到任务: {task_or_book_id}")
+        status_code = 409 if job_manager.get_task(task_or_book_id) else 404
+        raise HTTPException(status_code=status_code, detail=f"任务当前状态不支持终止: {task_or_book_id}" if status_code == 409 else f"未找到任务: {task_or_book_id}")
     return res
 
 

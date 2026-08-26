@@ -193,13 +193,14 @@ class JobManager:
             item = self._find_item_locked(task_or_book_id)
             if item is None:
                 return None
-            if item.status == "running":
-                self._transition_locked(item, {"running"}, "pausing")
-                gate = self._pause_events.get(item.id)
-                if gate:
-                    gate.clear()
-                item.message = "正在等待安全暂停点..."
-                self._save_state()
+            if item.status != "running":
+                return None
+            self._transition_locked(item, {"running"}, "pausing")
+            gate = self._pause_events.get(item.id)
+            if gate:
+                gate.clear()
+            item.message = "正在等待安全暂停点..."
+            self._save_state()
             response = self._as_task(item)
         self._emit_queue_updated()
         return response
@@ -209,13 +210,14 @@ class JobManager:
             item = self._find_item_locked(task_or_book_id)
             if item is None:
                 return None
-            if item.status == "paused":
-                gate = self._pause_events.get(item.id)
-                if gate:
-                    gate.set()
-                self._transition_locked(item, {"paused"}, "running")
-                item.message = "继续推进中..."
-                self._save_state()
+            if item.status != "paused":
+                return None
+            gate = self._pause_events.get(item.id)
+            if gate:
+                gate.set()
+            self._transition_locked(item, {"paused"}, "running")
+            item.message = "继续推进中..."
+            self._save_state()
             response = self._as_task(item)
         broadcaster.broadcast_sync("pipeline_resumed", response.model_dump(), book_id=item.book_id)
         self._emit_queue_updated()
@@ -226,6 +228,8 @@ class JobManager:
         with self._lock:
             item = self._find_item_locked(task_or_book_id)
             if item is None:
+                return None
+            if item.status not in {"pending", "recovery_pending", "running", "pausing", "paused"}:
                 return None
             if item.status in {"pending", "recovery_pending"}:
                 if item.id in self._pending_order:

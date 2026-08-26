@@ -80,5 +80,5 @@ def test_job_manager_automatically_loads_legacy_state(tmp_path: Path, monkeypatc
 
     assert manager.state_file.is_file()
     assert manager.get_status().pending_count == 3
-    assert manager.get_status().failed_count == 1
+    assert manager.get_status().failed_count == 0
     assert list(source.parent.glob("queue_state.json.v1.*.bak"))

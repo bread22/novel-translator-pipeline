@@ -100,7 +100,7 @@ class QueueApiTests(unittest.TestCase):
         self.assertEqual(del_res.status_code, 200)
         data = del_res.json()
         self.assertEqual(data["pending_count"], 0)
-        self.assertEqual(data["failed_count"], 1)
+        self.assertEqual(data["failed_count"], 0)
 
         # Retry
         retry_res = self.client.post(f"/api/v1/queue/items/{item_id}/retry")

@@ -113,7 +113,7 @@ class JobManagerTests(unittest.TestCase):
 
         status = self.qm.get_status()
         self.assertEqual(status.pending_count, 1)
-        self.assertEqual(status.failed_count, 1)  # Cancelled counts towards non-active/finished
+        self.assertEqual(status.failed_count, 0)
         cancelled_item = next(i for i in status.items if i.id == id1)
         self.assertEqual(cancelled_item.status, "cancelled")
 

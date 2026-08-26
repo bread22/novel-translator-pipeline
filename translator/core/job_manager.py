@@ -112,7 +112,7 @@ class JobManager:
             running_cnt = sum(1 for i in self._items.values() if i.status in SLOT_STATUSES)
             pending_cnt = sum(1 for i in self._items.values() if i.status in {"pending", "recovery_pending"})
             completed_cnt = sum(1 for i in self._items.values() if i.status == "completed")
-            failed_cnt = sum(1 for i in self._items.values() if i.status in {"failed", "cancelled"})
+            failed_cnt = sum(1 for i in self._items.values() if i.status == "failed")
 
             return QueueStatusResponse(
                 is_paused=self.is_paused,

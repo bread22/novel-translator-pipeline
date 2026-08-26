@@ -24,6 +24,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
   const [memory, setMemory] = useState<BookMemoryResponse | null>(null);
   const [reports, setReports] = useState<ChapterReviewReport[]>([]);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active');
   const [showAddModal, setShowAddModal] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -118,7 +119,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
 
   const filteredTerms = glossaryTerms.filter(
     (t) =>
+      (statusFilter === 'all' || (t.status || 'active') === statusFilter) &&
       t.source.toLowerCase().includes(search.toLowerCase()) ||
+      (statusFilter === 'all' || (t.status || 'active') === statusFilter) &&
       t.target.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -206,6 +209,19 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
               />
             </div>
 
+            <div className="flex flex-wrap gap-1" aria-label="术语状态筛选">
+              {(['active', 'candidate', 'disputed', 'retired', 'all'] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setStatusFilter(status)}
+                  className={`px-2 py-1 text-[10px] font-mono border rounded-sm ${statusFilter === status ? 'bg-[#1D4ED8] text-white border-[#1D4ED8]' : 'bg-white text-[#666666] border-[#E5E0D8]'}`}
+                >
+                  {status === 'all' ? '全部' : status}
+                </button>
+              ))}
+            </div>
+
             <button
               onClick={() => setShowAddModal(true)}
               className="flex items-center gap-1.5 px-4 py-2 rounded-sm bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
@@ -223,6 +239,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                   <th className="py-3 px-4 font-bold">日文原文 (Source)</th>
                   <th className="py-3 px-4 font-bold">中文统一译名 (Target)</th>
                   <th className="py-3 px-4 font-bold">分类 (Category)</th>
+                  <th className="py-3 px-4 font-bold">状态</th>
                   <th className="py-3 px-4 font-bold">置信度</th>
                   <th className="py-3 px-4 font-bold">备注 / 首次出现</th>
                 </tr>
@@ -230,7 +247,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
               <tbody className="divide-y divide-[#E5E0D8] font-medium font-sans">
                 {filteredTerms.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-12 text-center text-[#888888] font-serif">
+                    <td colSpan={6} className="py-12 text-center text-[#888888] font-serif">
                       暂无术语记录（流水线在审阅章节时会自动沉淀）
                     </td>
                   </tr>
@@ -239,6 +256,16 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                     <tr key={idx} className="hover:bg-[#FAF9F6] transition-colors">
                       <td className="py-3 px-4 text-[#1A1A1A] font-bold font-serif">{term.source}</td>
                       <td className="py-3 px-4 text-[#1D4ED8] font-serif font-bold">{term.target}</td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-0.5 rounded-sm text-[10px] font-mono border ${
+                          term.status === 'active' || !term.status ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
+                          term.status === 'disputed' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+                          term.status === 'retired' ? 'bg-slate-50 border-slate-200 text-slate-600' :
+                          'bg-blue-50 border-blue-200 text-blue-700'
+                        }`}>
+                          {term.status || 'active'}
+                        </span>
+                      </td>
                       <td className="py-3 px-4">
                         <span className="px-2 py-0.5 rounded-sm text-[10px] font-mono bg-[#FAF9F6] border border-[#E5E0D8] text-[#4A4A4A]">
                           {term.category}
@@ -250,7 +277,8 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                         </span>
                       </td>
                       <td className="py-3 px-4 text-[#666666] text-[11px]">
-                        {term.note || (term.first_seen_chunk ? `首次出现：${term.first_seen_chunk}` : '-')}
+                        {term.note || term.retired_reason || (term.first_seen_chunk ? `首次出现：${term.first_seen_chunk}` : '-')}
+                        {typeof term.occurrences === 'number' && <span className="block text-[10px] text-[#888888]">证据 {term.occurrences} · 章节 {term.chapter_count || 0}</span>}
                       </td>
                     </tr>
                   ))

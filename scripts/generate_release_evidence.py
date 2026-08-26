@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.check_version_consistency import check_versions
 from scripts.check_frontend_api_contract import check_contract
-from scripts.migrate_glossary_v2 import migrate
+from scripts.migrate_glossary_v3 import migrate
 from scripts.migrate_memory_v2 import migrate as migrate_memory
 from scripts.migrate_review_v2 import migrate as migrate_review
 from scripts.verify_frontend_dist import verify_dist
@@ -39,6 +39,26 @@ def generate(output_dir: Path) -> dict[str, Any]:
     resolver = PathResolver.for_config(config_path)
     output_root = resolver.output_root(config)
     glossary_reports = [migrate(path) for path in sorted(output_root.glob("*/data/glossary.json")) if path.is_file()]
+    glossary_runtime: dict[str, int] = {
+        "candidates": 0, "activated": 0, "category_blocked": 0, "evidence_insufficient": 0,
+        "conflicts": 0, "revisions": 0, "backfill_affected": 0, "backfill_changed": 0,
+        "backfill_failed": 0, "injected": 0,
+    }
+    for report_path in sorted(output_root.glob("*/reports/*.json")):
+        report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else {}
+        metrics = report.get("glossary", {}) if isinstance(report, dict) else {}
+        if not isinstance(metrics, dict):
+            continue
+        glossary_runtime["candidates"] += int(metrics.get("accepted_candidates", 0) or 0)
+        glossary_runtime["activated"] += int(metrics.get("activated", 0) or 0)
+        glossary_runtime["category_blocked"] += int(metrics.get("blocked_by_category", 0) or 0)
+        glossary_runtime["evidence_insufficient"] += int(metrics.get("blocked_by_evidence", 0) or 0)
+        glossary_runtime["conflicts"] += int(metrics.get("disputed", 0) or 0)
+        glossary_runtime["revisions"] += int(metrics.get("revised", 0) or 0)
+        glossary_runtime["backfill_affected"] += int(metrics.get("backfill_affected", 0) or 0)
+        glossary_runtime["backfill_changed"] += int(metrics.get("backfill_changed", 0) or 0)
+        glossary_runtime["backfill_failed"] += int(metrics.get("backfill_failed", 0) or 0)
+        glossary_runtime["injected"] += int(metrics.get("injected_into_translation", 0) or 0)
     memory_reports = [migrate_memory(path) for path in sorted(output_root.glob("*/data/book_memory.json")) if path.is_file()]
     review_reports = [migrate_review(path) for path in sorted(output_root.glob("*/reviews/c*-output.json")) if path.is_file()]
     queue_path = output_root / "jobs" / "job_state.v2.json"
@@ -62,7 +82,10 @@ def generate(output_dir: Path) -> dict[str, Any]:
             "after_sha256": config_after,
             "mutated": config_before != config_after,
         },
-        "glossary-migration-dry-run.json": {"schema_version": "2.0", "mode": "dry-run", "reports": glossary_reports},
+        "glossary-migration-dry-run.json": {
+            "schema_version": "3.0", "mode": "dry-run", "reports": glossary_reports,
+            "runtime_observability": glossary_runtime,
+        },
         "memory-migration-dry-run.json": {"schema_version": "2.0", "mode": "dry-run", "reports": memory_reports},
         "review-migration-dry-run.json": {"schema_version": "2.0", "mode": "dry-run", "reports": review_reports},
         "queue-state-migration-dry-run.json": queue_report,

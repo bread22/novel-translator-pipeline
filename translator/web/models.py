@@ -105,13 +105,23 @@ class GlossaryItem(BaseModel):
 
     source: str
     target: str
-    category: str = "general"  # character, location, skill, organization, general
-    confidence: float = 1.0
+    category: str = "unresolved"
+    status: str = "candidate"
+    confidence: float = 0.0
     note: str = ""
+    term_id: str | None = None
+    source_normalized: str | None = None
+    canonical_term_id: str | None = None
     first_seen_chunk: str | None = None
     last_seen_chunk: str | None = None
     occurrences: int = 0
+    chapter_count: int = 0
     sample_ids: list[str] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+    retired_reason: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -129,9 +139,23 @@ class GlossaryUpsert(BaseModel):
 
     source: str
     target: str
-    category: str = "general"
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    category: str = "unresolved"
+    status: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     note: str = ""
+    term_id: str | None = None
+    source_normalized: str | None = None
+    canonical_term_id: str | None = None
+    first_seen_chunk: str | None = None
+    last_seen_chunk: str | None = None
+    occurrences: int | None = None
+    chapter_count: int | None = None
+    sample_ids: list[str] | None = None
+    evidence: list[dict[str, Any]] | None = None
+    provenance: list[str] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    retired_reason: str | None = None
 
     @model_validator(mode="before")
     @classmethod

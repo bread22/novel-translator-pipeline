@@ -214,7 +214,72 @@
           "type": "string"
         },
         "category": {
-          "default": "other",
+          "enum": [
+            "person",
+            "author",
+            "named_nonhuman",
+            "work_title",
+            "document_title",
+            "location",
+            "facility",
+            "organization",
+            "company",
+            "government_body",
+            "group",
+            "brand",
+            "product_model",
+            "vehicle_name",
+            "named_event",
+            "person_alias",
+            "entity_alias",
+            "fixed_person_title",
+            "official_rank",
+            "medical_device",
+            "drug_name",
+            "diagnosis_name",
+            "medical_procedure",
+            "domain_device",
+            "fictional_species",
+            "fictional_faction",
+            "ability_name",
+            "artifact_name",
+            "system_term",
+            "currency_unit",
+            "era_calendar",
+            "anatomy",
+            "body_part",
+            "body_fluid",
+            "body_state",
+            "mental_state",
+            "action",
+            "generic_technique",
+            "onomatopoeia",
+            "interjection",
+            "adjective",
+            "adverb",
+            "descriptive_phrase",
+            "metaphor",
+            "euphemism",
+            "slang",
+            "dialogue_phrase",
+            "honorific_generic",
+            "occupation_generic",
+            "kinship_generic",
+            "common_object",
+            "clothing_generic",
+            "food_generic",
+            "material_generic",
+            "general_noun",
+            "general_medical",
+            "cultural_explanation",
+            "grammar",
+            "pronoun",
+            "number_datetime",
+            "translation_variant",
+            "plot_fact",
+            "ocr_uncertain",
+            "unresolved"
+          ],
           "title": "Category",
           "type": "string"
         },
@@ -224,11 +289,17 @@
           "type": "string"
         },
         "confidence": {
-          "default": 1.0,
           "maximum": 1.0,
           "minimum": 0.0,
           "title": "Confidence",
           "type": "number"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
         },
         "reporters": {
           "items": {
@@ -240,7 +311,10 @@
       },
       "required": [
         "source",
-        "target"
+        "target",
+        "category",
+        "confidence",
+        "evidence_ids"
       ],
       "title": "GlossaryEntry",
       "type": "object"
@@ -363,7 +437,6 @@
       "title": "Dual Review"
     }
   },
-  "title": "Chapter Review Output v2",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
+  "title": "ChapterReviewOutput",
+  "type": "object"
 }

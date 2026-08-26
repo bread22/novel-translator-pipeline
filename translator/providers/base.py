@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from translator.glossary.taxonomy import BLOCKED, CATEGORY_VALUES, DIRECT_ALLOWED, GATED_ALLOWED
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER_SCHEMA = ROOT / "schemas" / "chapter-review-output.schema.json"
@@ -278,12 +280,22 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - fixes 只输出确实存在的问题；replacement 必须是完整段落译文。
 - fixes.category 只能使用：mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation；译文残留日文假名必须使用 policy_violation。
 - 【术语库收录规范（glossary_delta）】：
-  * 仅收录全书贯穿出现且具有长期锁定价值的【实体名词】（如核心人名、专有组织名、特定地名、特殊物理道具、特定医学/世界观专用术语）。
-  * 严禁收录一次性文学修辞或比喻（例如用「土筆/温泉玉子/蛤/栗の花/蜂胴」比喻身体部位或气味，绝对不得作为术语收录！）。
-  * 严禁收录日常口语、叹词、俚语、骂人粗话或形容词（如「エグい、エゲツねぇ、ダチ公、ドスのきいた声」等，严禁作为术语！）。
-  * target 必须是单一、确定、干净的简体中文译名，绝对严禁包含备选项斜杠（如“A/B”）、括号解释（如“A（解释）”）或词典释义！
+  * 只能提交封闭 taxonomy 中的 DIRECT_ALLOWED/GATED_ALLOWED 实体或专名；不要要求模型判断它是否贯穿全书，只提交当前证据。
+  * BLOCKED 类别（身体、状态、动作、修辞、俚语、普通物品、普通职业/称谓等）不得进入 glossary，但仍可在 fixes 中修复翻译错误。
+  * target 必须是单一、确定、干净的简体中文译名，绝对严禁包含备选项斜杠、括号解释、词典释义或日文假名。
+  * 每个候选必须提供 evidence_ids；程序会根据原文定位、类别和独立证据决定 candidate/active 状态。
 - memory_delta 只收录会影响后续章节翻译的人物、关系、别名、重要事实和持续状态。
 - chapter_state 只保存本章摘要和会影响后续理解的重要变化。
+""".strip()
+    elif kind == "glossary_extract":
+        instructions = """
+这是章节翻译前的轻量实体预提取，只提交术语候选，不提交人物经历、关系、外貌、剧情或描写性短语。
+- 顶层必须输出 {"schema_version":"3.0", "checked_ids":[...], "candidates":[...]}。
+- candidates 只能包含 source、target、category、confidence、evidence_ids、note；不得输出 status、term_id、occurrences、chapter_count 或时间戳。
+- category 必须使用封闭 taxonomy：DIRECT_ALLOWED 可在 confidence >= 0.92 且有证据时激活；GATED_ALLOWED 仅保留候选，等待两个段落/章节或两个独立 reporter；BLOCKED 仍可作为正常翻译审阅 fix，但永远不能作为 glossary candidate。
+- BLOCKED 包括 anatomy/body_part/body_fluid/body_state/mental_state/action/generic_technique/onomatopoeia、修辞、俚语、普通物品、普通医学词、职业和通用称谓等。
+- 每个 evidence_ids 必须是本次输入 items 的 paragraph ID；target 必须是单一、干净的简体中文译名，不得有斜杠、括号、候选说明或日文假名。
+- checked_ids 必须覆盖本次输入的所有段落 ID。
 """.strip()
     elif kind == "global":
         instructions = """
@@ -309,6 +321,15 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 """.strip()
     else:
         raise ValueError(f"未知审阅类型：{kind}")
+
+    taxonomy_instruction = (
+        f"\n- taxonomy DIRECT_ALLOWED（{','.join(sorted(DIRECT_ALLOWED))}）；"
+        f"GATED_ALLOWED（{','.join(sorted(GATED_ALLOWED))}）；"
+        f"BLOCKED（{','.join(sorted(BLOCKED))}）。"
+        f"category 只能从封闭集合 {','.join(CATEGORY_VALUES)} 中选择。"
+    )
+    if kind in {"chapter", "glossary_extract"}:
+        instructions += taxonomy_instruction
 
     auto_rule = (
         "全自动模式下，所有置信度 >= 0.8 且有明确修复的项目设置 auto_apply=true。"

@@ -15,6 +15,9 @@ import zipfile
 from types import ModuleType
 from typing import Any, Iterable
 
+from translator.glossary.lifecycle import merge_term_candidates
+from translator.glossary.projection import build_translation_term_projection
+
 fcntl: ModuleType | None
 try:
     import fcntl as _fcntl
@@ -227,7 +230,18 @@ class BookWorkspace:
             if not self.unpacked_dir.exists():
                 safely_extract_epub(self.original_epub, self.unpacked_dir)
         if not self.glossary_path.exists():
-            write_json(self.glossary_path, {"book": book_id, "updated_at": utc_now(), "terms": [], "conflicts": []})
+            write_json(
+                self.glossary_path,
+                {"schema_version": "3.0", "book": book_id, "updated_at": utc_now(), "terms": [], "conflicts": [], "revisions": []},
+            )
+        else:
+            existing_glossary = read_json(self.glossary_path, {})
+            if isinstance(existing_glossary, dict) and existing_glossary.get("schema_version") != "3.0":
+                # Keep the compatibility import here (rather than at module load)
+                # to avoid a core<->script import cycle.  The migration itself
+                # creates the v2 backup and verifies the reopened v3 document.
+                from scripts.migrate_glossary_v3 import migrate
+                migrate(self.glossary_path, apply=True)
         if not self.progress_path.exists():
             write_json(
                 self.progress_path,
@@ -249,7 +263,7 @@ class BookWorkspace:
             )
             write_json(
                 self.glossary_path,
-                {"book": book_id, "updated_at": utc_now(), "terms": [], "conflicts": []},
+                {"schema_version": "3.0", "book": book_id, "updated_at": utc_now(), "terms": [], "conflicts": [], "revisions": []},
             )
             write_json(
                 self.novel_translator_terms_path,
@@ -283,72 +297,48 @@ def merge_term_updates(
     chunk_id: str = "",
     *,
     threshold: float = 0.9,
+    reporter: str = "legacy_merge",
+    evidence_texts: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
-    terms = [dict(item) for item in glossary.get("terms", []) if isinstance(item, dict)]
-    conflicts = [dict(item) for item in glossary.get("conflicts", []) if isinstance(item, dict)]
-    by_source = {str(item.get("source", "")).strip(): item for item in terms if str(item.get("source", "")).strip()}
-    added = 0
-    confirmed = 0
-    rejected = 0
-    conflicted = 0
-    for raw in updates:
-        source = str(raw.get("source", "")).strip()
-        target = str(raw.get("target", "")).strip()
-        confidence = float(raw.get("confidence", 0) or 0)
-        if not source or not target or confidence < threshold:
-            rejected += 1
+    prepared: list[dict[str, Any]] = []
+    for index, raw in enumerate(updates):
+        if not isinstance(raw, dict):
+            prepared.append({})
             continue
-        existing = by_source.get(source)
-        if existing is not None and str(existing.get("target", "")).strip() != target:
-            conflicts.append(
-                {
-                    "source": source,
-                    "existing_target": existing.get("target", ""),
-                    "proposed_target": target,
-                    "confidence": confidence,
-                    "chunk_id": chunk_id,
-                    "created_at": utc_now(),
-                }
-            )
-            conflicted += 1
+        item = dict(raw)
+        confidence = float(item.get("confidence", 0) or 0)
+        if confidence < threshold:
+            prepared.append({})
             continue
-        if existing is None:
-            existing = {
-                "source": source,
-                "target": target,
-                "category": str(raw.get("category", "other")).strip() or "other",
-                "note": str(raw.get("note", "")).strip(),
-                "occurrences": 0,
-                "sample_ids": [],
-                "confidence": confidence,
-                "first_seen_chunk": chunk_id,
-                "last_seen_chunk": chunk_id,
-            }
-            terms.append(existing)
-            by_source[source] = existing
-            added += 1
-        else:
-            existing["confidence"] = max(float(existing.get("confidence", 0) or 0), confidence)
-            existing["last_seen_chunk"] = chunk_id
-            if raw.get("note"):
-                existing["note"] = str(raw["note"]).strip()
-            confirmed += 1
-    glossary = dict(glossary)
-    glossary["terms"] = sorted(terms, key=lambda item: str(item.get("source", "")))
-    glossary["conflicts"] = conflicts
-    glossary["updated_at"] = utc_now()
-    return glossary, {"added": added, "confirmed": confirmed, "rejected": rejected, "conflicted": conflicted}
+        # This compatibility wrapper is retained for callers that predate v3.  The
+        # normal pipeline uses apply_glossary_delta with explicit evidence and category.
+        if "category" not in item:
+            item["category"] = "person"
+        evidence_ids = list(item.get("evidence_ids", []) or item.get("sample_ids", []) or [f"{chunk_id}:{index}"])
+        item["evidence_ids"] = [str(value) for value in evidence_ids]
+        prepared.append(item)
+    supplied_texts = dict(evidence_texts or {})
+    for item in prepared:
+        if isinstance(item, dict) and item.get("source"):
+            for evidence_id in item.get("evidence_ids", []):
+                supplied_texts.setdefault(str(evidence_id), str(item.get("source", "")))
+    merged, summary = merge_term_candidates(
+        glossary,
+        (item for item in prepared if item),
+        chapter_id=chunk_id,
+        reporter=reporter,
+        evidence_texts=supplied_texts,
+    )
+    rejected_by_threshold = sum(1 for item in prepared if not item)
+    summary["rejected"] = int(summary.get("rejected", 0)) + rejected_by_threshold
+    summary["added"] = int(summary.get("added", 0))
+    summary["confirmed"] = int(summary.get("confirmed", 0))
+    summary["conflicted"] = int(summary.get("conflicted", 0))
+    return merged, summary
 
 
 def novel_translator_terms(glossary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    allowed = {"source", "target", "category", "note", "occurrences", "sample_ids"}
-    return {
-        "terms": [
-            {key: value for key, value in item.items() if key in allowed}
-            for item in glossary.get("terms", [])
-            if isinstance(item, dict) and str(item.get("source", "")).strip() and str(item.get("target", "")).strip()
-        ]
-    }
+    return build_translation_term_projection(glossary)
 
 
 def empty_book_memory(book: str = "") -> dict[str, Any]:

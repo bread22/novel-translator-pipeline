@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException
 from translator.core.config import load_config
 from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, json_file_lock, read_json, utc_now, write_json
+from translator.glossary.lifecycle import stable_term_id
+from translator.glossary.taxonomy import canonical_category, category_tier, CategoryTier
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.review.models import normalize_review_for_display
 from translator.review.reviewer import OBJECTIVE_CATEGORIES, OBJECTIVE_SEVERITIES, has_japanese_kana
@@ -99,9 +101,30 @@ def update_glossary(book_id: str, request: GlossaryCreateRequest) -> GlossaryRes
         existing_terms = {str(t.get("source", "")): dict(t) for t in glossary_data.get("terms", []) if isinstance(t, dict) and t.get("source")}
         for item in request.terms:
             current = existing_terms.get(item.source, {})
-            existing_terms[item.source] = {**current, **item.model_dump()}
+            incoming = {key: value for key, value in item.model_dump().items() if value is not None}
+            supplied_fields = set(item.model_fields_set)
+            for field in ("category", "confidence", "note"):
+                if field not in supplied_fields and field in current:
+                    incoming[field] = current[field]
+            incoming["source"] = item.source.strip()
+            incoming["source_normalized"] = incoming.get("source_normalized") or item.source.strip()
+            incoming["category"] = canonical_category(incoming.get("category", "unresolved"))
+            incoming["term_id"] = current.get("term_id") or incoming.get("term_id") or stable_term_id(str(incoming["source_normalized"]))
+            merged = {**current, **incoming}
+            if not merged.get("evidence"):
+                merged["evidence"] = list(current.get("evidence", []) or [])
+            if not merged.get("provenance"):
+                merged["provenance"] = list(current.get("provenance", []) or ["api"])
+            if merged.get("status") == "active" and not merged.get("evidence"):
+                merged["status"] = "candidate"
+            if category_tier(merged.get("category")) is CategoryTier.BLOCKED:
+                merged["status"] = "retired"
+                merged["retired_reason"] = "blocked_category"
+            existing_terms[item.source] = merged
 
         glossary_data["terms"] = list(existing_terms.values())
+        glossary_data["schema_version"] = "3.0"
+        glossary_data.setdefault("revisions", [])
         glossary_data["updated_at"] = utc_now()
         write_json(workspace.glossary_path, glossary_data)
 

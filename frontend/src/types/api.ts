@@ -44,7 +44,7 @@ export interface ChapterDetail {
   title: string;
   total_paragraphs: number;
   translated_paragraphs: number;
-  status: string;
+  status: 'pending' | 'translated' | 'fallback_recovered' | 'review_fixed' | 'manually_edited';
   paragraphs: ParagraphItem[];
   chapter_summary: string;
   auto_fixed_count: number;
@@ -110,12 +110,22 @@ export interface GlossaryItem {
   source: string;
   target: string;
   category: string;
+  status?: string;
   confidence: number;
   note?: string;
+  term_id?: string | null;
+  source_normalized?: string | null;
+  canonical_term_id?: string | null;
   first_seen_chunk?: string | null;
   last_seen_chunk?: string | null;
   occurrences?: number;
+  chapter_count?: number;
   sample_ids?: string[];
+  evidence?: Array<Record<string, unknown>>;
+  provenance?: string[];
+  created_at?: string | null;
+  updated_at?: string | null;
+  retired_reason?: string | null;
 }
 
 export interface GlossaryResponse {

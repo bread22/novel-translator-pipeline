@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from translator.glossary.taxonomy import BLOCKED, Category, canonical_category
 
 
 class StrictModel(BaseModel):
@@ -12,10 +14,18 @@ class StrictModel(BaseModel):
 class GlossaryEntry(StrictModel):
     source: str = Field(min_length=1)
     target: str = Field(min_length=1)
-    category: str = "other"
+    category: Category
     note: str = ""
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_ids: list[str]
     reporters: list[str] = Field(default_factory=list)
+
+    @field_validator("category")
+    @classmethod
+    def reject_blocked_category(cls, value: str) -> str:
+        if value in BLOCKED:
+            raise ValueError("BLOCKED taxonomy categories are not glossary candidates")
+        return value
 
 
 class DeltaConflict(StrictModel):
@@ -87,9 +97,35 @@ class ChapterReviewOutput(StrictModel):
         value = dict(raw)
         raw_glossary = value.get("glossary_delta")
         glossary: dict[str, Any] = raw_glossary if isinstance(raw_glossary, dict) else {}
+
+        def normalize_glossary_items(items: Any) -> list[dict[str, Any]]:
+            normalized: list[dict[str, Any]] = []
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict):
+                    normalized.append(item)
+                    continue
+                candidate = dict(item)
+                # Compatibility is confined to legacy review reads.  The serialized
+                # result always contains an explicit confidence and v3 category.
+                original_category = str(candidate.get("category", "")).strip()
+                candidate.setdefault("category", "person")
+                candidate["category"] = canonical_category(candidate.get("category"))
+                if candidate["category"] in BLOCKED:
+                    # Explicit blocked model output is discarded at the review
+                    # boundary; legacy neutral values remain audit candidates.
+                    if original_category and original_category not in {"other", "general", "term", "terminology", "item"}:
+                        continue
+                    candidate["category"] = "person"
+                candidate.setdefault("confidence", 0.0)
+                if "evidence_ids" not in candidate:
+                    candidate["evidence_ids"] = list(candidate.get("sample_ids", []) or [])
+                allowed = {"source", "target", "category", "note", "confidence", "evidence_ids", "reporters"}
+                normalized.append({key: val for key, val in candidate.items() if key in allowed})
+            return normalized
+
         value["glossary_delta"] = {
-            "add": list(glossary.get("add", []) or []),
-            "update": list(glossary.get("update", []) or []),
+            "add": normalize_glossary_items(glossary.get("add", []) or []),
+            "update": normalize_glossary_items(glossary.get("update", []) or []),
             "conflicts": list(glossary.get("conflicts", []) or []),
         }
 

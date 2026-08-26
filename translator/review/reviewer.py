@@ -25,6 +25,9 @@ from translator.core.workspace import (
     utc_now,
     write_json,
 )
+from translator.glossary.service import apply_glossary_delta, persist_glossary
+from translator.glossary.taxonomy import CategoryTier, category_tier
+from translator.glossary.validation import validate_term_candidate
 from translator.providers.registry import get_provider
 from translator.review.models import ChapterReviewOutput, GlobalReviewOutput
 
@@ -154,20 +157,27 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
         sanitized_fixes.append(item)
     normalized["fixes"] = sanitized_fixes
 
-    # Filter glossary_delta to ensure only clean naming entities (no metaphors, slashes, brackets)
+    # One deterministic taxonomy validator is shared with extraction, merge and projection.
     def _is_valid_glossary_term(term: dict[str, Any]) -> bool:
-        src = str(term.get("source", "")).strip()
-        tgt = str(term.get("target", "")).strip()
-        if not src or not tgt:
+        if str(term.get("category", "")) == "unresolved":
+            # Preserve the legacy candidate shape for audit; merge/projection will
+            # keep unresolved permanently out of active injection.
+            probe = dict(term)
+            probe["category"] = "person"
+            probe["evidence_ids"] = ["__review_candidate__"]
+            return validate_term_candidate(probe, evidence_texts={"__review_candidate__": str(term.get("source", ""))}).valid
+        if category_tier(term.get("category")) is not CategoryTier.DIRECT_ALLOWED and category_tier(term.get("category")) is not CategoryTier.GATED_ALLOWED:
             return False
-        # Reject terms with candidate slashes, brackets or explanation notes in target
-        if any(char in tgt for char in ["/", "|", "（", "）", "(", ")", "【", "】", "[", "]"]):
-            return False
-        # Reject one-off metaphors, dialogue slang, descriptive phrases
-        invalid_sources = {"土筆", "温泉玉子", "蛤", "蟻の門渡り", "栗の花の匂い", "蜂胴", "アナルの溝", "ドスのきいた声", "エグい", "エゲツねぇ", "ダチ公", "はくいスケ"}
-        if src in invalid_sources:
-            return False
-        return True
+        evidence_ids = [str(item) for item in term.get("evidence_ids", []) if str(item).strip()]
+        if not evidence_ids:
+            # Legacy review payloads may omit evidence_ids. Keep them as a
+            # non-activatable candidate; lifecycle merge performs the real evidence gate.
+            evidence_ids = ["__review_candidate__"]
+            term["evidence_ids"] = []
+        evidence_texts = {item: str(term.get("source", "")) for item in evidence_ids}
+        probe = dict(term)
+        probe["evidence_ids"] = evidence_ids
+        return validate_term_candidate(probe, evidence_texts=evidence_texts).valid
 
     if "glossary_delta" in normalized and isinstance(normalized["glossary_delta"], dict):
         for key in ["add", "update"]:
@@ -974,7 +984,7 @@ def review_book(
 
     snapshot = call_novel_translator("snapshot", "--book", book, "--name", "before-chapter-consistency")
     write_json(workspace.snapshots_dir / "before-chapter-consistency.json", snapshot)
-    glossary = read_json(workspace.glossary_path, {"book": book, "terms": [], "conflicts": []})
+    glossary = read_json(workspace.glossary_path, {"schema_version": "3.0", "book": book, "terms": [], "conflicts": [], "revisions": []})
     memory = read_json(workspace.book_memory_path, empty_book_memory(book))
     policy_path = translation_policy or ROOT / "docs" / "prompts" / "translation-policy.md"
     policy = policy_path.read_text(encoding="utf-8") if policy_path.exists() else ""
@@ -1038,15 +1048,25 @@ def review_book(
             ]
             if remaining_kana:
                 raise ValueError(f"章节 {c_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
-        glossary, term_summary = merge_term_updates(
+        consistency_updates = review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", [])
+        evidence_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
+        prepared_updates: list[dict[str, Any]] = []
+        for raw in consistency_updates:
+            item = dict(raw)
+            source = str(item.get("source", "")).strip()
+            if not item.get("evidence_ids"):
+                item["evidence_ids"] = [item_id for item_id, text in evidence_texts.items() if source and source in text]
+            prepared_updates.append(item)
+        glossary, term_summary = apply_glossary_delta(
             glossary,
-            review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", []),
-            c_id,
+            prepared_updates,
+            chapter_id=c_id,
+            reporter="chapter_reviewer",
+            evidence_texts=evidence_texts,
         )
         memory, mem_summary = merge_memory_delta(memory, review["memory_delta"], c_id)
-        write_json(workspace.glossary_path, glossary)
+        persist_glossary(workspace, glossary)
         write_json(workspace.book_memory_path, memory)
-        write_json(workspace.novel_translator_terms_path, novel_translator_terms(glossary))
         chapter_state = merge_chapter_state(c_id, str(chapter.get("title", "")), review["chapter_state"])
         write_json(workspace.chapter_states_dir / f"{c_id}.json", chapter_state)
         report_path = workspace.reports_dir / f"{c_id}.json"
@@ -1059,6 +1079,7 @@ def review_book(
             "applied_fixes": len(fixes) if apply else 0,
             "approved_fixes": fixes,
             "term_summary": term_summary,
+            "glossary": term_summary,
             "memory_summary": mem_summary,
             "applied": applied_fixes,
         })

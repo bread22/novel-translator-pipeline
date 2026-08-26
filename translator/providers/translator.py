@@ -8,6 +8,7 @@ import tempfile
 from typing import Any
 
 from translator.core.config import load_config, setting
+from translator.glossary.projection import build_translation_term_projection, select_relevant_terms
 from translator.providers.base import (
     extract_json_object,
     normalize_item_ids,
@@ -32,26 +33,35 @@ def _extract_placeholders(text: str) -> list[str]:
     return sorted(set(re.findall(r"\{\{[^{}]+\}\}|\[\[[^\]]+\]\]", text)))
 
 
-def _terms(root: Path, book: str) -> list[dict[str, Any]]:
-    raw = _load_json(root / "data" / "books" / book / "terms.json", {})
-    if isinstance(raw, dict):
-        items = raw.get("items", raw.get("terms", []))
-    elif isinstance(raw, list):
-        items = raw
-    else:
-        items = []
-    if not isinstance(items, list):
-        items = []
-    return [item for item in items if isinstance(item, dict)]
+def _terms(root: Path, book: str, glossary_path: Path | None = None) -> list[dict[str, Any]]:
+    """Read only the workspace authority; legacy external terms.json is never a source."""
+    candidates = [glossary_path] if glossary_path is not None else [root / "data" / "glossary.json"]
+    for path in candidates:
+        if path is None:
+            continue
+        raw = _load_json(path, {})
+        if isinstance(raw, dict) and isinstance(raw.get("terms"), list):
+            # Projection is applied again here so a caller cannot inject retired or
+            # diagnostic fields by supplying a hand-written cache.
+            return build_translation_term_projection(raw).get("terms", [])
+    return []
 
 
 class ProviderTranslator:
     """Direct provider adapter orchestrator; Novel Translator remains a storage/export tool."""
 
-    def __init__(self, *, novel_root: Path, manifest: Path, timeout: int = 600) -> None:
+    def __init__(
+        self,
+        *,
+        novel_root: Path,
+        manifest: Path,
+        timeout: int = 600,
+        glossary_path: Path | None = None,
+    ) -> None:
         self.novel_root = novel_root
         self.manifest = manifest
         self.timeout = timeout
+        self.glossary_path = glossary_path
         self.config = load_config()
 
     def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
@@ -95,6 +105,18 @@ class ProviderTranslator:
         previous = paragraphs[max(0, first_index - 3):first_index]
         next_index = first_index + len(selected)
         following = paragraphs[next_index:next_index + 2]
+        glossary = _load_json(self.glossary_path, {"terms": []}) if self.glossary_path else _load_json(self.novel_root / "data" / "glossary.json", {"terms": []})
+        current_items = [{"id": str(item["id"]), "source": str(item.get("source", "")), "text": str(item.get("source", ""))} for item in selected]
+        previous_items = [{"id": str(item.get("id")), "source": str(item.get("source", "")), "text": str(item.get("source", ""))} for item in previous]
+        following_items = [{"id": str(item.get("id")), "source": str(item.get("source", "")), "text": str(item.get("source", ""))} for item in following]
+        relevant_terms = select_relevant_terms(
+            glossary if isinstance(glossary, dict) else {"terms": []},
+            items=current_items,
+            previous=previous_items,
+            following=following_items,
+            max_terms=128,
+            max_chars=8000,
+        )
         payload = {
             "source_language": "auto",
             "target_language": "zh-Hans",
@@ -109,7 +131,7 @@ class ProviderTranslator:
                     "只输出最终 JSON，不要解释。",
                 ],
             },
-            "glossary": _terms(self.novel_root, book),
+            "glossary": relevant_terms,
             "context": {
                 "chapter_id": str(chapter.get("id", "")),
                 "chapter_title": str(chapter.get("title", "")),
@@ -213,7 +235,12 @@ class ProviderTranslator:
                 return {"status": "error", "provider": provider, "reason": "empty_translation", "id": item["id"]}
             by_id[item["id"]]["translated"] = text
         self._atomic_write(manifest)
-        result["summary"] = {"translated": len(items), "source_chars": sum(len(sources[item_id]) for item_id in ids)}
+        result["summary"] = {
+            "translated": len(items),
+            "source_chars": sum(len(sources[item_id]) for item_id in ids),
+            "glossary_terms_injected": len(payload.get("glossary", [])) if isinstance(payload.get("glossary"), list) else 0,
+            "glossary_path": str(self.glossary_path) if self.glossary_path else str(self.novel_root / "data" / "glossary.json"),
+        }
         return result
 
     def _atomic_write(self, manifest: dict[str, Any]) -> None:

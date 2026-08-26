@@ -823,6 +823,7 @@ class JobManager:
                 targeted_translator=ProviderTranslator(
                     novel_root=NOVEL_TRANSLATOR_ROOT,
                     manifest=manifest_path(item.book_id),
+                    glossary_path=workspace.glossary_path,
                 ),
                 on_batch_completed=handle_batch_completed,
                 on_phase_changed=handle_phase_changed,

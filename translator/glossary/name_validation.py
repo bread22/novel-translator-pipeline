@@ -156,26 +156,41 @@ def check_person_name(source: str, target: str, category: object) -> NameCheckRe
         "original_target": original_target,
         "name_source": name_source,
         "name_target": name_target,
-        "expected_target": "",
         "source_honorific": source_honorific,
         "target_honorific": target_honorific,
     }
+
+    def result(
+        status: Literal["not_applicable", "pass", "corrected", "ambiguous"],
+        *,
+        expected_target: str = "",
+        reason: str = "",
+        mismatch_positions: tuple[int, ...] = (),
+    ) -> NameCheckResult:
+        return NameCheckResult(
+            status=status,
+            expected_target=expected_target,
+            reason=reason,
+            mismatch_positions=mismatch_positions,
+            **base,
+        )
+
     if not name_source or not name_target:
-        return NameCheckResult(status="ambiguous", reason="empty_name_after_honorific_split", **base)
+        return result("ambiguous", reason="empty_name_after_honorific_split")
     # The first phase targets kanji names. Keep legacy/non-CJK person entries
     # flowing through the existing validator until a script-specific checker is
     # added; mixed CJK/non-CJK names remain reviewable below.
     if not _CJK_CHAR_RE.search(name_source) and not _CJK_CHAR_RE.search(name_target):
         return None
     if not _is_cjk_name(name_source) or not _is_cjk_name(name_target):
-        return NameCheckResult(status="ambiguous", reason="name_is_not_cjk_aligned", **base)
+        return result("ambiguous", reason="name_is_not_cjk_aligned")
     if len(name_source) != len(name_target):
-        return NameCheckResult(status="ambiguous", reason="name_length_mismatch", **base)
+        return result("ambiguous", reason="name_length_mismatch")
 
     expected_target = "".join(JA_TO_ZH_NAME_MAP.get(char, char) for char in name_source)
     mismatches = tuple(index for index, (actual, expected) in enumerate(zip(name_target, expected_target)) if actual != expected)
     if not mismatches:
-        return NameCheckResult(status="pass", **{**base, "expected_target": expected_target})
+        return result("pass", expected_target=expected_target)
 
     # A mismatch is auto-correctable only when the source character has an
     # explicit reviewed mapping. Unknown source characters go to the queue.
@@ -185,19 +200,17 @@ def check_person_name(source: str, target: str, category: object) -> NameCheckRe
         if name_source[index] not in JA_TO_ZH_NAME_MAP
     )
     if unsafe:
-        return NameCheckResult(
-            status="ambiguous",
+        return result(
+            "ambiguous",
             expected_target=expected_target,
             reason="unmapped_character_mismatch",
             mismatch_positions=mismatches,
-            **{key: value for key, value in base.items() if key != "expected_target"},
         )
-    return NameCheckResult(
-        status="corrected",
+    return result(
+        "corrected",
         expected_target=expected_target,
         reason="deterministic_character_mapping",
         mismatch_positions=mismatches,
-        **{key: value for key, value in base.items() if key != "expected_target"},
     )
 
 

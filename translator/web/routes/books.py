@@ -451,19 +451,47 @@ def delete_book(book_id: str) -> dict[str, Any]:
     if not job_manager.cancel_book_and_wait(book_id):
         raise HTTPException(status_code=409, detail="活动任务未在超时内停止；书籍与任务均保持不变")
 
-    # 1. Remove output workspace
     workspace = BookWorkspace.at(output_root, title)
-    if workspace.root.exists():
-        shutil.rmtree(workspace.root, ignore_errors=True)
-
     safe_dir = output_root / safe_book_name(title)
-    if safe_dir.exists() and safe_dir != workspace.root:
-        shutil.rmtree(safe_dir, ignore_errors=True)
-
-    # 2. Remove from novel-translator data/books
     data_book_dir = NOVEL_TRANSLATOR_ROOT / "data" / "books" / book_id
-    if data_book_dir.exists():
-        shutil.rmtree(data_book_dir, ignore_errors=True)
+
+    deletion_roots: list[Path] = []
+    seen_roots: set[Path] = set()
+    for candidate in (workspace.root, safe_dir, data_book_dir):
+        if not candidate.exists():
+            continue
+        resolved = candidate.resolve()
+        if resolved not in seen_roots:
+            seen_roots.add(resolved)
+            deletion_roots.append(resolved)
+
+    with tempfile.TemporaryDirectory(prefix="book-delete-") as backup_dir:
+        backups: list[tuple[Path, Path]] = []
+        for index, root in enumerate(deletion_roots):
+            backup = Path(backup_dir) / str(index)
+            shutil.copytree(root, backup, symlinks=True)
+            backups.append((root, backup))
+
+        try:
+            for root, _backup in backups:
+                shutil.rmtree(root)
+                if root.exists():
+                    raise OSError(f"删除未完成: {root}")
+        except Exception as exc:
+            rollback_errors: list[Exception] = []
+            for root, backup in backups:
+                try:
+                    if root.exists():
+                        shutil.rmtree(root)
+                    if root.exists():
+                        shutil.copytree(backup, root, symlinks=True, dirs_exist_ok=True)
+                    else:
+                        shutil.copytree(backup, root, symlinks=True)
+                except Exception as rollback_error:
+                    rollback_errors.append(rollback_error)
+            if rollback_errors:
+                raise HTTPException(status_code=500, detail="删除书籍失败，且回滚未完全成功") from rollback_errors[0]
+            raise HTTPException(status_code=500, detail=f"删除书籍失败，已回滚: {exc}") from exc
 
     return {"status": "ok", "message": f"书籍 '{title}' 已彻底删除"}
 

@@ -1,16 +1,10 @@
 from pathlib import Path
 
-import pytest
-
 from translator.core.workspace import write_json
 from translator.web.models import RetranslateParagraphRequest
 from translator.web.routes import tasks
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="retranslate_paragraph searches paragraph_id globally and ignores chapter_id",
-)
 def test_retranslate_uses_the_requested_chapter_when_ids_repeat(tmp_path: Path, monkeypatch) -> None:
     manifest = tmp_path / "manifest.json"
     write_json(manifest, {
@@ -33,8 +27,9 @@ def test_retranslate_uses_the_requested_chapter_when_ids_repeat(tmp_path: Path, 
     monkeypatch.setattr(tasks, "load_config", lambda: {"roles": {"primary_translator": "fake"}})
     monkeypatch.setattr(tasks, "ProviderTranslator", FakeTranslator)
 
-    tasks.retranslate_paragraph(
+    result = tasks.retranslate_paragraph(
         RetranslateParagraphRequest(book_id="book-1", chapter_id="c2", paragraph_id="p1")
     )
 
     assert source_chars == [len("requested chapter source")]
+    assert result["translated"] == "old second"

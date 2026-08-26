@@ -75,14 +75,18 @@ def retranslate_paragraph(request: RetranslateParagraphRequest) -> dict[str, Any
     if not manifest:
         raise HTTPException(status_code=404, detail=f"未找到书籍: {request.book_id}")
 
-    target_para = None
-    for ch in manifest.get("chapters", []):
-        for p in ch.get("paragraphs", []):
-            if p.get("id") == request.paragraph_id:
-                target_para = p
-                break
-        if target_para:
+    target_chapter = None
+    for chapter_index, chapter in enumerate(manifest.get("chapters", []), start=1):
+        if chapter.get("id") == request.chapter_id or f"c{chapter_index:04d}" == request.chapter_id:
+            target_chapter = chapter
             break
+    if not target_chapter:
+        raise HTTPException(status_code=404, detail=f"未找到章节: {request.chapter_id}")
+
+    target_para = next(
+        (paragraph for paragraph in target_chapter.get("paragraphs", []) if paragraph.get("id") == request.paragraph_id),
+        None,
+    )
 
     if not target_para:
         raise HTTPException(status_code=404, detail=f"未找到段落: {request.paragraph_id}")
@@ -106,13 +110,14 @@ def retranslate_paragraph(request: RetranslateParagraphRequest) -> dict[str, Any
     # Re-read manifest to get updated translated text
     manifest_after = read_json(path, default={})
     updated_text = ""
-    for ch in manifest_after.get("chapters", []):
-        for p in ch.get("paragraphs", []):
-            if p.get("id") == request.paragraph_id:
-                updated_text = p.get("translated", "")
-                break
-        if updated_text:
-            break
+    for chapter_index, chapter in enumerate(manifest_after.get("chapters", []), start=1):
+        if chapter.get("id") != request.chapter_id and f"c{chapter_index:04d}" != request.chapter_id:
+            continue
+        updated_text = next(
+            (paragraph.get("translated", "") for paragraph in chapter.get("paragraphs", []) if paragraph.get("id") == request.paragraph_id),
+            "",
+        )
+        break
 
     return {
         "status": "ok",

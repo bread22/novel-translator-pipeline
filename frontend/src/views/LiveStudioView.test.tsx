@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
 import { LiveStudioView } from './LiveStudioView';
@@ -94,5 +94,41 @@ describe('live model topology', () => {
     const secondaryReviewer = screen.getByText('REVIEWER #2 (副审)').parentElement;
     expect(secondaryReviewer).not.toBeNull();
     expect(within(secondaryReviewer!).getByText('PENDING')).toBeInTheDocument();
+  });
+
+  it.fails('does not start with a policy that failed to persist globally', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.spyOn(api, 'getConfig').mockResolvedValue({
+      paths: { translation_policy: 'old-policy.md' },
+      providers: {},
+    } as never);
+    vi.spyOn(api, 'getPrompts').mockResolvedValue([
+      { path: 'old-policy.md', name: 'Old policy', type: 'translation' },
+      { path: 'new-policy.md', name: 'New policy', type: 'translation' },
+    ] as never);
+    vi.spyOn(api, 'saveConfig').mockRejectedValue(new Error('config write failed'));
+    const startPipeline = vi.spyOn(api, 'startPipeline').mockResolvedValue({} as never);
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+
+    render(<LiveStudioView
+      book={{ id: 'book', name: 'Book', source_type: 'epub', total_chapters: 1,
+        translated_chapters: 0, total_paragraphs: 1, translated_paragraphs: 0,
+        progress_percentage: 0 } as never}
+      activeTask={null}
+      streamEvents={[]}
+      onRefreshTask={vi.fn(async () => undefined)}
+      onRefreshBooks={vi.fn(async () => undefined)}
+    />);
+
+    const selects = await screen.findAllByRole('combobox');
+    const policySelect = selects[1];
+    fireEvent.change(policySelect, { target: { value: 'new-policy.md' } });
+    await waitFor(() => expect(api.saveConfig).toHaveBeenCalled());
+
+    expect(policySelect).toHaveValue('old-policy.md');
+    fireEvent.click(screen.getByRole('button', { name: '启动全自动流水线' }));
+    await waitFor(() => expect(startPipeline).toHaveBeenCalled());
+    expect(startPipeline.mock.calls[0][0]).toMatchObject({ translation_policy: 'old-policy.md' });
+    expect(alertSpy).not.toHaveBeenCalled();
   });
 });

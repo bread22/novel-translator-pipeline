@@ -50,15 +50,30 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
 
   const loadData = async (bookId: string, signal: AbortSignal, sequence: number) => {
     try {
-      const [glossaryRes, memoryRes, reportsRes] = await Promise.all([
+      const [glossaryRes, memoryRes, reportsRes] = await Promise.allSettled([
         api.getGlossary(bookId, { signal }),
         api.getMemory(bookId, { signal }),
         api.getReports(bookId, { signal }),
       ]);
-      if (sequence !== requestSequence.current) return;
-      setGlossaryTerms(glossaryRes.terms || []);
-      setMemory(memoryRes);
-      setReports(reportsRes || []);
+      if (signal.aborted || sequence !== requestSequence.current) return;
+
+      const errors: string[] = [];
+      if (glossaryRes.status === 'fulfilled') {
+        setGlossaryTerms(glossaryRes.value.terms || []);
+      } else {
+        errors.push(`术语表：${glossaryRes.reason instanceof Error ? glossaryRes.reason.message : '加载失败'}`);
+      }
+      if (memoryRes.status === 'fulfilled') {
+        setMemory(memoryRes.value);
+      } else {
+        errors.push(`记忆：${memoryRes.reason instanceof Error ? memoryRes.reason.message : '加载失败'}`);
+      }
+      if (reportsRes.status === 'fulfilled') {
+        setReports(reportsRes.value || []);
+      } else {
+        errors.push(`质检报告：${reportsRes.reason instanceof Error ? reportsRes.reason.message : '加载失败'}`);
+      }
+      setLoadError(errors.length > 0 ? errors.join('；') : null);
     } catch (err) {
       if (signal.aborted || sequence !== requestSequence.current) return;
       setLoadError(err instanceof Error ? err.message : '知识库加载失败');

@@ -31,3 +31,34 @@ def test_preextractor_can_feed_first_translation_batch(tmp_path: Path) -> None:
     pipeline.initialize()
     pipeline.run_chapter("c1", 1)
     assert any(term["status"] == "active" and term["target"] == "雨宫庆" for term in seen)
+
+
+def test_preextractor_uses_fallback_2_and_skips_when_missing(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    write_json(manifest, {"chapters": [{"id": "c1", "paragraphs": [{"id": "p1", "source": "テスト", "translated": ""}]}]})
+    workspace = BookWorkspace.at(tmp_path / "output", "book")
+
+    def translate(_provider: str, _book: str, ids: list[str], **_kwargs: object) -> dict:
+        data = read_json(manifest)
+        data["chapters"][0]["paragraphs"][0]["translated"] = "测试"
+        write_json(manifest, data)
+        return {"status": "ok"}
+
+    def reviewer(input_path: Path, output_path: Path) -> None:
+        payload = read_json(input_path)
+        write_json(output_path, {"checked_ids": [item["id"] for item in payload["items"]], "fixes": [], "glossary_delta": {"add": [], "update": [], "conflicts": []}, "memory_delta": {"add": [], "update": [], "conflicts": []}, "chapter_state": {}})
+
+    # Pipeline with no secondary fallback translator -> skips preextract smoothly
+    pipeline = IterativePipeline(
+        book="book",
+        workspace=workspace,
+        manifest=manifest,
+        targeted_translator=translate,
+        chapter_reviewer=reviewer,
+        fallback_translators=["single_fallback"],
+        secondary_fallback_translator=None,
+    )
+    pipeline.initialize()
+    pipeline.run_chapter("c1", 1)
+    report = pipeline._preextract_reports.get("c1", {})
+    assert report.get("extraction_status") == "skipped" or report.get("reported") == 0

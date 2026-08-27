@@ -230,6 +230,12 @@ class IterativePipeline:
             self.fallback_translators = fallback_translators_names(config)
 
         self.fallback_translator = self.fallback_translators[0] if self.fallback_translators else "lmstudio"
+        self.secondary_fallback_translator = (
+            secondary_fallback_translator
+            or (self.fallback_translators[1] if len(self.fallback_translators) > 1 else None)
+            or str(config.get("roles", {}).get("secondary_fallback_translator", "")).strip()
+            or None
+        )
         eff_max_tokens = translation_max_tokens if translation_max_tokens is not None else int(pipeline_cfg.get("translation_max_tokens", 8192))
         self.translation_max_tokens = max(512, eff_max_tokens)
         eff_max_batches = max_chapter_batches if max_chapter_batches is not None else int(pipeline_cfg.get("max_chapter_batches", 1000))
@@ -528,7 +534,9 @@ class IterativePipeline:
             if isinstance(item, dict) and item.get("id")
         ]
         if not items:
-            return {"reported": 0, "diagnostic": "empty_chapter"}
+            report = {"reported": 0, "diagnostic": "empty_chapter"}
+            self._preextract_reports[chapter_id] = report
+            return report
         payload: Any = None
         diagnostic = ""
         try:
@@ -538,6 +546,14 @@ class IterativePipeline:
                 except TypeError:
                     payload = self.glossary_extractor(items)
             elif self.chapter_reviewer is run_chapter_review:
+                preextract_backend = self.secondary_fallback_translator or (
+                    self.fallback_translators[1] if len(self.fallback_translators) > 1 else None
+                )
+                if not preextract_backend:
+                    report = {"reported": 0, "extraction_status": "skipped", "diagnostic": "preextract_skipped_no_secondary_fallback"}
+                    self._preextract_reports[chapter_id] = report
+                    return report
+
                 input_path = self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-input.json"
                 output_path = self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-output.json"
                 write_json(input_path, {
@@ -547,15 +563,26 @@ class IterativePipeline:
                     "items": items,
                     "active_terms": read_json(self.workspace.glossary_path, {}).get("terms", []),
                 })
-                payload = run_glossary_extraction(
-                    input_path,
-                    output_path,
-                    backend=self.reviewer,
-                    cancel_check=self.cancellation_token.check,
-                    fallback_backends=fallback_reviewers_names(load_config()),
-                )
+                try:
+                    payload = run_glossary_extraction(
+                        input_path,
+                        output_path,
+                        backend=preextract_backend,
+                        cancel_check=self.cancellation_token.check,
+                        fallback_backends=[],
+                    )
+                except JobCancelled:
+                    raise
+                except Exception as exc:
+                    diagnostic = f"preextract_failed:{exc}"
+                    report = {"reported": 0, "extraction_status": "failed", "failed_chunks": 0, "diagnostic": diagnostic}
+                    self._preextract_reports[chapter_id] = report
+                    write_json(self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-diagnostic.json", report)
+                    return report
             else:
-                return {"reported": 0, "diagnostic": "extractor_not_configured"}
+                report = {"reported": 0, "diagnostic": "extractor_not_configured"}
+                self._preextract_reports[chapter_id] = report
+                return report
         except JobCancelled:
             raise
         except Exception as exc:  # extraction is diagnostic and must not stop main translation

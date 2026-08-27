@@ -125,7 +125,7 @@ describe('live model topology', () => {
     fireEvent.change(policySelect, { target: { value: 'new-policy.md' } });
     await waitFor(() => expect(api.saveConfig).toHaveBeenCalled());
 
-    expect(policySelect).toHaveValue('old-policy.md');
+    await waitFor(() => expect(policySelect).toHaveValue('old-policy.md'));
     fireEvent.click(screen.getByRole('button', { name: '启动全自动流水线' }));
     await waitFor(() => expect(startPipeline).toHaveBeenCalled());
     expect(startPipeline.mock.calls[0][0]).toMatchObject({ translation_policy: 'old-policy.md' });

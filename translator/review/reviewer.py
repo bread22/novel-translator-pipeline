@@ -89,11 +89,22 @@ def approved_fixes(
         item_id = str(item.get("id", ""))
         replacement = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         is_new_contract = "category" in item or "replacement" in item
+        current_text = str(current_translations.get(item_id, "")) if current_translations else ""
+        if current_translations and replacement == current_text:
+            continue
         mandatory_kana_cleanup = bool(
             current_translations
-            and has_japanese_kana(str(current_translations.get(item_id, "")))
+            and has_japanese_kana(current_text)
         )
         category = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
+        reason = str(item.get("reason", "")).lower()
+
+        # Quality Guardrail: Reject hallucinated kana violations when current text has no Japanese kana
+        if current_translations and category == "policy_violation":
+            is_kana_reason = any(k in reason for k in ("假名", "片假名", "平假名", "kana", "日文假名"))
+            if is_kana_reason and not mandatory_kana_cleanup:
+                continue
+
         if mandatory_kana_cleanup:
             category = "policy_violation"
             item["severity"] = "critical"

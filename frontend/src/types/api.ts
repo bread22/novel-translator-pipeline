@@ -178,6 +178,7 @@ export interface ChapterReviewReport {
     confidence?: number;
     reason?: string;
     replacement?: string;
+    operation?: 'replace' | 'clear';
     approved_translation?: string | null;
     auto_apply?: boolean;
     consensus?: boolean | null;

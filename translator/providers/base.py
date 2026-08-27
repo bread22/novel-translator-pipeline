@@ -269,6 +269,14 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
   * 绝对严禁在 replacement 中残留任何日文假名（包括平假名、片假名，如 すぐそば、カタカナ、の、に 等）或未翻译的生造日文词汇！
   * 若原文中出现片假名概念词（如「カタカナ職業」），必须意译为其对应中文含义（如“时尚新潮职业”/“白领职业”），严禁直接复制日文假名！
   * glossary_delta 的 target（中文译名）、memory_delta 中的各字段值、chapter_state 中的 summary，全部必须使用规范简体中文。
+- 【日文汉字、伏字与遮掩符号】：
+  * 只有 Unicode 平假名和片假名才能称为“日文假名”。日文汉字、旧字体、异体字、中文标点以及○、●、×、＊、※、□等符号不是假名；不得在 reason 中把它们称为“假名”、“平假名”、“片假名”或 kana。
+  * 人名、地名或术语中的日文汉字/旧字体/异体字与已有中文译名不一致时，使用 category=terminology、severity=major；reason 写明“与既定中文译名不一致”，不得误报为假名残留。
+  * 原文词语中的○、●、×、＊、※、□等可能是出版审查使用的伏字/遮掩符号。必须结合词形、上下文、动作、术语库及同书已出现的完整写法还原；还原结果唯一时，译文必须直接使用术语库指定的完整中文词，不得保留伏字、日文原词或含糊代称。
+  * 译文仍保留伏字时，使用 category=policy_violation、severity=critical；reason 必须写“原文伏字/遮掩符号未还原”，replacement 必须是可直接覆盖当前段落的完整简体中文，且不得再含遮掩符号。
+  * 只有当伏字的原词和中文译名可唯一确定时才可设置 auto_apply=true 且 confidence>=0.95。若存在两个以上合理解释，必须设置 auto_apply=false、replacement=""，并在 reason 中写明 ambiguous_source；不得猜测或编造原词。
+  * 日文风格词或不规范译名只有在与已激活术语表明确冲突时才能输出 terminology fix；纯粹风格偏好、同义词替换或“可以更好”的润色不得输出 fix。
+  * 若某段是与相邻段完全重复的多余译文，只有双审一致、category=addition 或 omission、severity=major/critical、confidence>=0.95 时，才可输出 operation=clear、replacement=""、auto_apply=true。不得用 clear 删除任何含有独立原文信息的段落。
 - 审阅与严重度分级原则：
   * 客观错误（包括实词误译如名词/材质/动作词错译、成语/惯用句误译、人名术语不一致、主客体颠倒、漏译、假名残留）必须积极报告并给出修复。
   * 严重度分级：
@@ -277,7 +285,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     - minor：微观语境精度纠偏、动词动作层次精度修正、地道口语化纠错（置信度 >= 0.8 时亦会自动采纳）。
   * 纯属两可的主观风格偏好或无实质改善的润色，不要输出 fix（fixes 数组保持精炼，只解决真正的问题）。
 - 必须检查 items 中的每个段落，并把全部 ID 且不重复地写入 checked_ids（必须覆盖 items 中的全部段落 ID）。
-- fixes 只输出确实存在的问题；replacement 必须是完整段落译文。
+- fixes 只输出确实存在的问题；replacement 必须是完整段落译文。除了符合上述严格条件的 operation=clear 重复段落，不得返回空 replacement。
 - fixes.category 只能使用：mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation；译文残留日文假名必须使用 policy_violation。
 - 【术语库收录规范（glossary_delta）】：
   * 只能提交封闭 taxonomy 中的 DIRECT_ALLOWED/GATED_ALLOWED 实体或专名；不要要求模型判断它是否贯穿全书，只提交当前证据。

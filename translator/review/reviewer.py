@@ -56,10 +56,15 @@ CATEGORY_ALIASES = {
 import re
 
 JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+MASKING_SYMBOL_REGEX = re.compile(r"[○●×＊※□]")
 
 
 def has_japanese_kana(text: str) -> bool:
     return bool(JAPANESE_KANA_REGEX.search(text))
+
+
+def has_masking_symbol(text: str) -> bool:
+    return bool(MASKING_SYMBOL_REGEX.search(text))
 
 
 def manifest_path(book: str) -> Path:
@@ -87,10 +92,12 @@ def approved_fixes(
     for raw in items:
         item = dict(raw)
         item_id = str(item.get("id", ""))
+        operation = str(item.get("operation", "replace") or "replace")
+        is_clear = operation == "clear"
         replacement = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         is_new_contract = "category" in item or "replacement" in item
         current_text = str(current_translations.get(item_id, "")) if current_translations else ""
-        if current_translations and replacement == current_text:
+        if current_translations and not is_clear and replacement == current_text:
             continue
         mandatory_kana_cleanup = bool(
             current_translations
@@ -98,18 +105,25 @@ def approved_fixes(
         )
         category = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
         reason = str(item.get("reason", "")).lower()
+        masking_reason = any(k in reason for k in ("伏字", "遮掩", "未还原", "○", "●", "×", "＊", "※", "□"))
+        mandatory_masking_cleanup = bool(
+            current_translations
+            and has_masking_symbol(current_text)
+            and masking_reason
+            and not is_clear
+        )
 
         # Quality Guardrail: Reject hallucinated kana violations when current text has no Japanese kana
         if current_translations and category == "policy_violation":
             is_kana_reason = any(k in reason for k in ("假名", "片假名", "平假名", "kana", "日文假名"))
-            if is_kana_reason and not mandatory_kana_cleanup:
+            if is_kana_reason and not mandatory_kana_cleanup and not mandatory_masking_cleanup:
                 continue
 
-        if mandatory_kana_cleanup:
+        if mandatory_kana_cleanup or mandatory_masking_cleanup:
             category = "policy_violation"
             item["severity"] = "critical"
             item["auto_apply"] = True
-        if is_new_contract or mandatory_kana_cleanup:
+        if is_new_contract or mandatory_kana_cleanup or mandatory_masking_cleanup:
             item["category"] = category
         if is_new_contract and (
             category not in OBJECTIVE_CATEGORIES
@@ -117,19 +131,29 @@ def approved_fixes(
         ):
             continue
         # Quality Guardrail: Strictly reject any replacement that contains leftover Japanese kana
-        if has_japanese_kana(replacement):
+        if not is_clear and (has_japanese_kana(replacement) or has_masking_symbol(replacement)):
             continue
         conf = float(item.get("confidence", 0) or 0)
         is_consensus = bool(item.get("consensus"))
+        clear_allowed = bool(
+            is_clear
+            and current_text.strip()
+            and category in {"omission", "addition"}
+            and str(item.get("severity", "")) in {"critical", "major"}
+            and conf >= 0.95
+            and is_consensus
+            and item.get("auto_apply") is True
+        )
         # Category-based Dynamic Threshold: Objective categories qualify at 0.80+, consensus auto-qualifies
         req_threshold = 0.8 if (is_new_contract and category in OBJECTIVE_CATEGORIES) else threshold
-        meets_approval_threshold = mandatory_kana_cleanup or is_consensus or (
+        meets_approval_threshold = mandatory_kana_cleanup or mandatory_masking_cleanup or is_consensus or (
             (autonomous or item.get("auto_apply") is True)
             and conf >= req_threshold
         )
-        if meets_approval_threshold and replacement:
-            item["approved_translation"] = replacement
-            item["replacement"] = replacement
+        if (meets_approval_threshold and replacement) or clear_allowed:
+            item["operation"] = operation
+            item["approved_translation"] = "" if is_clear else replacement
+            item["replacement"] = "" if is_clear else replacement
             approved.append(item)
     return approved
 
@@ -161,10 +185,10 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
             continue
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         item["category"] = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
-        if rep and has_japanese_kana(rep):
+        if rep and (has_japanese_kana(rep) or has_masking_symbol(rep)):
             item["auto_apply"] = False
             item["confidence"] = min(float(item.get("confidence", 0) or 0), 0.3)
-            item["invalid_reason"] = "修正译文中残留未翻译日文假名，已拦截并禁用自动写回"
+            item["invalid_reason"] = "修正译文中残留日文假名或伏字遮掩符号，已拦截并禁用自动写回"
         sanitized_fixes.append(item)
     normalized["fixes"] = sanitized_fixes
 
@@ -233,9 +257,10 @@ def verify_applied_fixes(manifest: dict[str, Any], fixes: list[dict[str, Any]]) 
     mismatches: list[str] = []
     for fix in fixes:
         item_id = str(fix.get("id", ""))
+        is_clear = str(fix.get("operation", "replace")) == "clear"
         expected = str(fix.get("approved_translation", "") or fix.get("replacement", "")).strip()
         actual = str(paragraphs.get(item_id, {}).get("translated", "")).strip()
-        if not item_id or not expected or actual != expected:
+        if not item_id or (is_clear and actual) or (not is_clear and (not expected or actual != expected)):
             mismatches.append(item_id or "<empty>")
     if mismatches:
         raise ValueError(f"应用修复后 manifest 未验证通过：{', '.join(mismatches)}")

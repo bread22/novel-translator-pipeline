@@ -35,6 +35,12 @@
           "title": "Replacement",
           "type": "string"
         },
+        "operation": {
+          "default": "replace",
+          "enum": ["replace", "clear"],
+          "title": "Operation",
+          "type": "string"
+        },
         "auto_apply": {
           "default": false,
           "title": "Auto Apply",

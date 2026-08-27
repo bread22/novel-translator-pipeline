@@ -14,7 +14,7 @@ from translator.glossary.lifecycle import stable_term_id
 from translator.glossary.taxonomy import canonical_category, category_tier, CategoryTier
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.review.models import normalize_review_for_display
-from translator.review.reviewer import OBJECTIVE_CATEGORIES, OBJECTIVE_SEVERITIES, has_japanese_kana
+from translator.review.reviewer import OBJECTIVE_CATEGORIES, OBJECTIVE_SEVERITIES, has_japanese_kana, has_masking_symbol
 from translator.web.models import (
     BookMemoryResponse,
     GlossaryCreateRequest,
@@ -43,11 +43,15 @@ def _chapter_files(directory: Path, suffix: str = "") -> dict[str, Path]:
 def _not_applied_reason(fix: dict[str, Any], *, apply_disabled: bool) -> str:
     if fix.get("invalid_reason"):
         return f"审阅结果校验未通过：{fix['invalid_reason']}"
+    if fix.get("operation") == "clear":
+        return "清空重复段落需要双审一致、95% 置信度和自动应用标记"
     replacement = str(fix.get("replacement") or fix.get("approved_translation") or "").strip()
     if not replacement:
         return "审阅器没有提供可写回的修正译文"
     if has_japanese_kana(replacement):
         return "建议译文仍含日文假名，写回安全校验已拦截"
+    if has_masking_symbol(replacement):
+        return "建议译文仍含伏字或遮掩符号，写回安全校验已拦截"
     category = str(fix.get("category", ""))
     severity = str(fix.get("severity", ""))
     if category not in OBJECTIVE_CATEGORIES:

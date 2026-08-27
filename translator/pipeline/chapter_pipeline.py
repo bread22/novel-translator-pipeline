@@ -834,14 +834,29 @@ class IterativePipeline:
         if self.apply:
             if fixes:
                 self._checkpoint()
+                replacement_fixes = [item for item in fixes if item.get("operation", "replace") != "clear"]
+                clear_fixes = [item for item in fixes if item.get("operation") == "clear"]
                 try:
-                    applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(fixes_path))
+                    if replacement_fixes:
+                        tool_fixes_path = fixes_path
+                        if clear_fixes:
+                            tool_fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-replacements.json"
+                            write_json(tool_fixes_path, {"book": self.book, "items": replacement_fixes})
+                        applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(tool_fixes_path))
                 except Exception:
                     manifest_data = read_json(self.manifest)
                     p_map = paragraph_map(manifest_data)
-                    for item in fixes:
+                    for item in replacement_fixes:
                         if item.get("id") in p_map and item.get("replacement"):
                             p_map[item["id"]]["translated"] = item["replacement"]
+                    write_json(self.manifest, manifest_data)
+                    applied_fixes = {"status": "ok", "summary": {"applied": len(replacement_fixes)}}
+                if clear_fixes:
+                    manifest_data = read_json(self.manifest)
+                    p_map = paragraph_map(manifest_data)
+                    for item in clear_fixes:
+                        if item.get("id") in p_map:
+                            p_map[item["id"]]["translated"] = ""
                     write_json(self.manifest, manifest_data)
                     applied_fixes = {"status": "ok", "summary": {"applied": len(fixes)}}
             manifest_after_fixes = read_json(self.manifest)

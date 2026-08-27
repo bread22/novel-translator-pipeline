@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from translator.review.reviewer import approved_fixes, has_japanese_kana
+from translator.review.reviewer import approved_fixes, has_japanese_kana, has_masking_symbol, verify_applied_fixes
 
 
 class ReviewerObjectiveValidationTests(unittest.TestCase):
@@ -106,6 +106,23 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         approved = approved_fixes(fixes, current_translations=current_translations)
         self.assertEqual(len(approved), 1)
         self.assertEqual(approved[0]["replacement"], "高桥老师走了进来。")
+
+    def test_approve_masking_symbol_cleanup_but_reject_masked_replacement(self) -> None:
+        current = {"p1": "术语×残留"}
+        good = {"id": "p1", "category": "policy_violation", "severity": "critical", "confidence": 0.95,
+                "reason": "原文伏字/遮掩符号未还原", "replacement": "完整术语", "auto_apply": True}
+        bad = {**good, "replacement": "术语○残留"}
+        self.assertTrue(has_masking_symbol(current["p1"]))
+        self.assertEqual([x["id"] for x in approved_fixes([good], current_translations=current)], ["p1"])
+        self.assertEqual(approved_fixes([bad], current_translations=current), [])
+
+    def test_consensus_duplicate_paragraph_can_be_cleared_and_verified(self) -> None:
+        fix = {"id": "p1", "category": "addition", "severity": "major", "confidence": 0.98,
+               "reason": "与上一段完全重复", "replacement": "", "operation": "clear",
+               "auto_apply": True, "consensus": True}
+        approved = approved_fixes([fix], current_translations={"p1": "重复译文"})
+        self.assertEqual([x["id"] for x in approved], ["p1"])
+        verify_applied_fixes({"chapters": [{"paragraphs": [{"id": "p1", "translated": ""}]}]}, approved)
 
 
 if __name__ == "__main__":

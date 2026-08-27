@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -73,7 +73,7 @@ class ChapterFix(StrictModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str = ""
     replacement: str = ""
-    operation: str = "replace"
+    operation: Literal["replace", "clear"] = "replace"
     auto_apply: bool = False
     approved_translation: str | None = None
     consensus: bool | None = None

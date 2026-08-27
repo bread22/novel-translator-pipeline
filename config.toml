@@ -5,13 +5,13 @@ translation_policy = "docs/prompts/france-shoin-90s-classic.md"
 [roles]
 primary_translator = "nemotron"
 fallback_translators = [
-    "deepseek",
+    "nemotron-3-super",
     "gemini_lite",
 ]
-fallback_translator = "deepseek"
+fallback_translator = "nemotron-3-super"
 secondary_fallback_translator = "gemini_lite"
 reviewer = "nemotron"
-secondary_reviewer = "deepseek"
+secondary_reviewer = "nemotron-3-super"
 dual_review = true
 fallback_reviewers = []
 
@@ -26,6 +26,7 @@ api_key = "$NVIDIA_API_KEY"
 
 [providers.nemotron.chat_template_kwargs]
 thinking = false
+enable_thinking = false
 
 [providers.gemini_lite]
 type = "openai"
@@ -117,6 +118,29 @@ model = "deepseek-ai/deepseek-v4-flash-0731"
 context_tokens = 131072
 timeout = 600
 api_key = "$ONLINE_API_API_KEY"
+
+[providers.step-3_7-flash]
+type = "openai"
+model = "stepfun-ai/step-3.7-flash"
+base_url = "https://integrate.api.nvidia.com/v1"
+temperature = 0.3
+context_tokens = 262000
+timeout = 600
+api_key = "$NVIDIA_API_KEY"
+
+[providers.nemotron-3-super]
+type = "openai"
+model = "nvidia/nemotron-3-super-120b-a12b"
+base_url = "https://integrate.api.nvidia.com/v1"
+temperature = 0.3
+context_tokens = 1000000
+timeout = 600
+thinking = false
+api_key = "$NVIDIA_API_KEY"
+
+[providers.nemotron-3-super.chat_template_kwargs]
+thinking = false
+enable_thinking = false
 
 [pipeline]
 max_cycles = 1000

@@ -77,7 +77,9 @@ class OpenAIProvider(BaseProvider):
         self.chat_template_kwargs = dict(config.get("chat_template_kwargs", {}))
         self.extra_body = dict(config.get("extra_body", {}))
         if "thinking" in config:
-            self.chat_template_kwargs["thinking"] = bool(config["thinking"])
+            is_thinking = bool(config["thinking"])
+            self.chat_template_kwargs["thinking"] = is_thinking
+            self.chat_template_kwargs["enable_thinking"] = is_thinking
 
     def _make_headers(self) -> dict[str, str]:
         # Always check fresh os.environ if env var is configured
@@ -103,7 +105,7 @@ class OpenAIProvider(BaseProvider):
             status = int(response.status)
         return raw, status, None
 
-    def health_check(self, timeout: int = 15) -> dict[str, Any]:
+    def health_check(self, timeout: int = 60) -> dict[str, Any]:
         if self.raw_key and self.raw_key.startswith("$"):
             self.api_key = os.environ.get(self.raw_key[1:], "")
         is_local = "127.0.0.1" in self.base_url or "localhost" in self.base_url
@@ -123,10 +125,16 @@ class OpenAIProvider(BaseProvider):
             "只输出合规 JSON 对象，格式为 {\"items\":[{\"id\":\"__healthcheck__\",\"text\":\"译文\"}]}。"
             "不要输出 Markdown、解释或 JSON 之外的文字。"
         )
+        effective_timeout = max(timeout, 120) if not is_local else timeout
         try:
-            items, result = self.translate(payload, system_prompt, max_tokens=128, timeout=timeout)
+            items, result = self.translate(payload, system_prompt, max_tokens=512, timeout=effective_timeout)
             if result.get("status") != "ok" or len(items) != 1 or items[0].get("id") != "__healthcheck__":
-                err = result.get("error") or result.get("reason") or "healthcheck response invalid"
+                http_status = result.get("http_status")
+                raw_resp = result.get("raw_response", "")
+                if http_status:
+                    err = f"HTTP {http_status}: {raw_resp[:200]}"
+                else:
+                    err = result.get("error") or result.get("reason") or "healthcheck response invalid"
                 return {
                     "name": f"provider:{self.name}",
                     "status": "error",
@@ -235,6 +243,8 @@ class OpenAIProvider(BaseProvider):
         choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
         finish_reason = str(choice.get("finish_reason", "")).casefold() or None
         content = choice.get("message", {}).get("content", "") if isinstance(choice.get("message"), dict) else ""
+        if not content and isinstance(choice.get("message"), dict):
+            content = str(choice.get("message", {}).get("reasoning_content", "") or "")
         if isinstance(content, dict):
             content = json.dumps(content, ensure_ascii=False)
 

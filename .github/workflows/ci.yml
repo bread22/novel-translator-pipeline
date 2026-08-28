@@ -130,4 +130,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-evidence
-          path: artifacts/release/0.3.0/*
+          path: artifacts/release/0.3.1/*

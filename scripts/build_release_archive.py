@@ -13,9 +13,26 @@ from translator.version import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_ENTRIES = [
-    "translator", "scripts", "schemas", "docs", "frontend/dist",
+    "translator", "scripts", "schemas", "docs",
     "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml", "config.toml", ".env.example",
 ]
+
+
+def copy_release_tree(package_root: Path) -> None:
+    """Copy tracked release inputs plus the separately verified frontend build."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", *RELEASE_ENTRIES],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.decode().split("\0")
+    for relative in (item for item in tracked if item):
+        source = ROOT / relative
+        destination = package_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    shutil.copytree(ROOT / "frontend" / "dist", package_root / "frontend" / "dist")
 
 
 def main() -> int:
@@ -34,14 +51,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as temporary:
         package_root = Path(temporary) / f"novel-translator-pipeline-{version}"
         package_root.mkdir()
-        for relative in RELEASE_ENTRIES:
-            source = ROOT / relative
-            destination = package_root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
-                shutil.copytree(source, destination)
-            elif source.is_file():
-                shutil.copy2(source, destination)
+        copy_release_tree(package_root)
         archive_base = args.output_dir / package_root.name
         shutil.make_archive(str(archive_base), "gztar", root_dir=package_root.parent, base_dir=package_root.name)
         shutil.make_archive(str(archive_base), "zip", root_dir=package_root.parent, base_dir=package_root.name)

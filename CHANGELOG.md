@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2026-08-27
+
+### Added
+- 引入 Glossary Automation v3：术语分类、证据门禁、冲突/修订生命周期、名称校验、上下文投影、回填与迁移工具。
+- 为审阅加入按字符预算的滚动上下文分块、双审阅状态与可观测 fallback 路由，并补充 EPUB 元数据注入。
+
+### Fixed
+- 强化任务、队列、删除、重置、导出和并发文件写入的事务性、持久化与终态一致性。
+- 修复浏览器认证链、跨线程 SSE 唤醒与历史恢复、Reader/Knowledge canonical 状态、Settings 加载和 policy 回滚。
+- 收紧审阅 schema、日文假名残留与人名术语校验，避免无效审阅修复和术语污染。
+
+### Quality
+- 加入 Python 3.14 支持、真实 FastAPI/Playwright 冒烟、发布证据生成、前后端契约检查及专项 QA 回归。
+- 故障路径测试现在显式断言预期 console 日志，成功测试输出不再混入预期错误。
+
 ## [0.3.0] - 2026-08-23
 
 ### Changed

@@ -1,7 +1,7 @@
 # Novel Translator Studio (Novel Translator Pipeline)
 
 [![CI](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](CHANGELOG.md)
 [![Python 3.10–3.14](https://img.shields.io/badge/python-3.10%E2%80%933.14-blue.svg)](https://www.python.org/downloads/)
 [![Node 20](https://img.shields.io/badge/node-20-339933.svg)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/react-19-61dafb.svg)](https://react.dev/)

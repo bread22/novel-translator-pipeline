@@ -10,7 +10,7 @@ frontend/playwright-report/
 .env
 .env.*
 !.env.example
-source/*.epub
+source/*
 chapter-*.txt
 artifacts/
 reports/
@@ -24,3 +24,7 @@ node_modules/
 *.egg-info/
 dist/
 release/
+.ruff_cache/
+.mypy_cache/
+.agents/
+.codex/

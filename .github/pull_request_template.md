@@ -12,5 +12,9 @@
 - [ ] 🧪 测试用例 (Tests)
 
 ## 验证与测试 (Verification)
-- [ ] 已通过全量单元测试 `python3 -m unittest discover -s tests -v`
-- [ ] 已通过 Python 语法编译检查 `python3 -m py_compile translator/**/*.py scripts/*.py tests/*.py`
+- [ ] 后端测试通过：`.venv/bin/python -m pytest -q`
+- [ ] Python 质量门禁通过：`.venv/bin/ruff check translator scripts tests` 与 `.venv/bin/mypy translator`
+- [ ] API/版本契约通过：`.venv/bin/python scripts/check_frontend_api_contract.py` 与 `.venv/bin/python scripts/check_version_consistency.py`
+- [ ] 前端测试与构建通过：`cd frontend && npm run typecheck && npm run lint && npm test && npm run build`
+- [ ] 涉及用户流程时已运行：`cd frontend && npm run test:e2e`
+- [ ] 文档、迁移、配置或发布行为已同步更新 README/CHANGELOG/对应规范

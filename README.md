@@ -5,107 +5,149 @@
 [![Python 3.10–3.14](https://img.shields.io/badge/python-3.10%E2%80%933.14-blue.svg)](https://www.python.org/downloads/)
 [![Node 20](https://img.shields.io/badge/node-20-339933.svg)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/react-19-61dafb.svg)](https://react.dev/)
-[![Tailwind CSS v4](https://img.shields.io/badge/tailwind-v4-38bdf8.svg)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Novel Translator Studio** 是日文轻小说/网络小说全自动 AI 翻译流水线与长程一致性审阅工坊。本项目基于 [`novel-translator`](https://github.com/OYcedar/novel-translator) 提供的基础解包能力，构建了完整的全自动生命周期编排、大模型并发调度、敏感词二分降级容灾、两级备用救回（Two-Level Fallback）、双盲章节一致性审阅与长程事实记忆追踪，并提供世界一流的 **「独立出版杂志 (Editorial Mag)」** 视觉交互工作台。
+**Novel Translator Studio** 是面向日文轻小说与网络小说的 AI 翻译、双审阅、术语治理和 EPUB 交付流水线。项目以 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 作为书籍注册与导出运行时，在本仓库内统一实现 Provider 路由、`JobManager` 队列、章节流水线、Glossary v3、长程记忆、FastAPI/SSE 服务和 React 工作台。
 
----
+当前稳定版本：**[v0.3.1](https://github.com/bread22/novel-translator-pipeline/releases/tag/v0.3.1)**。
 
-## 🎨 视觉美学：独立出版杂志 (Editorial Mag)
+## 核心能力
 
-Studio 采用考究高雅的独立出版杂志风格，消除常规 AI 仪表盘的暗黑荧光压迫感：
-- **纸张与墨水基底**：温暖精致的出版暖白瓷纸底色（`#FAF9F6`），搭配深邃墨水黑（`#1A1A1A`）与碳素石墨灰（`#4A4A4A`）。
-- **典雅排版与字体**：标题全面引入 `Noto Serif SC` / `Zen Old Mincho` 经典衬线书体；正文使用开阔通透的 `Inter`；版次、Token 统计与代码使用精准克制的 `Space Grotesk` / `Fira Code` 等宽字体。
-- **出版印章与宝蓝点缀**：沉稳深邃的皇家宝蓝（`#1D4ED8`）按键与焦点，辅以 `EDITION · 2026` 独立出版印章与 `#1` `#2` 印刷序号标。
+### 统一任务与队列
 
----
+- 单书 Studio 和批量队列共用唯一 `translator/core/job_manager.py`，同一本书只保留一个活动任务。
+- 支持 1–4 个并发槽、排位调整、队列暂停、任务 checkpoint 暂停/继续、取消、失败重试和历史清理。
+- `output/jobs/job_state.v2.json` 保存队列镜像；服务重启后将中断任务转换为 `recovery_pending` 并按队列策略恢复。
+- 删除、重置、导出和 manifest/glossary 并发写入使用锁、临时文件、原子替换和回滚保护。
 
-## 🌟 五大核心模块与功能
+### 翻译与多级 Fallback
 
-### 1. 任务调度中心 (Queue & Asset Hub)
-- **已注册书籍资产池**：书籍元数据总览（章节数、已译段落数、进度条），支持一键加入队列、全部未完结一键入队、重置翻译记忆、导出 EPUB 与彻底删除。
-- **自由拖拽调度队列**：可视化拖拽抓手（`⠿`）调整执行次序，支持置顶、上移、下移与移出队列。
-- **并发槽位与待命控制**：支持 1~4 本书籍动态并行槽位控制；书籍加入队列后处于待命暂停状态，支持调序完毕后手动一键「启动队列」。
-- **历史记录与失败重试**：已完结书籍快速直达阅读器；异常中断书籍一键「重试」重新入队。
+- 主译和备用角色与 Provider 类型解耦，支持 OpenAI 兼容 HTTP、Antigravity、OpenCode 和 Codex。
+- 翻译窗口按自然段组织；失败时按 `max_provider_split_depth` 自适应拆分，再按 `fallback_translators` 顺序处理剩余 ID。
+- `split_on_content_filter=false` 时内容过滤直接进入备用链，避免无意义地重复触发同一 Provider。
+- 每段最终来源、救回层级和诊断写入 `translation-provenance.json` 与报告。
 
-### 2. 翻译控制台 (Live Translation Studio)
-- **模型路由拓扑大屏**：实时可视化主译（Primary）、一级备用（Fallback #1）、二级备用（Fallback #2）及双审阅者（Dual Reviewer）路由状态与救回段落统计。
-- **动态 Policy 规范切换**：在控制台直接为当前翻译任务选择不同的文学提示词规范（如情色小说规范、通用小说规范、轻小说规范等）。
-- **SSE 实时事件瀑布流**：全量推送章节启动、批次完成、全书进度、降级触发与审阅修复事件；当前页面会话按书分类保留历史，支持过滤与手动清空。
+### 字符预算滚动审阅
 
-### 3. 双语阅读器 (Bilingual Reader)
-- **目录索引 (TOC)**：清晰展示全书章节列表与完成状态指示。
-- **段落级精细对照**：上方日文原文衬线排版，下方中文译文纸面排版；清晰标注段落 ID、翻译 Provider 与容灾救回来源。
-- **人工原地校对与单段重译**：支持直接在阅读器中点击「编辑」修改译文并即刻写回工作区；支持单段点击「重译」重新调用主译模型。
-- **章节质检审阅报告**：折叠面板展示本章一致性审阅报告、长程叙事摘要及所有修正缺陷清单（包含修正原因、被替换内容与新译文）。
+- 章节审阅按源文字符预算切块，只在自然段边界切分。
+- 每块携带可配置的前后文段落；新发现的 glossary、memory 与 chapter state 会滚动传给后续块。
+- 可启用双 Reviewer 并发审阅、显式 Reviewer fallback、自适应二分重试与前文定向回查。
+- `checked_ids` 必须覆盖目标段落；自动写回还需通过类别、严重度、置信度、日文假名残留和 no-op 守卫。
 
-### 4. 记忆与术语库 (Knowledge Hub)
-- **动态沉淀术语表 (Glossary)**：展示由审阅模型在章节推进时自动提取并合并的专有名词、统一译名、置信度与出现章节，支持手动添加自定义术语。
-- **角色长程档案 (Characters)**：提取全书人物名称、别名、角色定位与人物画像。
-- **世界观设定 (World Settings)**：沉淀作品独特的技能、道具、势力与世界观解释。
-- **全书质检审计报告 (Audit Reports)**：汇总各章节审阅发现的客观问题数与修复写回明细。
+### Glossary Automation v3
 
-### 5. 模型路由与提示词规范管理 (Settings & Prompt Manager)
-- **AI Provider 可视化管理器**：直观配置与增删 OpenAI 兼容接口（DeepSeek、SiliconFlow、OpenRouter、LM Studio、Ollama 等）、Antigravity CLI、OpenCode CLI 与 Codex CLI。
-- **一键并发连通性测试 (Preflight Probe)**：并发探测所有已配置模型的网络可达性、API 鉴权与往返延迟（ms）。
-- **提示词规范管理器 (Prompt Policy Manager)**：在线查看、新建、编辑与保存 Markdown 翻译规范及审阅规范，支持一键「设为系统全局默认规范」。
+- `output/<book>/data/glossary.json` 是术语事实源，schema version 为 `3.0`。
+- 词条经过 taxonomy、形态、人名映射、证据和置信度校验后进入 `candidate`、`active`、`disputed`、`revised` 或 `retired` 生命周期。
+- 翻译前可用轻量 Provider 预提取实体；翻译时只投影与当前上下文相关的 active 词条。
+- 冲突、修订、证据和 provenance 保留在 v3 文档；`novel-translator-terms.json` 仅作为上游兼容投影。
+- 支持 v2→v3 dry-run 迁移、历史 review delta replay 和受控回填。
 
----
+### Web Studio
 
-## 🚀 快速启动
+1. **Queue & Asset Hub**：上传 EPUB/TXT、资产统计、入队、调序、暂停、重试、导出、重置和删除。
+2. **Live Studio**：主译/Fallback/双审拓扑、阶段进度、策略切换和按书事件瀑布。
+3. **Bilingual Reader**：章节目录、日中对照、人工校对、单段重译和审阅报告。
+4. **Knowledge Hub**：Glossary v3、人物记忆、世界观、冲突/报告与人工术语增量。
+5. **Settings**：Provider、角色、密钥引用、Prompt Policy、配置备份和连通性预检。
 
-### 方式一：启动 Web Studio 工作台 (强烈推荐)
+SSE 用于通知和事件显示，REST snapshot 是最终状态校准来源。服务端事件历史保存在每本书的 `data/events.jsonl`，浏览器断线重连后会刷新 books、queue 和 task snapshot。
+
+## 系统要求
+
+- Python **3.10–3.14**
+- Node.js **20**（仅从源码构建前端时需要）
+- Git
+- 可用的 [`novel-translator`](https://github.com/OYcedar/novel-translator) checkout 和 Python 环境
+- 至少一个已配置的翻译 Provider；双审阅模式需要两个不同 Reviewer
+
+## 安装
+
+### 使用 GitHub Release 整包
+
+整包包含已验证的 `frontend/dist`，运行时不需要 Node：
 
 ```bash
-# 1. 克隆仓库并进入目录
-git clone https://github.com/bread22/novel-translator-pipeline.git
-cd novel-translator-pipeline
-
-# 2. 创建并激活 Python 虚拟环境 (Python 3.10–3.14)
+VERSION=0.3.1
+curl -LO "https://github.com/bread22/novel-translator-pipeline/releases/download/v${VERSION}/novel-translator-pipeline-${VERSION}.tar.gz"
+curl -LO "https://github.com/bread22/novel-translator-pipeline/releases/download/v${VERSION}/SHA256SUMS-${VERSION}.txt"
+sha256sum -c SHA256SUMS-${VERSION}.txt --ignore-missing
+tar -xzf novel-translator-pipeline-${VERSION}.tar.gz
+cd novel-translator-pipeline-${VERSION}
 python3 -m venv .venv
-source .venv/bin/activate  # Windows 用户: .venv\Scripts\Activate.ps1
-
-# 3. 安装后端依赖并配置环境变量
+source .venv/bin/activate
 pip install -e .
 cp .env.example .env
-# 可选：在 .env 中填入 DEEPSEEK_API_KEY 等
+```
 
-# 4. 安装并构建前端（Node.js 20）
-cd frontend && npm ci && npm run build && cd ..
+Release 同时提供 zip、Python wheel/sdist 和 release-evidence 包。wheel 适合导入 Python 包；完整 Studio 应使用整包或源码 checkout。
 
-# 5. 准备上游运行时（首次安装）
+### 从源码安装
+
+```bash
+git clone https://github.com/bread22/novel-translator-pipeline.git ~/src/novel-translator-pipeline
+cd ~/src/novel-translator-pipeline
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cp .env.example .env
+cd frontend
+npm ci
+npm run build
+cd ..
+```
+
+### 准备上游运行时
+
+```bash
 git clone https://github.com/OYcedar/novel-translator.git ~/src/novel-translator
 python3 -m venv ~/src/novel-translator/.venv
 ~/src/novel-translator/.venv/bin/pip install -e "$HOME/src/novel-translator[epub]"
 export NOVEL_TRANSLATOR_ROOT="$HOME/src/novel-translator"
 export NOVEL_TRANSLATOR_PYTHON="$HOME/src/novel-translator/.venv/bin/python"
+```
 
-# 6. 启动 Web 工作台（默认只监听 loopback）
+这些变量也可写入 `.env`。未设置时，程序会尝试发现 `~/src/novel-translator` 及其 `.venv`。
+
+## 启动 Web Studio
+
+```bash
 python scripts/start_web.py --port 8000
 ```
 
-打开浏览器访问 **[http://127.0.0.1:8000](http://127.0.0.1:8000)** 即可开始使用。
+默认只监听 `127.0.0.1`。打开 <http://127.0.0.1:8000>。
 
----
-
-### 方式二：CLI 命令行一键批量执行
-
-将待翻译的原始 `.epub` 文件放入 `source/` 目录：
+### 启用管理认证
 
 ```bash
-python scripts/batch_translate.py
+export WEB_AUTH_TOKEN='replace-with-a-random-token'
+python scripts/start_web.py --host 127.0.0.1 --port 8000 --auth-token-env WEB_AUTH_TOKEN
 ```
 
-流水线会自动遍历 `source/` 下所有 EPUB，顺序完成书籍注册、章节翻译、两级降级救回、一致性审阅与横排重构，并在项目根目录的 `translated/` 产出最终成品中文 EPUB。
+首次打开可使用：
 
----
+```text
+http://127.0.0.1:8000/?access_token=replace-with-a-random-token#/queue
+```
 
-### 方式三：CLI 单本书单步执行
+浏览器会把 token 保存在当前 session，并通过 Bearer header、cookie/query token 完成 REST、下载和 EventSource 认证。跨源开发环境使用 `WEB_CORS_ORIGINS` 明确列出允许来源；生产环境不要把服务直接暴露到不受信任网络。
+
+## CLI
+
+### 批量注册并运行
+
+将 `.epub` 放入 `source/`，然后执行：
+
+```bash
+python scripts/batch_translate.py --layout horizontal
+```
+
+该入口会注册书籍并委托统一 `JobManager`；`--stop-on-error` 控制失败后是否暂停后续派发。
+
+### 单本流水线
 
 ```bash
 python scripts/book_pipeline.py \
-  --book 'BOOK_ID' \
+  --book BOOK_ID \
   --name '正式中文书名' \
   --apply \
   --autonomous \
@@ -113,89 +155,161 @@ python scripts/book_pipeline.py \
   --layout horizontal
 ```
 
----
+常用覆盖项包括 `--primary-translator`、`--fallback-translators`、`--reviewer`、`--secondary-reviewer`、`--review-chunk-max-chars`、`--review-context-before`、`--review-context-after` 和 `--review-backtrack`。
 
-## ⚙️ 核心配置说明 (`config.toml`)
+### 独立章节审阅
 
-项目参数在根目录 `config.toml` 中集中定义，亦可在 Web 工作台的「模型路由与设置」中可视化调整：
+```bash
+python scripts/chapter_review.py \
+  --book BOOK_ID \
+  --name '正式中文书名' \
+  --chapter c0001 \
+  --apply \
+  --autonomous
+```
+
+## 配置
+
+`config.toml` 的关键部分：
 
 ```toml
 [paths]
 output_root = "output"
-translation_policy = "docs/prompts/erotic-novel-policy.md"
+translation_policy = "docs/prompts/france-shoin-90s-classic.md"
 
 [roles]
-primary_translator = "nemotron"                         # 主译主力模型
-fallback_translators = ["gemini_lite", "deepseek"]      # 两级降级备用链
-reviewer = "nemotron"                                   # 章节一致性审阅模型
-secondary_reviewer = "gemini_lite"                      # 双盲副审模型
-dual_review = true                                      # 开启双模型交叉审阅
+primary_translator = "nemotron"
+fallback_translators = ["nemotron-3-super", "gemini_lite"]
+reviewer = "nemotron"
+secondary_reviewer = "nemotron-3-super"
+dual_review = true
+fallback_reviewers = []
 
-[providers.nemotron]
-type = "openai"
-base_url = "https://integrate.api.nvidia.com/v1"
-model = "nvidia/llama-3.1-nemotron-70b-instruct"
-api_key = "$NVIDIA_API_KEY"
-temperature = 0.3
-context_tokens = 131072
+[pipeline]
+primary_batch_max_chars = 1500
+max_provider_split_depth = 2
+split_on_content_filter = false
+translation_max_tokens = 8192
+review_chunk_min_chars = 1000
+review_chunk_max_chars = 1500
+review_context_before = 3
+review_context_after = 3
+review_backtrack_enabled = true
+review_backtrack_min_confidence = 0.8
 
-[providers.deepseek]
-type = "openai"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key = "$DEEPSEEK_API_KEY"
-context_tokens = 1048576
+[queue]
+source_root = "source"
+stop_on_error = false
+layout = "horizontal"
 ```
 
----
+Provider 的 `api_key` 应写成 `$ENV_NAME` 引用，真实值放在 `.env`。Web Settings 保存配置时会校验 schema、生成时间戳备份，并以原子方式提交 `config.toml` 与 `.env`。
 
-## 🧪 自动化测试
+## 数据与权威源
 
-项目具备后端、前端和浏览器自动化测试套件；持续结果以页首 CI badge 为准，不在文档中固定测试数量或耗时：
+- 上游正文：`$NOVEL_TRANSLATOR_ROOT/data/books/<book_id>/manifest.json`
+- 工作区：`output/<safe-book-name>/`
+  - `data/glossary.json`：Glossary v3 事实源
+  - `data/novel-translator-terms.json`：上游兼容投影
+  - `data/book_memory.json`：长程人物/世界观记忆
+  - `data/chapter_states/`：章节叙事状态
+  - `data/events.jsonl`：服务端事件历史
+  - `reviews/`、`reports/`、`snapshots/`：审阅证据
+- 任务状态：`output/jobs/job_state.v2.json`
+- 最终交付：工作区中文 EPUB 与 `translated/` 副本
+
+## 迁移、备份与回滚
+
+所有迁移默认 dry-run；检查报告后再加 `--apply`：
 
 ```bash
-.venv/bin/python -m pytest -q --cov=translator --cov-report=json:coverage.json --cov-fail-under=80
-.venv/bin/python scripts/check_coverage_thresholds.py coverage.json
-.venv/bin/ruff check translator scripts tests
-.venv/bin/mypy translator
-cd frontend
-npm run typecheck && npm run lint && npm test && npm run build && npm run test:e2e
+python scripts/migrate_glossary_v3.py --output-root output
+python scripts/migrate_glossary_v3.py --output-root output --apply
+python scripts/replay_glossary_v3.py --output-root output
+python scripts/replay_glossary_v3.py --output-root output --apply
+python scripts/migrate_memory_v2.py --output-root output
+python scripts/migrate_review_v2.py --output-root output
+python scripts/migrate_queue_state_v2.py --output-root output
 ```
 
-## 🔐 备份、迁移与恢复
+Glossary v3 初始化会自动迁移旧 schema 并保留备份。回退应用版本前，应备份整个 `output/`、上游 manifests、`config.toml` 和 `.env`。
 
-- 配置保存采用校验后原子替换；成功替换前保留 `config.toml.bak.<UTC timestamp>`，`.env` 始终以 `0600` 权限写入。Provider 密钥仅在配置中使用 `$ENV_NAME` 引用。
-- 配置运维命令：`python scripts/config.py validate`、`python scripts/config.py list-backups`、`python scripts/config.py restore --backup config.toml.bak.<timestamp>`。
-- Glossary v1 → v2 默认先 dry-run：`python scripts/migrate_glossary_v2.py --output-root output`；确认报告后追加 `--apply`，每本书会生成 `glossary.json.v1.bak`。
-- Queue、Memory、Review 同样先 dry-run：分别运行 `scripts/migrate_queue_state_v2.py`、`scripts/migrate_memory_v2.py`、`scripts/migrate_review_v2.py`；检查 hash、冲突与 warning 后追加 `--apply`。旧文件会按状态文件或每本书独立备份，校验失败的 review 保持原样并在 API 中返回 `migration_warning`。
-- 队列状态保存在 `output/jobs/job_state.v2.json`；重启时活动任务转为 `recovery_pending` 并重新调度。回退旧版本前先备份整个 `output/jobs/`。
-- 前端 `dist/` 是构建产物，不纳入 Git；正式发布包由 `python scripts/build_release_archive.py` 在校验引用后生成。
+配置命令：
 
----
+```bash
+python scripts/config.py validate
+python scripts/config.py list-backups
+python scripts/config.py restore --backup config.toml.bak.<timestamp>
+```
 
-## 📁 目录结构
+## 测试与发布验证
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check translator scripts tests
+.venv/bin/mypy translator
+.venv/bin/python scripts/check_frontend_api_contract.py
+.venv/bin/python scripts/check_version_consistency.py
+
+cd frontend
+npm run typecheck
+npm run lint
+npm test
+npm run build
+npm run test:e2e
+```
+
+真实服务 Playwright：
+
+```bash
+E2E_REAL=1 \
+E2E_BASE_URL=http://127.0.0.1:8000 \
+E2E_HEALTH_URL=http://127.0.0.1:8000/health \
+npm run test:e2e
+```
+
+认证链路再设置 `E2E_AUTH=1` 和 `E2E_AUTH_TOKEN`，并让后端使用相同的 `WEB_AUTH_TOKEN`。
+
+发布归档与证据：
+
+```bash
+python scripts/build_release_archive.py
+python scripts/generate_release_evidence.py
+```
+
+归档器只复制 Git 跟踪的源码/文档以及经过引用校验的 `frontend/dist`，不会带入本地缓存、`__pycache__` 或未跟踪 QA 草稿。
+
+## 目录结构
 
 ```text
 novel-translator-pipeline/
-├── frontend/                      # React 19 + Vite + Tailwind v4 前端工程
-│   ├── src/components/            # 报头、导航栏等共享组件
-│   ├── src/views/                 # 任务调度、控制台、阅读器、知识库、设置等视图
-│   └── dist/                      # npm run build 生成的生产静态包（不纳入 Git）
-├── translator/                    # 核心 Python 后端框架
-│   ├── core/                      # Workspace、配置与唯一 JobManager
-│   ├── pipeline/                  # 章节翻译流水线、双审阅器与连通性预检
-│   ├── providers/                 # OpenAI、AGY、OpenCode、Codex 统一适配器
-│   └── web/                       # FastAPI 路由、SSE 广播器与 Web 容器
-├── docs/                          # 架构设计、PRD、降级容灾规范与提示词模板
-├── output/                        # 书籍生命周期工作区副本
-├── source/                        # CLI 批量翻译待处理目录
-├── translated/                    # 最终产出的精排中文 EPUB 交付目录
-├── scripts/start_web.py           # Web Studio 一键启动入口
-└── config.toml                    # 集中式分层配置文件
+├── translator/
+│   ├── core/          # 配置、JobManager、工作区、导出布局和上游工具
+│   ├── glossary/      # v3 taxonomy、验证、生命周期、投影、预提取和回填
+│   ├── pipeline/      # 章节翻译、Fallback、审阅和 finalize
+│   ├── providers/     # OpenAI/Antigravity/OpenCode/Codex 适配器
+│   ├── review/        # 滚动分块、双审、合并、回查和写回守卫
+│   └── web/           # FastAPI、REST、认证、安全头和 SSE
+├── frontend/          # React 19、Vite、Tailwind v4 与 Playwright
+├── schemas/           # 配置、metadata、review 与 glossary JSON Schema
+├── scripts/           # CLI、迁移、预检、发布和证据工具
+├── constraints/       # Python 3.10–3.14 依赖约束
+├── docs/              # 当前规范、历史实施记录和 Prompt Policy
+├── tests/             # 后端、QA、迁移、契约和流水线测试
+├── output/            # 本地工作区与队列状态（忽略）
+├── source/            # 批量输入（忽略）
+├── translated/        # 最终 EPUB 副本（忽略）
+└── release/           # 本地发布产物（忽略）
 ```
 
----
+## 文档入口
 
-## 📄 开源协议 (License)
+- [架构](docs/architecture.md)
+- [Provider Fallback](docs/provider-fallback.md)
+- [审阅与长程记忆](docs/review-plan.md)
+- [Glossary v3 运行说明](docs/glossary-automation-v3-architecture.md)
+- [Changelog](CHANGELOG.md)
 
-本项目基于 [MIT License](LICENSE) 协议开源。
+## License
+
+[MIT License](LICENSE)

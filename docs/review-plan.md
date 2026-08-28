@@ -1,90 +1,80 @@
 # 章节一致性审阅与长程记忆机制
 
-## 1. 架构目标
+> v0.3.1 当前行为；实现位于 `translator/review/` 与 `translator/pipeline/chapter_pipeline.py`。
 
-在保证审阅深度与跨段落长上下文连贯性的同时，最小化高阶模型调用成本，并实现长程记忆追踪与客观事实的自动沉淀。
+## 1. 目标
 
----
+审阅必须覆盖目标段落、利用相邻上下文、持续推进术语/记忆/叙事状态，同时防止模型用主观润色或幻觉破坏有效译文。
 
-## 2. 审阅数据流
+## 2. 字符预算滚动分块
 
-```text
-当前章节翻译完成全部段落
-         ↓
-组装审阅输入 Payload:
-  - 当前章节全部段落 (带稳定 ID)
-  - 翻译策略文档 (Translation Policy)
-  - 全书长程记忆 (Book Memory)
-  - 上一章节状态 (Previous Chapter State)
-  - 动态术语表 (Glossary)
-         ↓
-执行通用 Reviewer 审阅 (OpenCode / Codex / Antigravity / Online API)
-         ↓
-产出结构化审阅结果:
-  ├── checked_ids (全量覆盖校验)
-  ├── fixes (译文缺陷与修复建议)
-  ├── glossary_delta (术语新增/更新/冲突)
-  ├── memory_delta (角色/世界观/关键事实变更)
-  └── chapter_state (本章关键事实总结与状态演进)
-         ↓
-验证 checked_ids 覆盖全部输入（缺失则自动重试，最多 2 次）
-         ↓
-原子更新并持久化：
-  - data/glossary.json
-  - data/book_memory.json
-  - data/chapter_states/<chapter_id>.json
-  - data/novel-translator-terms.json
-         ↓
-筛选高置信度客观修复 (auto_apply=true, confidence>=0.9, major/critical)
-         ↓
-原子写回 manifest.json 并生成本章审阅报告
+章节按 `review_chunk_min_chars` 与 `review_chunk_max_chars` 形成目标块，仅在自然段边界切分。单个超大段保持完整。每块额外携带：
+
+- `review_context_before` 个前文段落；
+- `review_context_after` 个后文段落；
+- 当前 Glossary 投影；
+- Book Memory；
+- 上一章/上一块 chapter state；
+- translation policy。
+
+只要求 `checked_ids` 覆盖目标块，前后文是只读 context。每块产生的 glossary、memory 和 chapter state 会更新 rolling payload 后再执行下一块。
+
+## 3. Reviewer 路由
+
+- 单审：`reviewer`，失败后只尝试 `fallback_reviewers` 中显式配置的后端。
+- 双审：`reviewer` 与不同的 `secondary_reviewer` 并发独立审阅，随后合并共识、冲突和 reporter 证据。
+- 失败块可按段落自适应二分到 `max_provider_split_depth`；每次 attempt、candidate、chunk、split path 和 timeout 都通过状态事件记录。
+- 取消会停止等待尚未完成的 reviewer，不为已取消任务发布完成事件。
+
+## 4. 输出契约
+
+```json
+{
+  "checked_ids": ["c0001-p00001"],
+  "fixes": [],
+  "context_findings": [],
+  "glossary_delta": {"add": [], "update": [], "conflicts": []},
+  "memory_delta": {"add": [], "update": [], "conflicts": []},
+  "chapter_state": {"summary": "", "important_changes": []}
+}
 ```
 
----
+Schema 与 Pydantic model 必须一致，未知 operation/category、重复或缺失 ID、无效 replacement 都在写回前拒绝。
 
-## 3. 校验与安全写回规则
+## 5. 自动写回守卫
 
-为了防止审阅模型破坏有效译文，自动写回必须严格遵守以下守卫条件：
+一个 fix 只有在全部条件成立时进入写回：
 
-1. **`checked_ids` 全覆盖守卫**：
-   - 审阅输出必须包含 `checked_ids` 列表，且必须 100% 覆盖输入章节的所有段落 ID；
-   - 若出现漏报，流水线自动发起针对性重试。
+1. ID 属于当前章节目标集合；
+2. 属于误译、漏译、幻觉、主客体、指代、术语、事实冲突等客观问题；
+3. 严重度和置信度达到策略门槛，或属于必须清理的确定性日文假名残留；
+4. replacement 非空、不是当前译文的 no-op，并通过 kana/遮罩字符和客观性检查；
+5. 双审合并时满足共识或明确的最小侵入规则；
+6. 写回后再次验证已批准 fix 的实际结果。
 
-2. **客观缺陷修复守卫**：
-   - 仅对属于以下**客观类别**的问题执行自动写回：
-     - `mistranslation`（严重误译）
-     - `omission`（漏译）
-     - `hallucination`（增译幻觉）
-     - `subject_object`（主客体混淆）
-     - `reference`（代词指代错误）
-     - `terminology`（术语不一致）
-     - `fact_conflict`（事实矛盾）
-   - 纯主观润色（如 `style_enhancement`、`explicitness_intensity`）**不进行自动写回**，仅作为审阅建议记录在报告中。
+主观文风、露骨程度和偏好性改写只进入报告。未应用 fix 保留 `not_applied_reason`。
 
-3. **置信度与严重度门槛**：
-   - `confidence >= 0.9` 且 `severity` 为 `major` 或 `critical`。
+## 6. Context finding 与回查
 
-4. **术语与记忆合并冲突守卫**：
-   - 术语和记忆条目新增/更新时，若发现与既有条目冲突，系统不会暴力覆盖，而是记录在 `conflicts` 列表中并保留历史记录。
+后文可报告前文 context 的潜在错误。仅当 `review_backtrack_enabled=true` 且 confidence 达到 `review_backtrack_min_confidence` 时，系统对对应前文 ID 发起定向复核。回查仍执行完整写回守卫，不直接采用后文模型的单方 replacement。
 
----
+## 7. Glossary 与 Memory 合并
 
-## 4. 单章审阅独立命令
+Review delta 先经过确定性 schema/taxonomy/证据校验，再进入 Glossary v3 生命周期或 Memory merge。冲突不直接覆盖；记录 reporter、chapter/paragraph evidence、旧值、新值和修订状态。
 
-除了随流水线自动执行，章节一致性审阅亦可单独运行：
+## 8. 独立命令
 
 ```bash
 python scripts/chapter_review.py \
-  --book 'BOOK_ID' \
+  --book BOOK_ID \
   --name '正式中文书名' \
   --chapter c0001 \
   --apply \
   --autonomous
 ```
 
-参数说明：
-- `--chapter <ID>`：指定审阅单个章节；省略时将按顺序审阅整本书的所有章节；
-- `--global-consistency`：整书全部章节审阅完毕后，执行全书跨章节一致性终审；
-- `--apply`：自动将符合高置信度客观规则的修复写回 `manifest.json`；
-- `--autonomous`：全自动模式；
-- `--reviewer`：临时指定审阅后端（覆盖 `config.toml` 配置）。
+可用参数：`--global-consistency`、`--translation-policy`、`--export`、`--reviewer`。完整 chunk 与双审配置也可由 `book_pipeline.py` 的相应参数覆盖。
+
+## 9. 证据
+
+每章保存 review input/output、checked IDs、原始 fixes、approved fixes、未应用原因、glossary/memory delta、chapter state、snapshot 和 report。报告用于解释决策，manifest 与 workspace 文件仍是权威数据源。

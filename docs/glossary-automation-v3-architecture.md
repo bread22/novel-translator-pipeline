@@ -1,52 +1,81 @@
-# Glossary automation v3 架构与运行说明
+# Glossary Automation v3 架构与运行说明
+
+> 状态：v0.3.1 已发布。本文只保留公开的运行架构、迁移和回滚说明；详细实施记录归入内部阶段文档。
 
 ## 数据边界
 
-- `output/<book>/data/glossary.json` 是唯一事实来源，使用 `schema_version: "3.0"`。
-- `novel-translator-terms.json` 是可删除、可重建的 active-only 投影；翻译 payload 只含 `source/target/category`。
-- 人物经历、关系、剧情和状态继续写入 `book_memory.json`，不进入 glossary `note`。
+- `output/<book>/data/glossary.json`：schema `3.0`，唯一术语事实源。
+- `output/<book>/data/novel-translator-terms.json`：只包含上游翻译需要的 active 术语投影。
+- `output/<book>/data/name-mapping-review.jsonl`：不确定人名映射人工复核队列。
+- `output/<book>/reports/*.json`：每章候选、验证、激活、冲突、修订、回填与注入指标。
+
+顶层保留 `terms`、`conflicts` 和 `revisions`。运行时 reader 允许保留未知 legacy 字段，但模型候选 schema `extra=forbid`。
 
 ## 生命周期
 
-`GlossaryCandidate` 只允许 `source/target/category/confidence/evidence_ids/note`。程序生成 `term_id`、证据统计、状态和时间戳。
+```text
+review/extractor candidate
+  → taxonomy + shape + evidence + confidence validation
+  → candidate
+      ├─ evidence 达标 → active
+      ├─ 冲突 → disputed
+      ├─ 新证据支持修订 → revised / 新 canonical active
+      └─ blocked/无效 → rejected（仅诊断，不进入 active 投影）
+```
 
-- DIRECT 类别：置信度至少 0.92 且有真实原文证据后激活。
-- GATED 类别：两个段落/章节或两个独立 reporter 的证据后激活。
-- BLOCKED 类别在 validator、merge 和 projection 三层拦截；章节审阅仍可通过 `fixes` 修复普通翻译错误。
-- 冲突先记录为 `disputed`；多个独立强证据超过旧译评分后记录 `revisions`，并按 source/旧译匹配历史段落。
+`DIRECT_ALLOWED` 可按确定性规则快速激活；`GATED_ALLOWED` 需要足够且独立的 evidence；`BLOCKED` 不进入翻译术语投影。人名还要处理敬称、字符映射和歧义复核。
 
 ## 日常流水线
 
-1. 章节预提取器按段落分块，逐块重试并按配置尝试 fallback reviewer；每块完成后写入 schema-clean 输出和 checkpoint，失败时保留失败块诊断并继续主翻译。
-2. `BookWorkspace.glossary_path` 通过 `ProviderTranslator(glossary_path=...)` 显式进入当前 payload。
-3. 翻译后章节 reviewer 使用相同的 `apply_glossary_delta` 服务累计证据；reviewer 的兼容字段会在生命周期边界投影为 canonical candidate，`reporters` 只用于证据归属。
-4. target 修订生成 backfill affected/changed/unchanged/failed 记录；失败时章节状态为 `needs_retry`。
+1. 章节翻译前，extractor 对源文自然段分块提取候选；失败 chunk 不丢弃其他成功结果。
+2. lifecycle service 校验候选并合并 evidence、occurrence、chapter/sample/provenance。
+3. projection 根据当前章节/批次文本选择相关 active 词条。
+4. translation payload 使用该投影，不把 disputed/retired/blocked 词条注入模型。
+5. rolling review 产生的 glossary delta 通过同一 lifecycle 合并。
+6. 符合修订规则的 active 词条可触发受控 backfill；只改 source 或旧 target 精确匹配的段落。
 
-证据验证采用“保留有效子集”策略：同一候选的部分证据 ID 不匹配时，保留真实包含 source 的证据，并在章节统计中记录 discarded 数量；全部证据失效时才拒绝候选。
+## 迁移
 
-## v2 迁移和回滚
-
-默认只预览：
+默认 dry-run：
 
 ```bash
 python scripts/migrate_glossary_v3.py --output-root output
+python scripts/migrate_glossary_v3.py --output-root output --book BOOK_DIR
 ```
 
-应用迁移会先创建 `glossary.json.v2.bak`，再原子写入并 reopen 校验：
+应用：
 
 ```bash
-python scripts/migrate_glossary_v3.py --output-root output --book BOOK_ID --apply
+python scripts/migrate_glossary_v3.py --output-root output --apply
 ```
 
-回滚使用迁移报告中的 backup 路径替换 authority 文件，然后删除投影并由 workspace/pipeline 重建。
+apply 前创建 v2 备份，写入临时文件并重新打开验证 v3 schema。`BookWorkspace.initialize()` 遇到旧 schema 时也会执行相同迁移逻辑。
 
-## 诊断字段
+## Replay 与回填
 
-章节报告的 `preextract` 区段记录 extraction_status、failed_chunks 和 extraction_attempts；`glossary` 区段记录 reported、accepted_candidates、activated、blocked、shape_blocked、evidence_total、evidence_valid、evidence_discarded、disputed、revised、实际注入数和 backfill 数；证据只保存 paragraph ID、reporter 和短 note。
-
-历史工作区可先 dry-run 回放已持久化的预提取/审阅输出，再 apply。apply 会备份 authority glossary、重建投影、reopen 校验，翻译正文不写回：
+先检查历史 review delta 通过新 lifecycle 后的结果：
 
 ```bash
-python scripts/replay_glossary_v3.py --output-root output --book BOOK_ID
-python scripts/replay_glossary_v3.py --output-root output --book BOOK_ID --apply
+python scripts/replay_glossary_v3.py --output-root output
+python scripts/replay_glossary_v3.py --output-root output --apply
 ```
+
+回填由 pipeline/service 调用 `translator/glossary/backfill.py`，遵守：
+
+- source 或旧 translation 精确匹配；
+- 只处理受影响 ID；
+- 原子 manifest 写回；
+- 报告 affected/changed/failed；
+- 失败不回退其他已验证词条。
+
+## 诊断指标
+
+Release evidence 和章节报告汇总：`reported`、`candidates`、`rejected`、`shape_blocked`、`category_blocked`、`evidence_total/valid/discarded`、`activated`、`conflicts`、`revisions`、`backfill_affected/changed/failed`、`injected`。
+
+## 回滚
+
+1. 停止相关 worker；
+2. 备份当前 v3 与 manifest；
+3. 恢复迁移生成的 v2 backup；
+4. 使用兼容旧版本运行；
+5. 若只回滚一次错误修订，优先依据 `revisions`/evidence 做定向修复，不整体降级 schema。

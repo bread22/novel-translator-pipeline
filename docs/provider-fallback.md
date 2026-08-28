@@ -1,118 +1,100 @@
-# 两级降级容灾工作流 (Two-Level Fallback Workflow)
+# Provider 与多级 Fallback 工作流
 
-流水线采用**两级降级容灾机制（Two-Level Fallback）**处理大模型的内容安全审查拦截（`content_filter` / `sensitive words` / `safety policy`）、上下文超限与格式截断异常。
+> v0.3.1 当前行为。角色顺序来自 `config.toml`；本文示例不代表必须使用某个商业模型。
 
----
+## 1. 角色与类型
 
-## 1. 核心容灾原理
+角色：
+
+- `primary_translator`
+- `fallback_translators`
+- `reviewer` / `secondary_reviewer`
+- `fallback_reviewers`
+
+Provider 类型：
+
+- `openai`：OpenAI 兼容 HTTP API，包括本地 LM Studio/Ollama/vLLM。
+- `antigravity`：`agy` CLI。
+- `opencode`：`opencode run --format json`。
+- `codex`：Codex CLI schema-constrained execution。
+
+## 2. 翻译失败路由
 
 ```text
-当前章节待翻译批次
-       ↓
-【主译 Primary Translator】(默认: Antigravity / Gemini 3.7 Flash)
-       ↓
-    是否成功？
-    ├── 是 → 原子写入 manifest.json，标记 provider provenance
-    └── 否 (content_filter / 异常)
-           ↓
-    当前批次是否为多段落？
-    ├── 是 (多段落) → 递归二分拆解 (Binary Split) 并重试主译
-    └── 否 (已拆至单段落仍受阻)
-           ↓
-    【一级备用 Fallback #1】(默认: OpenCode 指定模型 / 线上备用 API)
-           ↓
-        是否成功？
-        ├── 是 → 写入 manifest.json，标记 provenance (e.g. antigravity_content_filter_fb1)
-        └── 否 (仍受阻/异常)
-               ↓
-        【二级备用 Fallback #2】(默认: LM Studio 本地无审查模型 / Murasaki-14B)
-               ↓
-            是否成功？
-            ├── 是 → 写入 manifest.json，标记 provenance (e.g. antigravity_content_filter_fb2)
-            └── 否 → 抛出异常暂停流水线，等待人工干预
+目标 batch
+  → Primary
+      ├─ 成功：只写回返回且验证通过的目标 ID
+      └─ 失败/过滤/格式错误
+          ├─ split_on_content_filter=true 且未到深度上限：按段落二分
+          └─ 否：进入 fallback_translators
+                → Fallback #1
+                → Fallback #2 ...
+                → 全部失败：任务 failed；保留已完成 ID 与诊断
 ```
 
-### 关键设计原则
-1. **大窗口优先**：主译优先发送大字符窗口（`primary_batch_max_chars`，默认 4000 字符），最大化利用高智商模型的长上下文理解力；
-2. **递归二分拆解**：遇到敏感词拦截时，不伪造或改写原文，而是二分拆分窗口定位具体敏感段落，未受污染的段落依然由主译高质量完成；
-3. **分级递进救回**：拆至单段落后，顺序尝试一级备用与二级备用；
-4. **精确溯源追踪**：每一段落的最终来源和救回原因均原子写入 `data/translation-provenance.json`，供后续审阅和质量报告统计。
+每次 fallback 只接收仍未完成的 ID。`max_provider_split_depth` 限制递归；单个超大自然段不会被字符切断。来源和失败类型写入 provenance。
 
----
+## 3. Reviewer Fallback
 
-## 2. 配置方式 (`config.toml`)
+Reviewer 不会隐式借用翻译 fallback。只有 `fallback_reviewers` 显式配置的后端会参与审阅恢复。双审的 primary/secondary 各自执行并记录角色、candidate index、attempt、chunk、split path 和 timeout。
 
-所有角色均在根目录 `config.toml` 中集中配置，角色与 Provider 完全解耦：
+## 4. 配置示例
 
 ```toml
 [roles]
-primary_translator = "antigravity"
-fallback_translators = ["opencode", "lmstudio"]
-reviewer = "opencode"
+primary_translator = "primary"
+fallback_translators = ["fallback_1", "fallback_2"]
+reviewer = "reviewer_1"
+secondary_reviewer = "reviewer_2"
+dual_review = true
+fallback_reviewers = []
 
-[providers.antigravity]
-type = "antigravity"
-agy = "agy"
-model = "gemini-3.7-flash"
-effort = "low"
+[providers.primary]
+type = "openai"
+base_url = "https://provider.example/v1"
+model = "MODEL"
+api_key = "$PRIMARY_API_KEY"
+context_tokens = 131072
 timeout = 600
-concurrency = 1
 
-[providers.opencode]
+[providers.fallback_1]
 type = "opencode"
 binary = "opencode"
-model = "opencode/muse-spark-1.2-contributor-free"
+model = "PROVIDER/MODEL"
 timeout = 600
 
-[providers.lmstudio]
+[providers.fallback_2]
 type = "openai"
 base_url = "http://127.0.0.1:1234/v1"
-model = "murasaki-14b-v0.2"
-api_key = "lm-studio"
+model = "LOCAL_MODEL"
+api_key = "local"
 context_tokens = 8192
 timeout = 600
 
-[providers.deepseek]
-type = "openai"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key = ""
-context_tokens = 1048576
-timeout = 600
-
-[providers.online_api]
-type = "openai"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key = ""
-context_tokens = 1048576
-timeout = 600
+[pipeline]
+primary_batch_max_chars = 1500
+max_provider_split_depth = 2
+split_on_content_filter = false
+translation_max_tokens = 8192
+health_check_timeout = 120
 ```
 
----
+API key 使用 `$ENV_NAME` 引用，不把真实 secret 写进 `config.toml`。
 
-## 3. 常见后端配置指南
+## 5. 预检
 
-### 3.1 Antigravity (Gemini)
-无需启动外部服务，流水线直接调用系统 `PATH` 中的 `agy` CLI，通过进程内信号量控制并发。
-
-### 3.2 OpenCode
-确保 `opencode` CLI 可用。可使用模型别名或具体 Provider 模型（如 `opencode/muse-spark-1.2-contributor-free`）。
-
-### 3.3 LM Studio / 本地无审查模型
-在 LM Studio 中加载本地模型（如 `murasaki-14b-v0.2`），启动 Local Server（默认 `http://127.0.0.1:1234/v1`）。作为终极备用层，可稳定翻译包含敏感词的特殊段落。
-
-### 3.4 在线通用 API (DeepSeek / OpenRouter / SiliconFlow / OpenAI 等)
-配置 `type = "openai"` 并填入对应的 `base_url`、`api_key` 和 `model`，即可无缝加入主译或备用链路。
-
----
-
-## 4. 运行与预检
-
-启动翻译前，建议先执行预检验证整条容灾链路：
+Web Settings 提供 provider preflight；CLI 可直接执行：
 
 ```bash
 python scripts/preflight.py
 ```
 
-预检会对主译、所有备用提供商和审阅者逐一发送真实的端到端探测包，确认全部在线后方可启动流水线。
+该命令运行真实健康探测，缺少网络、凭据、binary 或 model 时返回结构化错误。预检失败不修改 manifest、workspace 或队列状态。
+
+## 6. 观测与恢复
+
+- task status 显示当前 Provider、阶段、attempt 和 message；
+- SSE 发布 phase、batch、fallback、reviewer 与 queue 更新；
+- `translation-provenance.json` 记录段落来源；
+- `provider-diagnostics.json` 和 reports 记录失败/救回统计；
+- 重试从持久化 manifest/checkpoint 继续，已完成 ID 不重新发送。

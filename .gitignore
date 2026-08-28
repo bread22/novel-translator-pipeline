@@ -28,3 +28,5 @@ release/
 .mypy_cache/
 .agents/
 .codex/
+docs/intermediate/
+docs/qa/

@@ -50,7 +50,7 @@ from translator.pipeline.preflight import PreflightError, run_preflight
 from translator.providers.translator import ProviderTranslator
 from translator.review.reviewer import (
     approved_fixes,
-    has_japanese_kana,
+    has_target_script_residue,
     missing_checked_ids,
     run_chapter_review,
     validate_chapter_review_payload,
@@ -368,9 +368,9 @@ class IterativePipeline:
         pending = self._chapter_pending_paragraphs(chapter_id)
         if pending:
             return False
-        # If any paragraph contains residual untranslated Japanese kana, chapter is NOT completed
+        # Japanese kana or Korean script in a Chinese translation keeps the chapter incomplete.
         chapter = self._chapter(chapter_id)
-        if any(has_japanese_kana(str(p.get("translated", ""))) for p in chapter.get("paragraphs", []) if isinstance(p, dict)):
+        if any(has_target_script_residue(str(p.get("translated", ""))) for p in chapter.get("paragraphs", []) if isinstance(p, dict)):
             return False
         state_path = self.workspace.chapter_states_dir / f"{chapter_id}.json"
         report_path = self.workspace.reports_dir / f"{chapter_id}.json"
@@ -741,7 +741,7 @@ class IterativePipeline:
         }
 
     def _repair_remaining_kana(self, chapter_id: str, remaining_kana_ids: list[str]) -> list[str]:
-        """Perform targeted micro-repair on paragraphs where Japanese kana remained after review writeback."""
+        """Repair paragraphs where Japanese or Korean script remained after review writeback."""
         repaired: list[str] = []
         if not remaining_kana_ids:
             return repaired
@@ -766,7 +766,7 @@ class IterativePipeline:
             cleaned = current_trans
             for pattern, rep in kana_shapes:
                 cleaned = pattern.sub(rep, cleaned)
-            if cleaned != current_trans and not has_japanese_kana(cleaned):
+            if cleaned != current_trans and not has_target_script_residue(cleaned):
                 p_data["translated"] = cleaned
                 write_json(self.manifest, manifest_data)
                 repaired.append(item_id)
@@ -791,7 +791,7 @@ class IterativePipeline:
                         fresh_manifest = read_json(self.manifest)
                         fresh_p_map = paragraph_map(fresh_manifest)
                         new_trans = str(fresh_p_map.get(item_id, {}).get("translated", ""))
-                        if new_trans and not has_japanese_kana(new_trans):
+                        if new_trans and not has_target_script_residue(new_trans):
                             repaired.append(item_id)
                             break
                 except Exception:
@@ -898,7 +898,7 @@ class IterativePipeline:
             remaining_kana = [
                 item_id
                 for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                if item_id in expected_ids and has_japanese_kana(str(paragraph.get("translated", "")))
+                if item_id in expected_ids and has_target_script_residue(str(paragraph.get("translated", "")))
             ]
             if remaining_kana:
                 repaired_ids = self._repair_remaining_kana(chapter_id, remaining_kana)
@@ -907,7 +907,7 @@ class IterativePipeline:
                     remaining_kana = [
                         item_id
                         for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                        if item_id in expected_ids and has_japanese_kana(str(paragraph.get("translated", "")))
+                        if item_id in expected_ids and has_target_script_residue(str(paragraph.get("translated", "")))
                     ]
             if remaining_kana:
                 guarded_fixes = list(review["fixes"])
@@ -916,10 +916,10 @@ class IterativePipeline:
                     "category": "policy_violation",
                     "severity": "critical",
                     "confidence": 1.0,
-                    "reason": "最终写回校验发现译文仍残留日文假名；审阅器及定向微修复均未提供合格替换，已阻止章节完成。",
+                    "reason": "最终写回校验发现译文仍残留日文假名或韩文字符；审阅器及定向微修复均未提供合格替换，已阻止章节完成。",
                     "replacement": "",
                     "auto_apply": False,
-                    "invalid_reason": "最终写回校验发现未解决的日文假名残留",
+                    "invalid_reason": "最终写回校验发现未解决的日文假名或韩文字符残留",
                     "reporters": ["writeback_guard"],
                 } for item_id in remaining_kana)
                 review = {**review, "fixes": guarded_fixes}
@@ -1000,7 +1000,7 @@ class IterativePipeline:
         })
         self._checkpoint()
         if remaining_kana:
-            raise ValueError(f"章节 {chapter_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
+            raise ValueError(f"章节 {chapter_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")
         return {
             "chapter_id": chapter_id,
             "reviewed": len(expected_ids),

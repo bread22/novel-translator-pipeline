@@ -216,8 +216,8 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertEqual(merged["checked_ids"], ["p1", "p2", "p3"])
         
         fixes_by_id = {f["id"]: f for f in merged["fixes"]}
-        # p1 was reported by both A and B -> consensus: True, confidence >= 0.95, chosen higher confidence replacement
-        self.assertTrue(fixes_by_id["p1"]["consensus"])
+        # Same paragraph but divergent replacements are not a fix-level consensus.
+        self.assertFalse(fixes_by_id["p1"]["consensus"])
         self.assertEqual(fixes_by_id["p1"]["confidence"], 0.95)
         self.assertEqual(fixes_by_id["p1"]["replacement"], "修复B (更准确)")
         
@@ -256,7 +256,39 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertEqual(fix["id"], "p1")
         # Reviewer A is chosen because it made the least extraneous edits (edit distance 2 vs 15)
         self.assertEqual(fix["replacement"], "这是原始译文，含有缎面玫瑰花瓣。")
-        self.assertTrue(fix["consensus"])
+        self.assertFalse(fix["consensus"])
+
+    def test_merge_chapter_reviews_requires_identical_fix_for_consensus(self) -> None:
+        base = {
+            "checked_ids": ["p1"],
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
+            "chapter_state": {},
+        }
+        fix = {"id": "p1", "category": "policy_violation", "severity": "critical",
+               "confidence": 0.91, "replacement": "第二章·内衣小偷"}
+        merged = merge_chapter_reviews(
+            {**base, "fixes": [fix]},
+            {**base, "fixes": [{**fix, "confidence": 0.93}]},
+        )
+        self.assertTrue(merged["fixes"][0]["consensus"])
+        self.assertEqual(merged["fixes"][0]["confidence"], 0.93)
+
+    def test_merge_prefers_clean_chinese_over_hangul_replacement(self) -> None:
+        base = {
+            "checked_ids": ["p1"],
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
+            "chapter_state": {},
+        }
+        merged = merge_chapter_reviews(
+            {**base, "fixes": [{"id": "p1", "category": "policy_violation", "severity": "critical",
+                                  "confidence": 0.99, "replacement": "第二章·兰제里小偷"}]},
+            {**base, "fixes": [{"id": "p1", "category": "policy_violation", "severity": "critical",
+                                  "confidence": 0.92, "replacement": "第二章·内衣小偷"}]},
+        )
+        self.assertEqual(merged["fixes"][0]["replacement"], "第二章·内衣小偷")
+        self.assertFalse(merged["fixes"][0]["consensus"])
 
     def test_chapter_validation_requires_exact_checked_ids(self) -> None:
         payload = {

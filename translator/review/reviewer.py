@@ -71,11 +71,21 @@ class ReviewValidationError(ValueError):
 import re
 
 JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+HANGUL_REGEX = re.compile(r"[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]")
 MASKING_SYMBOL_REGEX = re.compile(r"[○●×＊※□]")
 
 
 def has_japanese_kana(text: str) -> bool:
     return bool(JAPANESE_KANA_REGEX.search(text))
+
+
+def has_hangul(text: str) -> bool:
+    return bool(HANGUL_REGEX.search(text))
+
+
+def has_target_script_residue(text: str) -> bool:
+    """Return whether a Simplified-Chinese translation still contains Japanese or Korean script."""
+    return has_japanese_kana(text) or has_hangul(text)
 
 
 def has_masking_symbol(text: str) -> bool:
@@ -114,9 +124,9 @@ def approved_fixes(
         current_text = str(current_translations.get(item_id, "")) if current_translations else ""
         if current_translations and not is_clear and replacement == current_text:
             continue
-        mandatory_kana_cleanup = bool(
+        mandatory_script_cleanup = bool(
             current_translations
-            and has_japanese_kana(current_text)
+            and has_target_script_residue(current_text)
         )
         category = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
         reason = str(item.get("reason", "")).lower()
@@ -131,22 +141,22 @@ def approved_fixes(
         # Quality Guardrail: Reject hallucinated kana violations when current text has no Japanese kana
         if current_translations and category == "policy_violation":
             is_kana_reason = any(k in reason for k in ("假名", "片假名", "平假名", "kana", "日文假名"))
-            if is_kana_reason and not mandatory_kana_cleanup and not mandatory_masking_cleanup:
+            if is_kana_reason and not mandatory_script_cleanup and not mandatory_masking_cleanup:
                 continue
 
-        if mandatory_kana_cleanup or mandatory_masking_cleanup:
+        if mandatory_script_cleanup or mandatory_masking_cleanup:
             category = "policy_violation"
             item["severity"] = "critical"
             item["auto_apply"] = True
-        if is_new_contract or mandatory_kana_cleanup or mandatory_masking_cleanup:
+        if is_new_contract or mandatory_script_cleanup or mandatory_masking_cleanup:
             item["category"] = category
         if is_new_contract and (
             category not in OBJECTIVE_CATEGORIES
             or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
         ):
             continue
-        # Quality Guardrail: Strictly reject any replacement that contains leftover Japanese kana
-        if not is_clear and (has_japanese_kana(replacement) or has_masking_symbol(replacement)):
+        # Quality Guardrail: Strictly reject replacements containing Japanese/Korean script.
+        if not is_clear and (has_target_script_residue(replacement) or has_masking_symbol(replacement)):
             continue
         conf = float(item.get("confidence", 0) or 0)
         is_consensus = bool(item.get("consensus"))
@@ -161,7 +171,7 @@ def approved_fixes(
         )
         # Category-based Dynamic Threshold: Objective categories qualify at 0.80+, consensus auto-qualifies
         req_threshold = 0.8 if (is_new_contract and category in OBJECTIVE_CATEGORIES) else threshold
-        meets_approval_threshold = mandatory_kana_cleanup or mandatory_masking_cleanup or is_consensus or (
+        meets_approval_threshold = mandatory_script_cleanup or mandatory_masking_cleanup or is_consensus or (
             (autonomous or item.get("auto_apply") is True)
             and conf >= req_threshold
         )
@@ -205,10 +215,10 @@ def validate_chapter_review_payload(
             continue
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         item["category"] = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
-        if rep and (has_japanese_kana(rep) or has_masking_symbol(rep)):
+        if rep and (has_target_script_residue(rep) or has_masking_symbol(rep)):
             item["auto_apply"] = False
             item["confidence"] = min(float(item.get("confidence", 0) or 0), 0.3)
-            item["invalid_reason"] = "修正译文中残留日文假名或伏字遮掩符号，已拦截并禁用自动写回"
+            item["invalid_reason"] = "修正译文中残留日文假名、韩文字符或伏字遮掩符号，已拦截并禁用自动写回"
         sanitized_fixes.append(item)
     normalized["fixes"] = sanitized_fixes
 
@@ -444,11 +454,11 @@ def merge_chapter_reviews(
             conf_b = float(in_b.get("confidence", 0) or 0)
             rep_a = str(in_a.get("replacement", "")).strip()
             rep_b = str(in_b.get("replacement", "")).strip()
-            kana_a = has_japanese_kana(rep_a)
-            kana_b = has_japanese_kana(rep_b)
-            if kana_a and not kana_b:
+            residue_a = has_target_script_residue(rep_a)
+            residue_b = has_target_script_residue(rep_b)
+            if residue_a and not residue_b:
                 chosen = dict(in_b)
-            elif kana_b and not kana_a:
+            elif residue_b and not residue_a:
                 chosen = dict(in_a)
             else:
                 # Least Invasive Priority: choose the fix that makes the least extraneous modifications to the original translation
@@ -464,8 +474,15 @@ def merge_chapter_reviews(
                         chosen = dict(in_a if conf_a >= conf_b else in_b)
                 else:
                     chosen = dict(in_a if conf_a >= conf_b else in_b)
-            chosen["confidence"] = max(conf_a, conf_b, 0.95)
-            chosen["consensus"] = True
+            same_fix = (
+                str(in_a.get("category", "")) == str(in_b.get("category", ""))
+                and str(in_a.get("operation", "replace") or "replace")
+                == str(in_b.get("operation", "replace") or "replace")
+                and rep_a == rep_b
+                and bool(rep_a or str(in_a.get("operation", "replace")) == "clear")
+            )
+            chosen["confidence"] = max(conf_a, conf_b)
+            chosen["consensus"] = same_fix
             chosen["reporters"] = ["primary", "secondary"]
             merged_fixes.append(chosen)
         elif in_a:
@@ -1601,10 +1618,10 @@ def review_book(
             remaining_kana = [
                 item_id
                 for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                if item_id in expected and has_japanese_kana(str(paragraph.get("translated", "")))
+                if item_id in expected and has_target_script_residue(str(paragraph.get("translated", "")))
             ]
             if remaining_kana:
-                raise ValueError(f"章节 {c_id} 写回后仍残留日文假名：{', '.join(sorted(remaining_kana))}")
+                raise ValueError(f"章节 {c_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")
         consistency_updates = review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", [])
         evidence_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
         prepared_updates: list[dict[str, Any]] = []

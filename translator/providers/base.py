@@ -251,11 +251,14 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
         flagged_kana_ids = [
             str(item.get("id"))
             for item in items
-            if isinstance(item, dict) and bool(re.search(r"[\u3040-\u309f\u30a0-\u30ff]", str(item.get("translated", ""))))
+            if isinstance(item, dict) and bool(re.search(
+                r"[\u3040-\u309f\u30a0-\u30ff\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]",
+                str(item.get("translated", "")),
+            ))
         ]
         kana_warning = ""
         if flagged_kana_ids:
-            kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留日文假名，必须逐一在 fixes 中输出 policy_violation 修复并提供纯正中文 replacement】：\n    {', '.join(flagged_kana_ids)}"
+            kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留日文假名或韩文字符，必须逐一在 fixes 中输出 policy_violation 修复并提供纯正中文 replacement】：\n    {', '.join(flagged_kana_ids)}"
 
         instructions = f"""
 这是章节级一致性审阅。
@@ -266,6 +269,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
   * source 字段本身是日文原文，source 中的假名不算译文残留；检查对象是 translated 字段。
   * 发现残留时，reason 必须指出具体残留文本，replacement 必须给出该段完整、无任何假名的简体中文译文，不能只替换一个词或返回空字符串。
   * 所有 fixes 里的 replacement（修正译文）必须是纯正、地道、通顺的完整简体中文段落！
+  * replacement 中严禁出现韩文音节或韩文字母；例如“兰제里”属于中韩混写，必须完整译为“内衣”等符合上下文的中文词。
   * 绝对严禁在 replacement 中残留任何日文假名（包括平假名、片假名，如 すぐそば、カタカナ、の、に 等）或未翻译的生造日文词汇！
   * 若原文中出现片假名概念词（如「カタカナ職業」），必须意译为其对应中文含义（如“时尚新潮职业”/“白领职业”），严禁直接复制日文假名！
   * glossary_delta 的 target（中文译名）、memory_delta 中的各字段值、chapter_state 中的 summary，全部必须使用规范简体中文。

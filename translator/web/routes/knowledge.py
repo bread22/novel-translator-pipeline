@@ -14,7 +14,13 @@ from translator.glossary.lifecycle import stable_term_id
 from translator.glossary.taxonomy import canonical_category, category_tier, CategoryTier
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.review.models import normalize_review_for_display
-from translator.review.reviewer import OBJECTIVE_CATEGORIES, OBJECTIVE_SEVERITIES, has_japanese_kana, has_masking_symbol
+from translator.review.reviewer import (
+    OBJECTIVE_CATEGORIES,
+    OBJECTIVE_SEVERITIES,
+    has_hangul,
+    has_japanese_kana,
+    has_masking_symbol,
+)
 from translator.web.models import (
     BookMemoryResponse,
     GlossaryCreateRequest,
@@ -50,6 +56,8 @@ def _not_applied_reason(fix: dict[str, Any], *, apply_disabled: bool) -> str:
         return "审阅器没有提供可写回的修正译文"
     if has_japanese_kana(replacement):
         return "建议译文仍含日文假名，写回安全校验已拦截"
+    if has_hangul(replacement):
+        return "建议译文仍含韩文字符，写回安全校验已拦截"
     if has_masking_symbol(replacement):
         return "建议译文仍含伏字或遮掩符号，写回安全校验已拦截"
     category = str(fix.get("category", ""))

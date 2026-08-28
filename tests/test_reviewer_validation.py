@@ -3,7 +3,15 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from translator.review.reviewer import approved_fixes, has_japanese_kana, has_masking_symbol, verify_applied_fixes
+from translator.review.reviewer import (
+    approved_fixes,
+    has_hangul,
+    has_japanese_kana,
+    has_masking_symbol,
+    has_target_script_residue,
+    validate_chapter_review_payload,
+    verify_applied_fixes,
+)
 
 
 class ReviewerObjectiveValidationTests(unittest.TestCase):
@@ -32,6 +40,38 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         ]
         approved = approved_fixes(fixes, current_translations=current_translations)
         self.assertEqual(len(approved), 0, "Hallucinated kana violation on pure Chinese must be rejected")
+
+    def test_detect_and_approve_hangul_cleanup(self) -> None:
+        current = {"p1": "第二章 美歌子老师的内衣·心跳加速的兰제里小偷"}
+        fix = {
+            "id": "p1", "category": "policy_violation", "severity": "critical",
+            "confidence": 0.99, "reason": "译文残留外文字符：兰제里",
+            "replacement": "第二章 美歌子老师的内衣·令人心动的内衣小偷",
+            "auto_apply": False,
+        }
+        self.assertTrue(has_hangul(current["p1"]))
+        self.assertTrue(has_target_script_residue(current["p1"]))
+        approved = approved_fixes([fix], current_translations=current)
+        self.assertEqual([item["id"] for item in approved], ["p1"])
+        self.assertTrue(approved[0]["auto_apply"])
+
+    def test_reject_and_mark_hangul_replacement_invalid(self) -> None:
+        fix = {
+            "id": "p1", "category": "policy_violation", "severity": "critical",
+            "confidence": 0.99, "reason": "译文残留外文字符",
+            "replacement": "第二章·兰제里小偷", "auto_apply": True,
+        }
+        self.assertEqual(approved_fixes([fix], current_translations={"p1": "ランジェリー小偷"}), [])
+        payload = {
+            "checked_ids": ["p1"], "fixes": [fix],
+            "glossary_delta": {"add": [], "update": [], "conflicts": []},
+            "memory_delta": {"add": [], "update": [], "conflicts": []},
+            "chapter_state": {},
+        }
+        normalized = validate_chapter_review_payload(payload, {"p1"})
+        self.assertFalse(normalized["fixes"][0]["auto_apply"])
+        self.assertEqual(normalized["fixes"][0]["confidence"], 0.3)
+        self.assertIn("韩文字符", normalized["fixes"][0]["invalid_reason"])
 
     def test_approve_real_kana_policy_violation_when_text_actually_has_kana(self) -> None:
         current_translations = {

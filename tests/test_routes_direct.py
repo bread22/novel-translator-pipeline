@@ -278,12 +278,14 @@ def test_report_explains_why_each_unapplied_fix_was_skipped(tmp_path: Path, monk
     workspace = BookWorkspace.at(tmp_path, "Book")
     workspace.initialize(book_id="book")
     review = {
-        "checked_ids": ["p1", "p2"],
+        "checked_ids": ["p1", "p2", "p3"],
         "fixes": [
             {"id": "p1", "category": "mistranslation", "severity": "major", "confidence": 0.95,
              "reason": "objective", "replacement": "修正", "auto_apply": True},
             {"id": "p2", "category": "style", "severity": "minor", "confidence": 0.8,
              "reason": "preference", "replacement": "建议", "auto_apply": False},
+            {"id": "p3", "category": "policy_violation", "severity": "critical", "confidence": 0.99,
+             "reason": "译文残留外文字符", "replacement": "第二章·兰제里小偷", "auto_apply": True},
         ],
         "glossary_delta": {"add": [], "update": [], "conflicts": []},
         "memory_delta": {"add": [], "update": [], "conflicts": []},
@@ -291,7 +293,7 @@ def test_report_explains_why_each_unapplied_fix_was_skipped(tmp_path: Path, monk
     }
     write_json(workspace.reviews_dir / "c1-output.json", review)
     write_json(workspace.reports_dir / "c1.json", {
-        "checked_paragraphs": 2, "reported_issues": 2, "applied_fixes": 1,
+        "checked_paragraphs": 3, "reported_issues": 3, "applied_fixes": 1,
         "approved_fixes": [review["fixes"][0]], "applied": {"status": "ok"},
     })
     monkeypatch.setattr(knowledge, "get_workspace_for_book", lambda _book: workspace)
@@ -300,3 +302,5 @@ def test_report_explains_why_each_unapplied_fix_was_skipped(tmp_path: Path, monk
     assert fixes[0]["applied"] is True and fixes[0]["not_applied_reason"] is None
     assert fixes[1]["applied"] is False
     assert "不在客观缺陷自动修正白名单" in fixes[1]["not_applied_reason"]
+    assert fixes[2]["applied"] is False
+    assert fixes[2]["not_applied_reason"] == "建议译文仍含韩文字符，写回安全校验已拦截"

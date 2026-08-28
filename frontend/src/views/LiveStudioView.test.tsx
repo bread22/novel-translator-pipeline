@@ -98,6 +98,7 @@ describe('live model topology', () => {
 
   it('does not start with a policy that failed to persist globally', async () => {
     Element.prototype.scrollIntoView = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(api, 'getConfig').mockResolvedValue({
       paths: { translation_policy: 'old-policy.md' },
       providers: {},
@@ -126,6 +127,10 @@ describe('live model topology', () => {
     await waitFor(() => expect(api.saveConfig).toHaveBeenCalled());
 
     await waitFor(() => expect(policySelect).toHaveValue('old-policy.md'));
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to sync policy to server config:',
+      expect.objectContaining({ message: 'config write failed' }),
+    );
     fireEvent.click(screen.getByRole('button', { name: '启动全自动流水线' }));
     await waitFor(() => expect(startPipeline).toHaveBeenCalled());
     expect(startPipeline.mock.calls[0][0]).toMatchObject({ translation_policy: 'old-policy.md' });

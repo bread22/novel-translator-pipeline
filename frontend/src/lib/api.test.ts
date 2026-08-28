@@ -60,6 +60,7 @@ describe('API client', () => {
 
 describe('SSE client', () => {
   it('uses one global stream, reports state, preserves envelopes, and closes', () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     class FakeEventSource {
       static instance: FakeEventSource;
       static CLOSED = 2;
@@ -88,6 +89,7 @@ describe('SSE client', () => {
     source.readyState = FakeEventSource.CLOSED;
     source.onerror?.(new Event('error'));
     expect(states).toHaveBeenCalledWith('offline');
+    expect(consoleWarn).toHaveBeenCalledWith('SSE connection error:', expect.any(Event));
     close();
     expect(source.close).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();

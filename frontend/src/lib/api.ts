@@ -225,7 +225,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(config),
     }),
-  runPreflight: () => request<PreflightResponse>('/system/preflight', { method: 'POST' }),
+  // Provider probes may take up to two minutes (remote health checks enforce
+  // a 120s floor), so keep the browser request alive long enough to collect
+  // the complete result instead of reporting a client-side timeout at 30s.
+  runPreflight: () => request<PreflightResponse>('/system/preflight', { method: 'POST' }, { timeoutMs: 180_000 }),
   getPrompts: (options?: RequestOptions) => request<PromptItem[]>('/system/prompts', undefined, options),
   getPromptDetail: (promptId: string, options?: RequestOptions) => request<PromptItem>(`/system/prompts/${encodeURIComponent(promptId)}`, undefined, options),
   savePrompt: (data: { filename: string; content: string }) =>

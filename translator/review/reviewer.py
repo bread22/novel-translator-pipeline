@@ -590,14 +590,9 @@ def build_review_window(
 
 
 def dynamic_review_timeout(input_payload: dict[str, Any]) -> int:
-    """Calculate dynamic timeout linearly based on source character volume."""
-    items = []
-    for key in ("items", "context_before", "context_after"):
-        values = input_payload.get(key, [])
-        if isinstance(values, list):
-            items.extend(values)
-    total_chars = sum(len(str(item.get("source", ""))) for item in items if isinstance(item, dict))
-    return max(60, min(360, 45 + int(total_chars * 0.05)))
+    """Calculate timeout from the complete serialized review payload size."""
+    payload_chars = len(json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"), default=str))
+    return max(120, min(720, 45 + int(payload_chars * 0.05)))
 
 
 def _execute_review_with_fallbacks(

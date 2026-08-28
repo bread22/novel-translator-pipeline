@@ -754,10 +754,10 @@ class PipelineFunctionTests(unittest.TestCase):
                 )
 
             self.assertEqual(calls, [
-                ("primary-reviewer", ("p1", "p2", "p3", "p4"), 360),
-                ("fallback-reviewer", ("p1", "p2", "p3", "p4"), 360),
-                ("primary-reviewer", ("p1", "p2"), 360),
-                ("primary-reviewer", ("p3", "p4"), 360),
+                ("primary-reviewer", ("p1", "p2", "p3", "p4"), 461),
+                ("fallback-reviewer", ("p1", "p2", "p3", "p4"), 461),
+                ("primary-reviewer", ("p1", "p2"), 461),
+                ("primary-reviewer", ("p3", "p4"), 461),
             ])
             reviewing = [state for state in states if state["status"] == "reviewing"]
             self.assertEqual([state["attempt"] for state in reviewing], [1, 2, 3, 4])

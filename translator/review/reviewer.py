@@ -163,7 +163,12 @@ def missing_checked_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[
     return expected_ids - {str(item) for item in checked}
 
 
-def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[str]) -> dict[str, Any]:
+def validate_chapter_review_payload(
+    payload: dict[str, Any],
+    expected_ids: set[str],
+    *,
+    context_before_ids: set[str] | None = None,
+) -> dict[str, Any]:
     try:
         normalized = ChapterReviewOutput.model_validate(payload).model_dump(exclude_none=True)
     except Exception as exc:
@@ -191,6 +196,30 @@ def validate_chapter_review_payload(payload: dict[str, Any], expected_ids: set[s
             item["invalid_reason"] = "修正译文中残留日文假名或伏字遮掩符号，已拦截并禁用自动写回"
         sanitized_fixes.append(item)
     normalized["fixes"] = sanitized_fixes
+
+    # Context findings are advisory signals for a bounded targeted re-review.
+    # They may only point backwards into the read-only context window.
+    allowed_context_ids = context_before_ids or set()
+    sanitized_context_findings = []
+    for raw_finding in normalized.get("context_findings", []):
+        if not isinstance(raw_finding, dict) or str(raw_finding.get("id", "")) not in allowed_context_ids:
+            continue
+        finding = dict(raw_finding)
+        finding["category"] = CATEGORY_ALIASES.get(
+            str(finding.get("category", "")), str(finding.get("category", ""))
+        )
+        if (
+            finding["category"] not in OBJECTIVE_CATEGORIES
+            or str(finding.get("severity", "")) not in OBJECTIVE_SEVERITIES
+        ):
+            continue
+        finding["evidence_ids"] = [
+            str(evidence_id)
+            for evidence_id in finding.get("evidence_ids", [])
+            if str(evidence_id) in expected_ids
+        ]
+        sanitized_context_findings.append(finding)
+    normalized["context_findings"] = sanitized_context_findings
 
     # One deterministic taxonomy validator is shared with extraction, merge and projection.
     def _is_valid_glossary_term(term: dict[str, Any]) -> bool:
@@ -435,6 +464,42 @@ def merge_chapter_reviews(
             item["reporters"] = ["secondary"]
             merged_fixes.append(item)
 
+    findings_a = primary_review.get("context_findings", []) or []
+    findings_b = secondary_review.get("context_findings", []) or []
+    by_finding_a = {
+        str(item.get("id", "")): item
+        for item in findings_a
+        if isinstance(item, dict) and item.get("id")
+    }
+    by_finding_b = {
+        str(item.get("id", "")): item
+        for item in findings_b
+        if isinstance(item, dict) and item.get("id")
+    }
+    merged_context_findings: list[dict[str, Any]] = []
+    for finding_id in sorted(set(by_finding_a) | set(by_finding_b)):
+        finding_a = by_finding_a.get(finding_id)
+        finding_b = by_finding_b.get(finding_id)
+        if finding_a and finding_b:
+            chosen = dict(finding_a)
+            if len(str(finding_b.get("reason", ""))) > len(str(finding_a.get("reason", ""))):
+                chosen = dict(finding_b)
+            chosen["confidence"] = max(
+                float(finding_a.get("confidence", 0) or 0),
+                float(finding_b.get("confidence", 0) or 0),
+            )
+            chosen["consensus"] = True
+            chosen["reporters"] = ["primary", "secondary"]
+            chosen["evidence_ids"] = list(dict.fromkeys(
+                [str(value) for value in finding_a.get("evidence_ids", [])]
+                + [str(value) for value in finding_b.get("evidence_ids", [])]
+            ))
+        else:
+            chosen = dict(finding_a or finding_b or {})
+            chosen["consensus"] = False
+            chosen["reporters"] = ["primary" if finding_a else "secondary"]
+        merged_context_findings.append(chosen)
+
     merged_glossary_delta = _merge_delta(
         primary_review["glossary_delta"], secondary_review["glossary_delta"],
         identity_key="source", left_reporter="primary", right_reporter="secondary",
@@ -451,6 +516,7 @@ def merge_chapter_reviews(
     return _normalized_review({
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
+        "context_findings": merged_context_findings,
         "glossary_delta": merged_glossary_delta,
         "memory_delta": merged_memory,
         "chapter_state": merged_state,
@@ -464,12 +530,72 @@ def merge_chapter_reviews(
     })
 
 
-REVIEW_CHUNK_MAX_PARAGRAPHS = 100
+REVIEW_CHUNK_MAX_PARAGRAPHS = 100  # Legacy explicit paragraph-count override.
+REVIEW_CHUNK_MIN_CHARS = 1000
+REVIEW_CHUNK_MAX_CHARS = 1500
+REVIEW_CONTEXT_BEFORE = 3
+REVIEW_CONTEXT_AFTER = 3
+
+
+def chunk_items_by_source_chars(
+    items: list[dict[str, Any]],
+    *,
+    min_chars: int = REVIEW_CHUNK_MIN_CHARS,
+    max_chars: int = REVIEW_CHUNK_MAX_CHARS,
+) -> list[list[dict[str, Any]]]:
+    """Split between complete paragraphs using a source-character budget."""
+    if min_chars < 1 or max_chars < min_chars:
+        raise ValueError("review chunk character bounds are invalid")
+    if not items:
+        return [[]]
+
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_chars = 0
+    for item in items:
+        paragraph_chars = len(str(item.get("source", "")))
+        if current and current_chars >= min_chars and current_chars + paragraph_chars > max_chars:
+            chunks.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += paragraph_chars
+
+    if current:
+        if chunks and current_chars < min_chars:
+            previous_chars = sum(len(str(item.get("source", ""))) for item in chunks[-1])
+            if previous_chars + current_chars <= max_chars:
+                chunks[-1].extend(current)
+            else:
+                chunks.append(current)
+        else:
+            chunks.append(current)
+    return chunks
+
+
+def build_review_window(
+    items: list[dict[str, Any]],
+    start: int,
+    end: int,
+    *,
+    context_before: int = REVIEW_CONTEXT_BEFORE,
+    context_after: int = REVIEW_CONTEXT_AFTER,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return target items plus bilingual, read-only neighboring paragraphs."""
+    return {
+        "items": items[start:end],
+        "context_before": items[max(0, start - context_before):start],
+        "context_after": items[end:end + context_after],
+    }
 
 
 def dynamic_review_timeout(input_payload: dict[str, Any]) -> int:
     """Calculate dynamic timeout linearly based on source character volume."""
-    items = input_payload.get("items", [])
+    items = []
+    for key in ("items", "context_before", "context_after"):
+        values = input_payload.get(key, [])
+        if isinstance(values, list):
+            items.extend(values)
     total_chars = sum(len(str(item.get("source", ""))) for item in items if isinstance(item, dict))
     return max(60, min(360, 45 + int(total_chars * 0.05)))
 
@@ -599,9 +725,25 @@ def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> 
     # Chapter State synthesis
     merged_state = _merge_chapter_state(chunk_a["chapter_state"], chunk_b["chapter_state"])
 
+    merged_findings: list[dict[str, Any]] = []
+    finding_index: dict[str, int] = {}
+    for raw_finding in list(chunk_a.get("context_findings", []) or []) + list(chunk_b.get("context_findings", []) or []):
+        if not isinstance(raw_finding, dict) or not raw_finding.get("id"):
+            continue
+        finding = dict(raw_finding)
+        finding_id = str(finding["id"])
+        if finding_id in finding_index:
+            existing = merged_findings[finding_index[finding_id]]
+            if len(str(finding.get("reason", ""))) > len(str(existing.get("reason", ""))):
+                merged_findings[finding_index[finding_id]] = finding
+        else:
+            finding_index[finding_id] = len(merged_findings)
+            merged_findings.append(finding)
+
     return _normalized_review({
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
+        "context_findings": merged_findings,
         "glossary_delta": merged_glossary_delta,
         "memory_delta": merged_memory,
         "chapter_state": merged_state,
@@ -756,6 +898,8 @@ def _execute_segment_with_adaptive_split(
     role: str = "primary",
     depth: int = 0,
     max_depth: int = 4,
+    context_before_size: int = 0,
+    context_after_size: int = 0,
 ) -> dict[str, Any]:
     """Execute review for items. If failure occurs and len(items) > 1, recursively binary split."""
     if not items:
@@ -792,6 +936,8 @@ def _execute_segment_with_adaptive_split(
                 role=reviewer_role,
                 depth=depth,
                 max_depth=max_depth,
+                context_before_size=context_before_size,
+                context_after_size=context_after_size,
             ): (reviewer_role, candidate)
             for reviewer_role, candidate in {"primary": backend, "secondary": secondary_backend}.items()
         }
@@ -831,6 +977,11 @@ def _execute_segment_with_adaptive_split(
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
     expected_ids = {str(item.get("id", "")) for item in items if item.get("id")}
+    context_before_ids = {
+        str(item.get("id", ""))
+        for item in segment_payload.get("context_before", [])
+        if isinstance(item, dict) and item.get("id")
+    }
 
     try:
         res = _execute_single_segment_review(
@@ -851,7 +1002,11 @@ def _execute_segment_with_adaptive_split(
             attempt_lock=attempt_lock,
             role=role,
         )
-        res = validate_chapter_review_payload(res, expected_ids)
+        res = validate_chapter_review_payload(
+            res,
+            expected_ids,
+            context_before_ids=context_before_ids,
+        )
         return res
     except Exception as exc:
         if len(items) > 1 and depth < max_depth:
@@ -860,8 +1015,17 @@ def _execute_segment_with_adaptive_split(
             left_items = items[:midpoint]
             right_items = items[midpoint:]
 
+            left_payload = dict(base_payload)
+            left_payload["context_after"] = (
+                list(right_items) + list(base_payload.get("context_after", []) or [])
+            )[:context_after_size]
+            right_payload = dict(base_payload)
+            right_payload["context_before"] = (
+                list(base_payload.get("context_before", []) or []) + list(left_items)
+            )[-context_before_size:] if context_before_size else []
+
             left_res = _execute_segment_with_adaptive_split(
-                base_payload,
+                left_payload,
                 left_items,
                 schema_path,
                 autonomous=autonomous,
@@ -879,12 +1043,18 @@ def _execute_segment_with_adaptive_split(
                 role=role,
                 depth=depth + 1,
                 max_depth=max_depth,
+                context_before_size=context_before_size,
+                context_after_size=context_after_size,
             )
 
             rolling_payload = _update_rolling_payload(base_payload, left_res)
 
             right_res = _execute_segment_with_adaptive_split(
-                rolling_payload,
+                {
+                    **rolling_payload,
+                    "context_before": right_payload.get("context_before", []),
+                    "context_after": right_payload.get("context_after", []),
+                },
                 right_items,
                 schema_path,
                 autonomous=autonomous,
@@ -902,11 +1072,58 @@ def _execute_segment_with_adaptive_split(
                 role=role,
                 depth=depth + 1,
                 max_depth=max_depth,
+                context_before_size=context_before_size,
+                context_after_size=context_after_size,
             )
 
             return _combine_chunk_reviews(left_res, right_res)
         else:
             raise exc
+
+
+def _eligible_context_findings(
+    review: dict[str, Any],
+    *,
+    allowed_ids: set[str],
+    minimum_confidence: float,
+    already_rechecked: set[str],
+) -> list[dict[str, Any]]:
+    eligible: list[dict[str, Any]] = []
+    for raw in review.get("context_findings", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        finding_id = str(raw.get("id", ""))
+        confidence = float(raw.get("confidence", 0) or 0)
+        if (
+            finding_id in allowed_ids
+            and finding_id not in already_rechecked
+            and (bool(raw.get("consensus")) or confidence >= minimum_confidence)
+        ):
+            eligible.append(dict(raw))
+    return eligible
+
+
+def _replace_targeted_review(
+    aggregate: dict[str, Any],
+    targeted: dict[str, Any],
+    targeted_ids: set[str],
+) -> dict[str, Any]:
+    """Make a targeted re-review authoritative for its paragraph IDs."""
+    aggregate = _normalized_review(aggregate)
+    targeted = _normalized_review(targeted)
+    fixes = [
+        item for item in aggregate.get("fixes", []) or []
+        if str(item.get("id", "")) not in targeted_ids
+    ]
+    fixes.extend(targeted.get("fixes", []) or [])
+    return _normalized_review({
+        **aggregate,
+        "checked_ids": list(dict.fromkeys(
+            list(aggregate.get("checked_ids", []) or [])
+            + list(targeted.get("checked_ids", []) or [])
+        )),
+        "fixes": fixes,
+    })
 
 
 def run_chapter_review(
@@ -917,7 +1134,13 @@ def run_chapter_review(
     backend: str | None = None,
     secondary_backend: str | None = None,
     dual_review: bool | None = None,
-    chunk_size: int = REVIEW_CHUNK_MAX_PARAGRAPHS,
+    chunk_size: int | None = None,
+    chunk_min_chars: int | None = None,
+    chunk_max_chars: int | None = None,
+    context_before: int | None = None,
+    context_after: int | None = None,
+    backtrack_enabled: bool | None = None,
+    backtrack_min_confidence: float | None = None,
     on_reviewer_status: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> None:
@@ -944,22 +1167,74 @@ def run_chapter_review(
 
     items = input_payload.get("items", [])
     expected_ids = {str(item["id"]) for item in items if isinstance(item, dict) and item.get("id")}
+    pipeline_config = config.get("pipeline", {})
+    effective_min_chars = int(
+        chunk_min_chars if chunk_min_chars is not None
+        else pipeline_config.get("review_chunk_min_chars", REVIEW_CHUNK_MIN_CHARS)
+    )
+    effective_max_chars = int(
+        chunk_max_chars if chunk_max_chars is not None
+        else pipeline_config.get("review_chunk_max_chars", REVIEW_CHUNK_MAX_CHARS)
+    )
+    effective_context_before = max(0, int(
+        context_before if context_before is not None
+        else pipeline_config.get("review_context_before", REVIEW_CONTEXT_BEFORE)
+    ))
+    effective_context_after = max(0, int(
+        context_after if context_after is not None
+        else pipeline_config.get("review_context_after", REVIEW_CONTEXT_AFTER)
+    ))
+    effective_backtrack = bool(
+        backtrack_enabled if backtrack_enabled is not None
+        else pipeline_config.get("review_backtrack_enabled", True)
+    )
+    effective_backtrack_threshold = float(
+        backtrack_min_confidence if backtrack_min_confidence is not None
+        else pipeline_config.get("review_backtrack_min_confidence", 0.8)
+    )
 
-    chunks = [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)] or [[]]
+    # Keep the old paragraph-count argument for callers/tests that explicitly
+    # use it; the production default is source-character chunking.
+    if chunk_size is not None:
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be greater than zero")
+        spans = [(start, min(len(items), start + chunk_size)) for start in range(0, len(items), chunk_size)]
+    else:
+        chunks = chunk_items_by_source_chars(
+            items,
+            min_chars=effective_min_chars,
+            max_chars=effective_max_chars,
+        )
+        spans = []
+        cursor = 0
+        for chunk in chunks:
+            spans.append((cursor, cursor + len(chunk)))
+            cursor += len(chunk)
+    if not spans:
+        spans = [(0, 0)]
+
     rolling_payload = dict(input_payload)
-    chunk_results = []
+    aggregate: dict[str, Any] | None = None
     attempt_counters = {"primary": 0, "secondary": 0}
     attempt_lock = threading.Lock()
+    already_rechecked: set[str] = set()
+    backtrack_diagnostics: list[dict[str, Any]] = []
 
-    for chunk_index, chunk_items in enumerate(chunks, start=1):
+    for chunk_index, (start, end) in enumerate(spans, start=1):
         if cancel_check:
             cancel_check()
-        timeout_payload = dict(rolling_payload)
-        timeout_payload["items"] = chunk_items
-        chunk_timeout = dynamic_review_timeout(timeout_payload)
+        window = build_review_window(
+            items,
+            start,
+            end,
+            context_before=effective_context_before,
+            context_after=effective_context_after,
+        )
+        chunk_payload = {**rolling_payload, **window, "review_mode": "chapter_chunk"}
+        chunk_timeout = dynamic_review_timeout(chunk_payload)
         chunk_res = _execute_segment_with_adaptive_split(
-            rolling_payload,
-            chunk_items,
+            chunk_payload,
+            window["items"],
             CHAPTER_SCHEMA,
             autonomous=autonomous,
             backend=primary_cand,
@@ -969,20 +1244,109 @@ def run_chapter_review(
             cancel_check=cancel_check,
             timeout=chunk_timeout,
             chunk_index=chunk_index,
-            total_chunks=len(chunks),
+            total_chunks=len(spans),
             attempt_counters=attempt_counters,
             attempt_lock=attempt_lock,
+            context_before_size=effective_context_before,
+            context_after_size=effective_context_after,
         )
-        chunk_results.append(chunk_res)
+        if aggregate is None:
+            aggregate = chunk_res
+        else:
+            aggregate = _combine_chunk_reviews(aggregate, chunk_res)
         rolling_payload = _update_rolling_payload(rolling_payload, chunk_res)
 
-    merged_payload = chunk_results[0]
-    for next_res in chunk_results[1:]:
-        merged_payload = _combine_chunk_reviews(merged_payload, next_res)
+        if effective_backtrack:
+            context_ids = {
+                str(item.get("id", ""))
+                for item in window["context_before"]
+                if isinstance(item, dict) and item.get("id")
+            }
+            findings = _eligible_context_findings(
+                chunk_res,
+                allowed_ids=context_ids,
+                minimum_confidence=effective_backtrack_threshold,
+                already_rechecked=already_rechecked,
+            )
+            for finding in findings:
+                finding_id = str(finding["id"])
+                already_rechecked.add(finding_id)
+                candidate_index = next(
+                    (index for index, item in enumerate(items) if str(item.get("id", "")) == finding_id),
+                    None,
+                )
+                if candidate_index is None:
+                    continue
+                candidate_window = build_review_window(
+                    items,
+                    candidate_index,
+                    candidate_index + 1,
+                    context_before=effective_context_before,
+                    context_after=effective_context_after,
+                )
+                targeted_payload = {
+                    **rolling_payload,
+                    **candidate_window,
+                    "review_mode": "targeted_context_recheck",
+                    "trigger_findings": [finding],
+                }
+                try:
+                    targeted_res = _execute_segment_with_adaptive_split(
+                        targeted_payload,
+                        candidate_window["items"],
+                        CHAPTER_SCHEMA,
+                        autonomous=autonomous,
+                        backend=primary_cand,
+                        secondary_backend=sec_cand,
+                        is_dual=is_dual,
+                        on_reviewer_status=on_reviewer_status,
+                        cancel_check=cancel_check,
+                        timeout=dynamic_review_timeout(targeted_payload),
+                        chunk_index=chunk_index,
+                        total_chunks=len(spans),
+                        split_path=f"backtrack.{finding_id}",
+                        attempt_counters=attempt_counters,
+                        attempt_lock=attempt_lock,
+                        context_before_size=effective_context_before,
+                        context_after_size=effective_context_after,
+                    )
+                    aggregate = _replace_targeted_review(aggregate, targeted_res, {finding_id})
+                    backtrack_diagnostics.append({
+                        "id": finding_id,
+                        "status": "completed",
+                        "fixes": len(targeted_res.get("fixes", []) or []),
+                    })
+                except Exception as exc:
+                    backtrack_diagnostics.append({
+                        "id": finding_id,
+                        "status": "failed",
+                        "error": str(exc),
+                    })
+
+    merged_payload = aggregate or _normalized_review({})
 
     if cancel_check:
         cancel_check()
-    merged_payload = validate_chapter_review_payload(merged_payload, expected_ids)
+    merged_payload = validate_chapter_review_payload(
+        merged_payload,
+        expected_ids,
+        context_before_ids=expected_ids,
+    )
+    merged_payload["review_diagnostics"] = {
+        "chunking": {
+            "mode": "paragraph_count" if chunk_size is not None else "source_chars",
+            "min_chars": effective_min_chars if chunk_size is None else None,
+            "max_chars": effective_max_chars if chunk_size is None else None,
+            "chunk_count": len(spans),
+            "context_before": effective_context_before,
+            "context_after": effective_context_after,
+        },
+        "backtrack": {
+            "enabled": effective_backtrack,
+            "candidate_count": len(merged_payload.get("context_findings", []) or []),
+            "rechecks": backtrack_diagnostics,
+        },
+    }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -1066,7 +1430,11 @@ def review_book(
             retry_path = workspace.reviews_dir / f"{c_id}-consistency-retry-{retry:02d}.json"
             run_chapter_review(input_path, retry_path, autonomous=autonomous, backend=reviewer)
             review = read_json(retry_path)
-        review = validate_chapter_review_payload(review, expected)
+        review = validate_chapter_review_payload(
+            review,
+            expected,
+            context_before_ids=set(expected),
+        )
         current_translations = {item["id"]: item["translated"] for item in items}
         fixes = approved_fixes(
             review["fixes"],

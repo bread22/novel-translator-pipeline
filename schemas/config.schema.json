@@ -65,6 +65,12 @@
         "translation_max_tokens": {"type": "integer", "minimum": 1},
         "health_check_timeout": {"type": "integer", "minimum": 1},
         "split_on_content_filter": {"type": "boolean"},
+        "review_chunk_min_chars": {"type": "integer", "minimum": 1},
+        "review_chunk_max_chars": {"type": "integer", "minimum": 1},
+        "review_context_before": {"type": "integer", "minimum": 0},
+        "review_context_after": {"type": "integer", "minimum": 0},
+        "review_backtrack_enabled": {"type": "boolean"},
+        "review_backtrack_min_confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "layout": {"enum": ["preserve", "horizontal"]}
       }
     },

@@ -118,6 +118,36 @@ def parse_args() -> argparse.Namespace:
         default=dual_review_enabled(config),
         help="是否启用双模型独立全量审阅",
     )
+    parser.add_argument(
+        "--review-chunk-min-chars", type=int,
+        default=pipeline.get("review_chunk_min_chars", 1000),
+        help="审阅目标分块的原文最小字符数（只在自然段边界切分）",
+    )
+    parser.add_argument(
+        "--review-chunk-max-chars", type=int,
+        default=pipeline.get("review_chunk_max_chars", 1500),
+        help="审阅目标分块的原文最大字符数（只在自然段边界切分）",
+    )
+    parser.add_argument(
+        "--review-context-before", type=int,
+        default=pipeline.get("review_context_before", 3),
+        help="每个审阅分块附带的前文自然段数量",
+    )
+    parser.add_argument(
+        "--review-context-after", type=int,
+        default=pipeline.get("review_context_after", 3),
+        help="每个审阅分块附带的后文自然段数量",
+    )
+    parser.add_argument(
+        "--review-backtrack", action=argparse.BooleanOptionalAction,
+        default=pipeline.get("review_backtrack_enabled", True),
+        help="是否对前文 context 中被后文发现的问题执行定向复核",
+    )
+    parser.add_argument(
+        "--review-backtrack-min-confidence", type=float,
+        default=pipeline.get("review_backtrack_min_confidence", 0.8),
+        help="触发前文定向复核的最低置信度",
+    )
     return parser.parse_args()
 
 
@@ -820,7 +850,11 @@ class IterativePipeline:
                 self.chapter_reviewer(input_path, retry_path)
             self._checkpoint()
             review = read_json(retry_path)
-        review = validate_chapter_review_payload(review, expected_ids)
+        review = validate_chapter_review_payload(
+            review,
+            expected_ids,
+            context_before_ids=expected_ids,
+        )
         current_translations = {item["id"]: item["translated"] for item in items}
         fixes = approved_fixes(
             review["fixes"],
@@ -930,6 +964,8 @@ class IterativePipeline:
             "reviewed_at": utc_now(),
             "checked_paragraphs": len(expected_ids),
             "reported_issues": len(review["fixes"]),
+            "context_findings": len(review.get("context_findings", []) or []),
+            "review_diagnostics": review.get("review_diagnostics", {}),
             "applied_fixes": len(fixes) if self.apply else 0,
             "approved_fixes": fixes,
             "term_summary": term_summary,
@@ -970,6 +1006,7 @@ class IterativePipeline:
             "reviewed": len(expected_ids),
             "checked_paragraphs": len(expected_ids),
             "issues": len(review["fixes"]),
+            "context_findings": len(review.get("context_findings", []) or []),
             "fixes": len(fixes),
             "applied": applied_fixes,
             "backfill_failed": len(backfill["failed"]),
@@ -1158,6 +1195,12 @@ def main() -> int:
             backend=args.reviewer,
             secondary_backend=args.secondary_reviewer,
             dual_review=args.dual_review,
+            chunk_min_chars=args.review_chunk_min_chars,
+            chunk_max_chars=args.review_chunk_max_chars,
+            context_before=args.review_context_before,
+            context_after=args.review_context_after,
+            backtrack_enabled=args.review_backtrack,
+            backtrack_min_confidence=args.review_backtrack_min_confidence,
         ),
         primary_batch_max_chars=args.primary_batch_max_chars,
         primary_translator=args.primary_translator,

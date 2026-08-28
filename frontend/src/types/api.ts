@@ -187,6 +187,16 @@ export interface ChapterReviewReport {
     applied?: boolean;
     not_applied_reason?: string | null;
   }>;
+  context_findings?: Array<{
+    id: string;
+    category?: string;
+    severity?: string;
+    confidence?: number;
+    reason?: string;
+    evidence_ids?: string[];
+    consensus?: boolean | null;
+    reporters?: string[];
+  }>;
   glossary_delta: {
     add: Array<{
       source: string;
@@ -225,6 +235,21 @@ export interface ChapterReviewReport {
     secondary_fixes_count?: number;
     consensus_fixes_count?: number;
     merged_fixes_count?: number;
+  };
+  review_diagnostics?: {
+    chunking?: {
+      mode?: 'source_chars' | 'paragraph_count';
+      min_chars?: number | null;
+      max_chars?: number | null;
+      chunk_count?: number;
+      context_before?: number;
+      context_after?: number;
+    };
+    backtrack?: {
+      enabled?: boolean;
+      candidate_count?: number;
+      rechecks?: Array<Record<string, unknown>>;
+    };
   };
   migration_warning?: string | null;
 }

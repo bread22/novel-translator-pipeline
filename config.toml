@@ -151,6 +151,12 @@ split_on_content_filter = false
 translation_max_tokens = 8192
 health_check_timeout = 120
 layout = "horizontal"
+review_chunk_min_chars = 1000
+review_chunk_max_chars = 1500
+review_context_before = 3
+review_context_after = 3
+review_backtrack_enabled = true
+review_backtrack_min_confidence = 0.8
 
 [queue]
 source_root = "source"

@@ -330,6 +330,23 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
     else:
         raise ValueError(f"未知审阅类型：{kind}")
 
+    if kind == "chapter":
+        review_mode = str(input_payload.get("review_mode", "chapter_chunk"))
+        if review_mode == "targeted_context_recheck":
+            instructions += """
+- 这是一次 targeted_context_recheck，只重新判断 items 中指定的段落；context_before/context_after 仅用于语境。
+- 不输出 context_findings；不新增 glossary_delta、memory_delta 或 chapter_state 内容。
+- 如果现有译文已经正确，fixes 保持为空；如果需要修复，replacement 必须是完整段落译文。
+""".strip()
+        else:
+            instructions += """
+- items 是本次正式审阅目标；只有 items 中的 ID 才能进入 checked_ids 或 fixes。
+- context_before 和 context_after 都同时提供 source 与 translated，只用于理解上下文，不计入 checked_ids。
+- context_after 中的问题留待该段落成为后续正式目标时处理，不输出 finding。
+- 如果当前 target 的语境揭示 context_before 中的明确客观错误，输出 context_findings；finding 只允许指向 context_before 的 ID，不提供 replacement。
+- context_findings 只报告会影响语义、人物关系、术语或事实判断的客观问题，不报告风格偏好。
+""".strip()
+
     taxonomy_instruction = (
         f"\n- taxonomy DIRECT_ALLOWED（{','.join(sorted(DIRECT_ALLOWED))}）；"
         f"GATED_ALLOWED（{','.join(sorted(GATED_ALLOWED))}）；"

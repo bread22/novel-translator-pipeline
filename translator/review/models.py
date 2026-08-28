@@ -81,14 +81,27 @@ class ChapterFix(StrictModel):
     invalid_reason: str | None = None
 
 
+class ContextFinding(StrictModel):
+    id: str = Field(min_length=1)
+    category: str = "context_conflict"
+    severity: str = "major"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+    consensus: bool | None = None
+    reporters: list[str] = Field(default_factory=list)
+
+
 class ChapterReviewOutput(StrictModel):
     schema_version: str = "2.0"
     checked_ids: list[str] = Field(default_factory=list)
     fixes: list[ChapterFix] = Field(default_factory=list)
+    context_findings: list[ContextFinding] = Field(default_factory=list)
     glossary_delta: GlossaryDelta = Field(default_factory=GlossaryDelta)
     memory_delta: MemoryDelta = Field(default_factory=MemoryDelta)
     chapter_state: ChapterState = Field(default_factory=ChapterState)
     dual_review: dict[str, Any] | None = None
+    review_diagnostics: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     @classmethod

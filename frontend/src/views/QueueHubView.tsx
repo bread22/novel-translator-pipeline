@@ -50,16 +50,18 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  const pendingItems = queueStatus?.items.filter((i) => i.status === 'pending') || [];
-  // Paused workers still own a concurrency slot and remain visible in the active area.
-  const runningItems = queueStatus?.items.filter((i) => i.status === 'running' || i.status === 'paused') || [];
+  const pendingItems = queueStatus?.items.filter((i) => i.status === 'pending' || i.status === 'recovery_pending') || [];
+  // Paused/pausing workers still own a concurrency slot and remain visible in the active area.
+  const runningItems = queueStatus?.items.filter((i) =>
+    ['running', 'pausing', 'paused', 'cancelling'].includes(i.status)
+  ) || [];
   const finishedItems =
     queueStatus?.items.filter((i) => ['completed', 'failed', 'cancelled'].includes(i.status)) || [];
 
   // Book In-Queue Lookup map
   const bookQueueMap = new Map<string, QueueItem>();
   queueStatus?.items.forEach((item) => {
-    if (['running', 'pending'].includes(item.status)) {
+    if (['running', 'pausing', 'paused', 'cancelling', 'pending', 'recovery_pending'].includes(item.status)) {
       bookQueueMap.set(item.book_id, item);
     }
   });
@@ -170,6 +172,16 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
       await onRefreshQueue();
     } catch (err: any) {
       alert(`重试失败: ${err.message}`);
+    }
+  };
+
+  const handleResumeItem = async (bookId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    try {
+      await api.resumePipeline(bookId);
+      await onRefreshQueue();
+    } catch (err: any) {
+      alert(`恢复失败: ${err.message}`);
     }
   };
 
@@ -459,8 +471,10 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
             ) : (
               filteredBooks.map((book) => {
                 const queueItem = bookQueueMap.get(book.id);
-                const isRunningInQueue = queueItem?.status === 'running';
-                const isPendingInQueue = queueItem?.status === 'pending';
+                const isRunningInQueue = ['running', 'pausing', 'paused', 'cancelling'].includes(queueItem?.status || '');
+                const isPausedInQueue = queueItem?.status === 'paused';
+                const isPausingInQueue = queueItem?.status === 'pausing';
+                const isPendingInQueue = queueItem?.status === 'pending' || queueItem?.status === 'recovery_pending';
                 const isCompleted = book.status === 'completed';
                 const progressPct =
                   book.total_paragraphs > 0
@@ -489,7 +503,7 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                         {isRunningInQueue ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-bold bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-sm">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                            正在翻译中
+                            {isPausedInQueue ? '已暂停' : isPausingInQueue ? '暂停中' : '正在翻译中'}
                           </span>
                         ) : isPendingInQueue ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-semibold bg-amber-50 border border-amber-300 text-amber-800 rounded-sm">
@@ -575,11 +589,11 @@ export const QueueHubView: React.FC<QueueHubViewProps> = ({
                       {/* Enqueue Action Button */}
                       {isRunningInQueue ? (
                         <button
-                          onClick={() => onSelectBook(book.id, 'studio')}
-                          className="flex items-center gap-1 px-3 py-1 bg-[#1D4ED8] text-white text-xs font-semibold rounded-sm shadow-sm cursor-pointer"
+                          onClick={(e) => isPausedInQueue ? handleResumeItem(book.id, e) : onSelectBook(book.id, 'studio')}
+                          className={`flex items-center gap-1 px-3 py-1 text-white text-xs font-semibold rounded-sm shadow-sm cursor-pointer ${isPausedInQueue ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-[#1D4ED8]'}`}
                         >
                           <Play className="w-3 h-3 fill-white" />
-                          查看控制台
+                          {isPausedInQueue ? '继续流水线' : isPausingInQueue ? '暂停中...' : '查看控制台'}
                         </button>
                       ) : isPendingInQueue ? (
                         <button

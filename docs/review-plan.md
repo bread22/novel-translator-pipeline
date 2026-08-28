@@ -23,7 +23,9 @@
 
 - 单审：`reviewer`，失败后只尝试 `fallback_reviewers` 中显式配置的后端。
 - 双审：`reviewer` 与不同的 `secondary_reviewer` 并发独立审阅，随后合并共识、冲突和 reporter 证据。
-- 失败块可按段落自适应二分到 `max_provider_split_depth`；每次 attempt、candidate、chunk、split path 和 timeout 都通过状态事件记录。
+- 500/502/503/504 与 429 会在同一 payload、同一 split path 上进行有限指数退让，耗尽后进入 fallback Reviewer；连接故障同样只重试原请求，不触发二分。
+- read timeout 先重试原 payload 一次；只有 timeout 耗尽或 JSON、Schema、`checked_ids` 等内容契约错误才允许按段落自适应二分到 `max_provider_split_depth`。
+- 每次 attempt、candidate、chunk、split path、timeout、退让等待、重试、成功和耗尽都通过状态事件记录；退让以 250ms 检查周期响应暂停、停止与取消。
 - 取消会停止等待尚未完成的 reviewer，不为已取消任务发布完成事件。
 
 ## 4. 输出契约

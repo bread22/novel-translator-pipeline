@@ -55,7 +55,7 @@ export interface TaskStatusResponse {
   book_id: string;
   status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
-  reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'completed' | 'failed' | 'cancelled'>>;
+  reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'retry_wait' | 'retrying' | 'completed' | 'failed' | 'cancelled'>>;
   reviewer_details?: Partial<Record<'primary' | 'secondary', ReviewerExecutionDetail>>;
   overall_progress: number;
   current_chapter: string;
@@ -71,7 +71,7 @@ export interface TaskStatusResponse {
 }
 
 export interface ReviewerExecutionDetail {
-  status?: 'standby' | 'pending' | 'reviewing' | 'completed' | 'failed' | 'cancelled';
+  status?: 'standby' | 'pending' | 'reviewing' | 'retry_wait' | 'retrying' | 'completed' | 'failed' | 'cancelled';
   backend?: string;
   attempt?: number;
   candidate_index?: number;
@@ -82,6 +82,12 @@ export interface ReviewerExecutionDetail {
   split_path?: string;
   timeout_seconds?: number;
   error?: string;
+  retry_reason?: string;
+  retry_index?: number;
+  retry_total?: number;
+  retry_delay_seconds?: number;
+  retry_resume_at?: string;
+  http_status?: number;
 }
 
 export interface PipelineStartRequest {
@@ -333,7 +339,7 @@ export interface QueueItem {
   options: PipelineStartRequest;
   status: 'pending' | 'recovery_pending' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
-  reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'completed' | 'failed' | 'cancelled'>>;
+  reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'retry_wait' | 'retrying' | 'completed' | 'failed' | 'cancelled'>>;
   reviewer_details?: Partial<Record<'primary' | 'secondary', ReviewerExecutionDetail>>;
   order_index: number;
   priority: number;

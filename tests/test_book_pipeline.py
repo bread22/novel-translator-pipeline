@@ -674,7 +674,12 @@ class PipelineFunctionTests(unittest.TestCase):
                 cids = [item["id"] for item in chunk_items]
                 # Fail if asked to review more than 2 items at once (simulating timeout on large input)
                 if len(cids) > 2:
-                    raise RuntimeError("Prefill Timeout on large chunk")
+                    from translator.providers.errors import ProviderTimeoutError
+                    exc = ProviderTimeoutError(
+                        "Prefill Timeout on large chunk", provider="test", timeout_seconds=120
+                    )
+                    exc.retries_exhausted = True
+                    raise exc
                 return {
                     "checked_ids": cids,
                     "fixes": [],
@@ -755,12 +760,14 @@ class PipelineFunctionTests(unittest.TestCase):
 
             self.assertEqual(calls, [
                 ("primary-reviewer", ("p1", "p2", "p3", "p4"), 461),
+                ("primary-reviewer", ("p1", "p2", "p3", "p4"), 461),
+                ("fallback-reviewer", ("p1", "p2", "p3", "p4"), 461),
                 ("fallback-reviewer", ("p1", "p2", "p3", "p4"), 461),
                 ("primary-reviewer", ("p1", "p2"), 461),
                 ("primary-reviewer", ("p3", "p4"), 461),
             ])
             reviewing = [state for state in states if state["status"] == "reviewing"]
-            self.assertEqual([state["attempt"] for state in reviewing], [1, 2, 3, 4])
+            self.assertEqual([state["attempt"] for state in reviewing], [1, 3, 5, 6])
             self.assertEqual([state["backend"] for state in reviewing], [
                 "primary-reviewer", "fallback-reviewer", "primary-reviewer", "primary-reviewer",
             ])

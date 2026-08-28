@@ -71,6 +71,13 @@
         "review_context_after": {"type": "integer", "minimum": 0},
         "review_backtrack_enabled": {"type": "boolean"},
         "review_backtrack_min_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "transient_http_retries": {"type": "integer", "minimum": 0},
+        "transient_backoff_min_seconds": {"type": "number", "minimum": 0},
+        "transient_backoff_max_seconds": {"type": "number", "minimum": 0},
+        "transient_backoff_multiplier": {"type": "number", "minimum": 1},
+        "transient_backoff_cap_seconds": {"type": "number", "minimum": 0},
+        "timeout_retries": {"type": "integer", "minimum": 0},
+        "connection_retries": {"type": "integer", "minimum": 0},
         "layout": {"enum": ["preserve", "horizontal"]}
       }
     },

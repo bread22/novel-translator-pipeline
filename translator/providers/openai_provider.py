@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
+import socket
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -15,6 +19,39 @@ from translator.providers.base import (
     provider_block_reason,
     validate_translation_items,
 )
+from translator.providers.errors import (
+    ProviderConnectionError,
+    ProviderHTTPError,
+    ProviderResponseError,
+    ProviderTimeoutError,
+)
+
+
+def _response_excerpt(raw: str, limit: int = 1000) -> str:
+    excerpt = raw[:limit]
+    excerpt = re.sub(r"(?i)bearer\s+[a-z0-9._~+/=-]+", "Bearer [REDACTED]", excerpt)
+    excerpt = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "sk-[REDACTED]", excerpt)
+    return re.sub(
+        r'(?i)(["\']?(?:api[_-]?key|token|secret|password)["\']?\s*[:=]\s*["\']?)[^"\'\s,}]+',
+        r"\1[REDACTED]",
+        excerpt,
+    )
+
+
+def _retry_after_seconds(headers: Any) -> float | None:
+    value = headers.get("Retry-After") if headers is not None and hasattr(headers, "get") else None
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def _load_json_from_text(text: str) -> dict[str, Any]:
@@ -310,9 +347,34 @@ class OpenAIProvider(BaseProvider):
             raw, status, _ = self._post_chat(body_data, effective_timeout)
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{self.name} review HTTP error {exc.code}: {raw[:1000]}") from exc
-        except Exception as exc:
-            raise RuntimeError(f"{self.name} review request failed: {exc}") from exc
+            excerpt = _response_excerpt(raw)
+            raise ProviderHTTPError(
+                f"{self.name} review HTTP error {exc.code}: {excerpt}",
+                provider=self.name,
+                status_code=int(exc.code),
+                response_excerpt=excerpt,
+                retry_after_seconds=_retry_after_seconds(exc.headers),
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ProviderTimeoutError(
+                f"{self.name} review request timed out after {effective_timeout}s: {exc}",
+                provider=self.name,
+                timeout_seconds=effective_timeout,
+            ) from exc
+        except URLError as exc:
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise ProviderTimeoutError(
+                    f"{self.name} review request timed out after {effective_timeout}s: {exc.reason}",
+                    provider=self.name,
+                    timeout_seconds=effective_timeout,
+                ) from exc
+            raise ProviderConnectionError(
+                f"{self.name} review connection failed: {exc.reason}", provider=self.name
+            ) from exc
+        except (ConnectionError, OSError) as exc:
+            raise ProviderConnectionError(
+                f"{self.name} review connection failed: {exc}", provider=self.name
+            ) from exc
 
         response = _load_json_from_text(raw)
         choices = response.get("choices", []) if isinstance(response, dict) else []
@@ -320,4 +382,7 @@ class OpenAIProvider(BaseProvider):
         content = choice.get("message", {}).get("content", "") if isinstance(choice.get("message"), dict) else ""
         if isinstance(content, dict):
             return content
-        return extract_json_object(content or raw)
+        try:
+            return extract_json_object(content or raw)
+        except ValueError as exc:
+            raise ProviderResponseError(f"{self.name} review response is invalid: {exc}", provider=self.name) from exc

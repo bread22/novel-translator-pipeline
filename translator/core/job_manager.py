@@ -771,7 +771,7 @@ class JobManager:
             def handle_reviewer_status(status_info: dict[str, Any]) -> None:
                 role = str(status_info.get("role", "")).strip()
                 status = str(status_info.get("status", "")).strip()
-                if role not in {"primary", "secondary"} or status not in {"standby", "pending", "reviewing", "completed", "failed", "cancelled"}:
+                if role not in {"primary", "secondary"} or status not in {"standby", "pending", "reviewing", "retry_wait", "retrying", "completed", "failed", "cancelled"}:
                     return
                 with self._lock:
                     item.reviewer_states = {**item.reviewer_states, role: status}
@@ -785,6 +785,8 @@ class JobManager:
                     split_path = str(status_info.get("split_path", "root"))
                     action = {
                         "reviewing": "审阅中",
+                        "retry_wait": "退让等待",
+                        "retrying": "正在重试",
                         "completed": "已完成",
                         "failed": "调用失败",
                         "cancelled": "已取消",
@@ -792,6 +794,12 @@ class JobManager:
                     parts = [f"{role_label} {backend} {action}"]
                     if attempt:
                         parts.append(f"尝试 #{attempt}")
+                    if status == "retry_wait":
+                        delay = float(status_info.get("retry_delay_seconds", 0) or 0)
+                        retry_index = int(status_info.get("retry_index", 0) or 0)
+                        retry_total = int(status_info.get("retry_total", 0) or 0)
+                        reason = str(status_info.get("retry_reason", "瞬态故障"))
+                        parts.append(f"{reason} 退让 {delay:.1f} 秒（{retry_index}/{retry_total}）")
                     if chunk_index and total_chunks:
                         parts.append(f"分块 {chunk_index}/{total_chunks}")
                     if split_path and split_path != "root":

@@ -281,6 +281,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           : rev2RawStatus || (isReviewActive ? 'pending' : 'standby');
         const reviewerBadge = (status: string) => ({
           reviewing: '● REVIEWING',
+          retry_wait: '◷ RETRY WAIT',
+          retrying: '↻ RETRYING',
           completed: '✓ COMPLETED',
           failed: '× FAILED',
           cancelled: 'CANCELLED',
@@ -288,7 +290,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           pending: 'PENDING',
           standby: 'STANDBY',
         }[status] || 'STANDBY');
-        const reviewerActive = (status: string) => status === 'reviewing';
+        const reviewerActive = (status: string) => ['reviewing', 'retry_wait', 'retrying'].includes(status);
         const reviewerDetailText = (detail: ReviewerExecutionDetail | undefined) => {
           if (!detail) return '';
           const parts: string[] = [];
@@ -298,6 +300,9 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
             parts.push(`路由 ${detail.candidate_index}/${detail.candidate_total}`);
           }
           if (detail.split_path && detail.split_path !== 'root') parts.push(`子段 ${detail.split_path}`);
+          if (detail.status === 'retry_wait') {
+            parts.push(`${detail.retry_reason || '瞬态故障'} 退让 ${(detail.retry_delay_seconds || 0).toFixed(1)} 秒（${detail.retry_index || 0}/${detail.retry_total || 0}）`);
+          }
           return parts.join(' · ');
         };
         const reviewerCard = (

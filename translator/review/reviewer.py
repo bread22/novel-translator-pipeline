@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import random
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Any, Callable
 
 from translator.core.config import load_config, setting
+from translator.core.job_control import JobCancelled
 from translator.core.novel_tool import call_novel_translator
 from translator.core.workspace import (
     BookWorkspace,
@@ -29,6 +33,13 @@ from translator.glossary.service import apply_glossary_delta, persist_glossary
 from translator.glossary.taxonomy import CategoryTier, category_tier
 from translator.glossary.validation import validate_term_candidate
 from translator.providers.registry import get_provider
+from translator.providers.errors import (
+    ProviderConnectionError,
+    ProviderHTTPError,
+    ProviderRequestError,
+    ProviderResponseError,
+    ProviderTimeoutError,
+)
 from translator.review.models import ChapterReviewOutput, GlobalReviewOutput
 
 
@@ -51,6 +62,10 @@ OBJECTIVE_SEVERITIES = {"critical", "major", "minor"}
 CATEGORY_ALIASES = {
     "translation_error": "mistranslation",
 }
+
+
+class ReviewValidationError(ValueError):
+    """A shape/content error for which reducing the target segment can help."""
 
 
 import re
@@ -172,7 +187,7 @@ def validate_chapter_review_payload(
     try:
         normalized = ChapterReviewOutput.model_validate(payload).model_dump(exclude_none=True)
     except Exception as exc:
-        raise ValueError(f"章节审阅结果未通过完整 Schema 校验：{exc}") from exc
+        raise ReviewValidationError(f"章节审阅结果未通过完整 Schema 校验：{exc}") from exc
     raw_checked_ids = [str(item) for item in normalized["checked_ids"]]
     # Filter checked_ids to expected IDs and deduplicate preserving order
     seen = set()
@@ -257,7 +272,7 @@ def validate_chapter_review_payload(
     received = set(checked_ids)
     missing = sorted(expected_ids - received)
     if missing:
-        raise ValueError(f"章节审阅结果段落不匹配；checked_ids 缺少 ID：{', '.join(missing)}")
+        raise ReviewValidationError(f"章节审阅结果段落不匹配；checked_ids 缺少 ID：{', '.join(missing)}")
     return ChapterReviewOutput.model_validate(normalized).model_dump(exclude_none=True)
 
 
@@ -595,6 +610,46 @@ def dynamic_review_timeout(input_payload: dict[str, Any]) -> int:
     return max(120, min(720, 45 + int(payload_chars * 0.05)))
 
 
+def _coerce_provider_request_error(exc: Exception, provider: str, timeout: int) -> Exception:
+    if isinstance(exc, (ProviderRequestError, ProviderResponseError)):
+        return exc
+    if isinstance(exc, TimeoutError):
+        return ProviderTimeoutError(
+            f"{provider} review request timed out after {timeout}s: {exc}",
+            provider=provider,
+            timeout_seconds=timeout,
+        )
+    if isinstance(exc, ConnectionError):
+        return ProviderConnectionError(f"{provider} review connection failed: {exc}", provider=provider)
+    return exc
+
+
+def should_adaptively_split(exc: Exception) -> bool:
+    """Only shrink input for response/validation failures and exhausted read timeouts."""
+    if isinstance(exc, ProviderTimeoutError):
+        return exc.retries_exhausted
+    if isinstance(exc, (ProviderHTTPError, ProviderConnectionError, ProviderRequestError)):
+        return False
+    return isinstance(exc, (ReviewValidationError, ProviderResponseError, ValueError))
+
+
+def _interruptible_retry_wait(
+    delay: float,
+    *,
+    cancel_check: Callable[[], None] | None,
+    monotonic: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> None:
+    deadline = monotonic() + max(0.0, delay)
+    while True:
+        if cancel_check:
+            cancel_check()
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return
+        sleeper(min(0.25, remaining))
+
+
 def _execute_review_with_fallbacks(
     kind: str,
     input_payload: dict[str, Any],
@@ -611,49 +666,148 @@ def _execute_review_with_fallbacks(
     split_path: str = "root",
     attempt_counters: dict[str, int] | None = None,
     attempt_lock: threading.Lock | None = None,
+    retry_config: dict[str, Any] | None = None,
+    random_uniform: Callable[[float, float], float] = random.uniform,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    wall_clock: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     backends = _review_backends(backend)
-    last_exc = None
+    last_exc: Exception | None = None
     effective_timeout = timeout or dynamic_review_timeout(input_payload)
+    pipeline_config = retry_config if retry_config is not None else load_config().get("pipeline", {})
+    transient_retries = max(0, int(pipeline_config.get("transient_http_retries", 3)))
+    timeout_retries = max(0, int(pipeline_config.get("timeout_retries", 1)))
+    connection_retries = max(0, int(pipeline_config.get("connection_retries", 2)))
+    backoff_min = max(0.0, float(pipeline_config.get("transient_backoff_min_seconds", 10)))
+    backoff_max = max(backoff_min, float(pipeline_config.get("transient_backoff_max_seconds", 20)))
+    backoff_multiplier = max(1.0, float(pipeline_config.get("transient_backoff_multiplier", 2)))
+    backoff_cap = max(0.0, float(pipeline_config.get("transient_backoff_cap_seconds", 80)))
+
+    def next_attempt() -> int:
+        if attempt_counters is None:
+            return 0
+        if attempt_lock is None:
+            attempt_counters[role] = attempt_counters.get(role, 0) + 1
+            return attempt_counters[role]
+        with attempt_lock:
+            attempt_counters[role] = attempt_counters.get(role, 0) + 1
+            return attempt_counters[role]
+
+    local_attempt = 0
     for candidate_index, candidate in enumerate(backends, start=1):
-        if cancel_check:
-            cancel_check()
-        if attempt_counters is not None:
-            if attempt_lock is None:
-                attempt_counters[role] = attempt_counters.get(role, 0) + 1
-                attempt = attempt_counters[role]
-            else:
-                with attempt_lock:
-                    attempt_counters[role] = attempt_counters.get(role, 0) + 1
-                    attempt = attempt_counters[role]
-        else:
-            attempt = candidate_index
-        status_base = {
-            "role": role,
-            "backend": candidate,
-            "attempt": attempt,
-            "candidate_index": candidate_index,
-            "candidate_total": len(backends),
-            "chunk_index": chunk_index,
-            "total_chunks": total_chunks,
-            "split_depth": split_depth,
-            "split_path": split_path,
-            "timeout_seconds": effective_timeout,
-        }
-        if on_reviewer_status:
-            on_reviewer_status({**status_base, "status": "reviewing"})
-        try:
-            provider = get_provider(candidate)
-            result = provider.review(kind, input_payload, schema_path, autonomous=autonomous, timeout=effective_timeout)
+        retry_index = 0
+        provider = None
+        while True:
+            if cancel_check:
+                cancel_check()
+            local_attempt += 1
+            attempt = next_attempt() if attempt_counters is not None else local_attempt
+            status_base = {
+                "role": role,
+                "backend": candidate,
+                "attempt": attempt,
+                "candidate_index": candidate_index,
+                "candidate_total": len(backends),
+                "chunk_index": chunk_index,
+                "total_chunks": total_chunks,
+                "split_depth": split_depth,
+                "split_path": split_path,
+                "timeout_seconds": effective_timeout,
+                "retry_index": retry_index,
+            }
             if on_reviewer_status:
-                on_reviewer_status({**status_base, "status": "completed"})
-            return result
-        except Exception as exc:
-            last_exc = exc
-            if on_reviewer_status:
-                on_reviewer_status({**status_base, "status": "failed", "error": str(exc)})
-            continue
-    raise RuntimeError(f"所有审阅端均失败 (kind={kind}, primary={backend}): {last_exc}") from last_exc
+                on_reviewer_status({**status_base, "status": "reviewing" if retry_index == 0 else "retrying"})
+            try:
+                if provider is None:
+                    provider = get_provider(candidate)
+                result = provider.review(
+                    kind, input_payload, schema_path, autonomous=autonomous, timeout=effective_timeout
+                )
+                if on_reviewer_status:
+                    on_reviewer_status({**status_base, "status": "completed"})
+                return result
+            except JobCancelled:
+                if on_reviewer_status:
+                    on_reviewer_status({**status_base, "status": "cancelled"})
+                raise
+            except Exception as raw_exc:
+                exc = (
+                    ProviderRequestError(
+                        f"{candidate} reviewer initialization failed: {raw_exc}",
+                        provider=candidate,
+                        retryable=False,
+                    )
+                    if provider is None
+                    else _coerce_provider_request_error(raw_exc, candidate, effective_timeout)
+                )
+                last_exc = exc
+                retry_total = 0
+                reason = ""
+                if isinstance(exc, ProviderHTTPError) and exc.retryable:
+                    retry_total = transient_retries
+                    reason = f"http_{exc.status_code}"
+                elif isinstance(exc, ProviderTimeoutError):
+                    retry_total = timeout_retries
+                    reason = "read_timeout"
+                elif isinstance(exc, ProviderConnectionError):
+                    retry_total = connection_retries
+                    reason = "connection_error"
+
+                if retry_index < retry_total:
+                    if isinstance(exc, ProviderHTTPError) and exc.retry_after_seconds is not None:
+                        delay = min(backoff_cap, exc.retry_after_seconds)
+                    elif isinstance(exc, ProviderConnectionError):
+                        delay = min(5.0, random_uniform(1.0, 2.0) * (2 ** retry_index))
+                    elif isinstance(exc, ProviderTimeoutError):
+                        delay = 0.25
+                    else:
+                        low = min(backoff_cap, backoff_min * (backoff_multiplier ** retry_index))
+                        high = min(backoff_cap, backoff_max * (backoff_multiplier ** retry_index))
+                        delay = random_uniform(low, high)
+                    wait_status = {
+                        **status_base,
+                        "status": "retry_wait",
+                        "retry_reason": reason,
+                        "retry_index": retry_index + 1,
+                        "retry_total": retry_total,
+                        "retry_delay_seconds": round(delay, 3),
+                        "retry_resume_monotonic": monotonic() + delay,
+                        "retry_resume_at": datetime.fromtimestamp(
+                            wall_clock() + delay, tz=timezone.utc
+                        ).isoformat(),
+                    }
+                    if isinstance(exc, ProviderHTTPError):
+                        wait_status["http_status"] = exc.status_code
+                    if on_reviewer_status:
+                        on_reviewer_status(wait_status)
+                    try:
+                        _interruptible_retry_wait(
+                            delay, cancel_check=cancel_check, monotonic=monotonic, sleeper=sleeper
+                        )
+                    except JobCancelled:
+                        if on_reviewer_status:
+                            on_reviewer_status({**wait_status, "status": "cancelled"})
+                        raise
+                    retry_index += 1
+                    continue
+
+                if isinstance(exc, ProviderRequestError):
+                    exc.retries_exhausted = isinstance(exc, ProviderTimeoutError) or retry_total > 0
+                retries_exhausted = isinstance(exc, ProviderTimeoutError) or retry_total > 0
+                if on_reviewer_status:
+                    on_reviewer_status({
+                        **status_base,
+                        "status": "failed",
+                        "error": str(exc),
+                        "retry_reason": reason or None,
+                        "retry_total": retry_total,
+                        "retries_exhausted": retries_exhausted,
+                    })
+                break
+    if last_exc is None:
+        raise RuntimeError(f"没有可用审阅端 (kind={kind}, primary={backend})")
+    raise last_exc
 
 
 def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str, Any]) -> dict[str, Any]:
@@ -896,7 +1050,7 @@ def _execute_segment_with_adaptive_split(
     context_before_size: int = 0,
     context_after_size: int = 0,
 ) -> dict[str, Any]:
-    """Execute review for items. If failure occurs and len(items) > 1, recursively binary split."""
+    """Execute review and split only failures whose classification can benefit from smaller input."""
     if not items:
         return _normalized_review({
             "checked_ids": [],
@@ -1004,8 +1158,8 @@ def _execute_segment_with_adaptive_split(
         )
         return res
     except Exception as exc:
-        if len(items) > 1 and depth < max_depth:
-            # Recursive binary split on failure: Never skip review!
+        if should_adaptively_split(exc) and len(items) > 1 and depth < max_depth:
+            # Content and exhausted read-timeout failures may benefit from a smaller target.
             midpoint = max(1, len(items) // 2)
             left_items = items[:midpoint]
             right_items = items[midpoint:]

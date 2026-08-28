@@ -196,6 +196,13 @@ review_context_before = 3
 review_context_after = 3
 review_backtrack_enabled = true
 review_backtrack_min_confidence = 0.8
+transient_http_retries = 3
+transient_backoff_min_seconds = 10
+transient_backoff_max_seconds = 20
+transient_backoff_multiplier = 2
+transient_backoff_cap_seconds = 80
+timeout_retries = 1
+connection_retries = 2
 
 [queue]
 source_root = "source"

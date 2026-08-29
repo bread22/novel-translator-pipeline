@@ -38,6 +38,10 @@ def test_chapter_review_prompt_uses_meaning_first_titles_and_allows_polishing() 
     assert "只有人名、品牌、虚构专名、无法自然意译的名称" in prompt
     assert "Reviewer 同时负责中文润色" in prompt
     assert "纯润色使用 `category: style`" in prompt
+    assert "审阅顺序固定为：先做基础语义与中文自然度检查，再做风格润色" in prompt
+    assert "字面看似中文、实际是日语词法直搬" in prompt
+    assert "兄嫁（あによめ）" in prompt
+    assert "嫂子`、`兄嫂` 或 `大嫂" in prompt
     assert "severity=major 只表示会造成实质意义错误" in prompt
     assert "置信度是基于证据的记录" in prompt
     assert "confidence 只能作为辅助记录，绝不能单独触发 auto_apply" in prompt
@@ -55,3 +59,11 @@ def test_knowledge_prompts() -> None:
     assert "Knowledge Extractor" in prompt
     assert "rolling_context_delta" in prompt
     assert "knowledge_candidates" in prompt
+
+
+def test_translation_policy_covers_contextual_kinship_conversion() -> None:
+    policy = (Path(__file__).resolve().parents[1] / "docs" / "prompts" / "france-shoin-90s-classic.md").read_text(encoding="utf-8")
+    assert "日语亲属称谓必须转换为自然的简体中文亲属称谓" in policy
+    assert "兄嫁（あによめ）" in policy
+    assert "嫂子 / 兄嫂 / 大嫂" in policy
+    assert "義弟" in policy and "小叔子 / 妻弟" in policy

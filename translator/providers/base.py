@@ -270,14 +270,19 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
             kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留日文假名或韩文字符，必须逐一在 fixes 中输出 policy_violation 修复并提供纯正中文 replacement】：\n    {', '.join(flagged_kana_ids)}"
 
         instructions = f"""
-这是章节级语义翻译审阅，知识提取由独立的 Knowledge Extractor 负责。
+这是章节级语义审阅与中文润色，知识提取由独立的 Knowledge Extractor 负责。
 - 顶层只输出 {{"schema_version":"2.0", "checked_ids":[...], "fixes":[...], "context_findings":[...]}}。
-- 知识库、记忆库和章节状态字段全部交给独立提取器；本角色只返回语义修复结果。
+- 知识库、记忆库和章节状态字段全部交给独立提取器；本角色只返回语义审阅与润色结果。
 - {kana_warning}
+- 证据边界：只依据输入中的 source、translated、context、translation_policy 和 glossary 判断。不得把模型记忆、未经提供的出版社惯例、年代惯例、文库惯例或所谓中文出版惯例当作规则；除非该规则明确写在 translation_policy 或 glossary 中，否则不得据此要求修改。
 - 检查错译、漏译、增译、主客体、指代、否定、条件、因果、时间、关系、专名和 replacement 完整性。
 - 必须检查 items 中每条译文并把全部 ID 且不重复地写入 checked_ids。
-- fixes 只报告客观翻译问题；replacement 必须是完整段落译文。
-- fixes.category 只能使用 mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation。
+- Reviewer 同时负责中文润色：可修正生硬、机翻腔、不自然搭配、重复、节奏和叙述衔接，并给出完整段落 replacement。润色必须保留 source 的事实、动作、关系、信息量和语气，不得凭空扩写剧情；纯润色使用 `category: style`，客观错误使用对应的客观类别。
+- severity=major 只表示会造成实质意义错误或关键事实错误，例如否定/主体客体/指代/动作/关系/关键术语被改变；纯润色使用 `style` 且通常为 `minor`，不得把润色包装成 major。
+- 置信度是基于证据的记录，不是校准后的正确率，也不是自动写回许可。不得仅凭 confidence=0.8、0.9 或更高创建或升级 finding；客观错误必须指出 source 与 translated 的具体语义矛盾，style 润色必须指出具体的中文表达问题及其 translation_policy 依据。
+- **透明的外来语不得默认音译。** 对标题和片假名按意义优先：`レイプ` → 强暴/强奸，`ホテル` → 酒店，`ナイフ` → 刀，`セックス` → 性爱；不要机械写成“雷普”“厚泰鲁”“奈夫”“塞库斯”。只有人名、品牌、虚构专名、无法自然意译的名称，或 Glossary 已明确指定音译时，才考虑音译。书名也一样；片假名书名若是有明确意义的普通英语词组合，默认优先传达标题意义，而不是机械保留声音。
+- `terminology` 只能用于 source、translation_policy 或 glossary 能直接证明的术语错误，不能用来包装润色；译文中确实残留未翻译的日文/韩文字符仍按 policy_violation 处理，但 source 中的片假名本身不是译文错误。
+- fixes.category 只能使用 style、mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation。
 """.strip()
     elif kind == "knowledge_window":
         prompt_file = ROOT / "docs" / "prompts" / "knowledge_extractor_window.md"
@@ -328,9 +333,9 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 """.strip()
 
     auto_rule = (
-        "全自动模式下，所有置信度 >= 0.8 且有明确修复的项目设置 auto_apply=true。"
+        "全自动模式下，只有同时满足以下条件才设置 auto_apply=true：属于上述客观错误或 style 类别、有输入证据或 translation_policy 支持、severity 与修改幅度相称、replacement 是完整准确的段落译文，且没有改变 source 的事实与语义。confidence 只能作为辅助记录，绝不能单独触发 auto_apply；证据不足或改写不确定时保持 auto_apply=false，但仍可输出供人工查看的润色 replacement。"
         if autonomous
-        else "涉及语义取舍、风格偏好或不确定改写时，auto_apply=false 且 replacement 为空。"
+        else "对已确认不改变原意的润色可输出 style fix；涉及语义取舍、未提供的出版惯例或不确定改写时，auto_apply=false，replacement 仅在能给出完整可靠段落时填写。"
     )
     schema = schema_path.read_text(encoding="utf-8")
     role_intro = "资深日译中小说审阅专家" if kind in {"chapter", "global"} else "本书知识提取器"

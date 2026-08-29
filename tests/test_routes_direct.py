@@ -301,6 +301,6 @@ def test_report_explains_why_each_unapplied_fix_was_skipped(tmp_path: Path, monk
     fixes = knowledge.list_chapter_reports("book")[0]["fixes"]
     assert fixes[0]["applied"] is True and fixes[0]["not_applied_reason"] is None
     assert fixes[1]["applied"] is False
-    assert "不在客观缺陷自动修正白名单" in fixes[1]["not_applied_reason"]
+    assert "置信度 80% 低于 90% 自动修正门槛" in fixes[1]["not_applied_reason"]
     assert fixes[2]["applied"] is False
     assert fixes[2]["not_applied_reason"] == "建议译文仍含韩文字符，写回安全校验已拦截"

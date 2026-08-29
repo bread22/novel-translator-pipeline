@@ -331,7 +331,7 @@ class OpenAIProvider(BaseProvider):
         system_content = (
             "你是本书 Knowledge Extractor。严格按输入的固定提示词和 JSON Schema 提取临时上下文、长期候选或最终动作；不要输出 Markdown 或额外文字。"
             if kind in {"knowledge_window", "knowledge_finalize"}
-            else "你是资深日译中小说语义审阅专家。只检查译文相对于原文的客观错误，并严格输出本次 kind 指定的 JSON 对象；不要输出知识库、记忆或章节状态字段，不要输出 Markdown 或额外文字。"
+            else "你是资深日译中小说语义审阅与中文润色专家。检查译文相对于原文的客观错误，并在不改变原意的前提下进行必要润色；严格输出本次 kind 指定的 JSON 对象，不要输出知识库、记忆或章节状态字段，不要输出 Markdown 或额外文字。"
         )
         body_data: dict[str, Any] = {
             "model": self.model,

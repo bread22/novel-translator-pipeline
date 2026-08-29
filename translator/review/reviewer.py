@@ -51,6 +51,7 @@ OBJECTIVE_CATEGORIES = {
     "context_conflict",
     "policy_violation",
 }
+REVIEW_FIX_CATEGORIES = OBJECTIVE_CATEGORIES | {"style"}
 OBJECTIVE_SEVERITIES = {"critical", "major", "minor"}
 CATEGORY_ALIASES = {
     "translation_error": "mistranslation",
@@ -144,7 +145,7 @@ def approved_fixes(
         if is_new_contract or mandatory_script_cleanup or mandatory_masking_cleanup:
             item["category"] = category
         if is_new_contract and (
-            category not in OBJECTIVE_CATEGORIES
+            category not in REVIEW_FIX_CATEGORIES
             or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
         ):
             continue
@@ -162,8 +163,8 @@ def approved_fixes(
             and is_consensus
             and item.get("auto_apply") is True
         )
-        # Category-based Dynamic Threshold: Objective categories qualify at 0.80+, consensus auto-qualifies
-        req_threshold = 0.8 if (is_new_contract and category in OBJECTIVE_CATEGORIES) else threshold
+        # Category-based Dynamic Threshold: review fix categories qualify at 0.80+, consensus auto-qualifies
+        req_threshold = 0.8 if (is_new_contract and category in REVIEW_FIX_CATEGORIES) else threshold
         meets_approval_threshold = mandatory_script_cleanup or mandatory_masking_cleanup or is_consensus or (
             (autonomous or item.get("auto_apply") is True)
             and conf >= req_threshold

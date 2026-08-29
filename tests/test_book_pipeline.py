@@ -65,6 +65,14 @@ class PipelineFunctionTests(unittest.TestCase):
         ]
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a"])
 
+    def test_approved_fixes_allows_explicit_style_polish(self) -> None:
+        item = {
+            "id": "p1", "category": "style", "severity": "minor", "confidence": 0.85,
+            "replacement": "更自然的段落。", "auto_apply": True,
+        }
+        approved = approved_fixes([item], autonomous=True)
+        self.assertEqual([fix["id"] for fix in approved], ["p1"])
+
     def test_approved_fixes_allows_objective_minor_and_lower_threshold_fixes(self) -> None:
         items = [
             {"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.85, "replacement": "修复1", "auto_apply": True},

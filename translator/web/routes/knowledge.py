@@ -15,8 +15,8 @@ from translator.glossary.taxonomy import canonical_category, category_tier, Cate
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.review.models import normalize_review_for_display
 from translator.review.reviewer import (
-    OBJECTIVE_CATEGORIES,
     OBJECTIVE_SEVERITIES,
+    REVIEW_FIX_CATEGORIES,
     has_hangul,
     has_japanese_kana,
     has_masking_symbol,
@@ -62,8 +62,8 @@ def _not_applied_reason(fix: dict[str, Any], *, apply_disabled: bool) -> str:
         return "建议译文仍含伏字或遮掩符号，写回安全校验已拦截"
     category = str(fix.get("category", ""))
     severity = str(fix.get("severity", ""))
-    if category not in OBJECTIVE_CATEGORIES:
-        return f"问题分类 {category or 'unknown'} 不在客观缺陷自动修正白名单"
+    if category not in REVIEW_FIX_CATEGORIES:
+        return f"问题分类 {category or 'unknown'} 不在审阅修正白名单"
     if severity not in OBJECTIVE_SEVERITIES:
         return f"严重度 {severity or 'unknown'} 未达到 critical/major 自动修正门槛"
     confidence = float(fix.get("confidence", 0) or 0)

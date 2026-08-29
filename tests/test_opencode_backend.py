@@ -38,6 +38,29 @@ class OpenCodeBackendTests(unittest.TestCase):
             {"items": []},
         )
 
+    def test_parse_json_object_preserves_knowledge_protocol_roots(self) -> None:
+        window = {
+            "schema_version": "1.0",
+            "rolling_context_delta": {"active_entities": ["角色A"]},
+            "knowledge_candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "kind": "memory",
+                    "key": "fact-1",
+                    "value": "事实",
+                    "evidence_ids": ["p1"],
+                }
+            ],
+            "conflicts": [],
+        }
+        finalization = {
+            "schema_version": "1.0",
+            "decisions": [{"candidate_id": "candidate-1", "action": "active"}],
+        }
+
+        self.assertEqual(parse_json_object(json.dumps(window, ensure_ascii=False)), window)
+        self.assertEqual(parse_json_object(json.dumps(finalization, ensure_ascii=False)), finalization)
+
     def test_health_check_requires_exact_json_response(self) -> None:
         with patch("translator.providers.opencode.run_json", return_value={"ok": True}):
             result = check(timeout=3, role="reviewer")

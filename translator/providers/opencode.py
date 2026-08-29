@@ -12,6 +12,7 @@ from translator.core.config import load_config, setting
 from translator.providers.base import (
     BaseProvider,
     build_review_prompt,
+    extract_json_object,
     parse_translation_items,
     provider_block_reason,
     validate_translation_items,
@@ -148,32 +149,7 @@ def run_prompt(
     raise OpenCodeError("opencode failed", reason="process")
 
 
-def parse_json_object(text: str) -> dict[str, Any]:
-    candidates = [text.strip()]
-    if "```" in text:
-        candidates.extend(block.removeprefix("json").strip() for block in text.split("```")[1::2])
-    decoder = json.JSONDecoder()
-    found: list[dict[str, Any]] = []
-    for candidate in candidates:
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            value = None
-        if isinstance(value, dict):
-            found.append(value)
-        for index, char in enumerate(candidate):
-            if char != "{":
-                continue
-            try:
-                value, _ = decoder.raw_decode(candidate[index:])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                found.append(value)
-    if found:
-        protocol_keys = {"items", "checked_ids", "fixes", "checked_chapters", "ok"}
-        return max(found, key=lambda item: (len(protocol_keys.intersection(item)), len(item)))
-    raise ValueError("OpenCode 输出中没有找到 JSON 对象")
+parse_json_object = extract_json_object
 
 
 def run_json(prompt: str, *, role: str = "reviewer", timeout: int = 600) -> dict[str, Any]:

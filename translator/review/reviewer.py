@@ -41,6 +41,12 @@ from translator.providers.errors import (
     ProviderTimeoutError,
 )
 from translator.review.models import ChapterReviewOutput, GlobalReviewOutput
+from translator.review.context_budget import (
+    ReviewContextBudget,
+    ReviewContextOverflowError,
+    ReviewTargetSplitRequired,
+    build_budgeted_review_context,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -643,6 +649,10 @@ def _coerce_provider_request_error(exc: Exception, provider: str, timeout: int) 
 
 def should_adaptively_split(exc: Exception) -> bool:
     """Only shrink input for response/validation failures and exhausted read timeouts."""
+    if isinstance(exc, ReviewTargetSplitRequired):
+        return True
+    if isinstance(exc, ReviewContextOverflowError):
+        return False
     if isinstance(exc, ProviderTimeoutError):
         return exc.retries_exhausted
     if isinstance(exc, (ProviderHTTPError, ProviderConnectionError, ProviderRequestError)):
@@ -833,7 +843,9 @@ def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str
     chunk_review = _normalized_review(chunk_review)
 
     # 1. Forward Glossary
-    current_glossary = list(rolling.get("glossary", []))
+    raw_glossary = rolling.get("glossary", [])
+    glossary_document = dict(raw_glossary) if isinstance(raw_glossary, dict) else None
+    current_glossary = list(raw_glossary.get("terms", [])) if isinstance(raw_glossary, dict) else list(raw_glossary)
     term_index = {str(term.get("source", "")).strip(): index for index, term in enumerate(current_glossary) if isinstance(term, dict)}
     for term in chunk_review["glossary_delta"]["add"] + chunk_review["glossary_delta"]["update"]:
         if isinstance(term, dict) and term.get("source"):
@@ -843,7 +855,11 @@ def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str
             elif src:
                 term_index[src] = len(current_glossary)
                 current_glossary.append(term)
-    rolling["glossary"] = current_glossary
+    if glossary_document is not None:
+        glossary_document["terms"] = current_glossary
+        rolling["glossary"] = glossary_document
+    else:
+        rolling["glossary"] = current_glossary
 
     # 2. Forward Book Memory
     current_memory = dict(rolling.get("book_memory", {}))
@@ -862,10 +878,11 @@ def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str
         current_memory["conflicts"] = conflicts
         rolling["book_memory"] = current_memory
 
-    # 3. Forward Chapter State (Narrative summary of immediate preceding chunk)
+    # 3. Keep the previous chapter seed distinct from this chapter's rolling
+    # state. The caller invokes this only after a (possibly dual) result merged.
     chunk_state = chunk_review.get("chapter_state")
     if isinstance(chunk_state, dict) and chunk_state:
-        rolling["previous_chapter_state"] = chunk_state
+        rolling["current_chapter_rolling_state"] = chunk_state
 
     return rolling
 
@@ -906,6 +923,8 @@ def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> 
             finding_index[finding_id] = len(merged_findings)
             merged_findings.append(finding)
 
+    context_snapshots = list((chunk_a.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
+    context_snapshots.extend((chunk_b.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
     return _normalized_review({
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
@@ -913,6 +932,7 @@ def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> 
         "glossary_delta": merged_glossary_delta,
         "memory_delta": merged_memory,
         "chapter_state": merged_state,
+        "review_diagnostics": {"context_snapshots": context_snapshots} if context_snapshots else None,
     })
 
 
@@ -1131,17 +1151,37 @@ def _execute_segment_with_adaptive_split(
                 for item in items
                 if isinstance(item, dict) and item.get("id")
             }
-            return merge_chapter_reviews(primary_payload, secondary_payload, current_translations=current_trans)
-        if primary_payload:
-            return primary_payload
-        if secondary_payload:
-            return secondary_payload
-        raise RuntimeError(f"双审阅端均失败: {'; '.join(errors)}")
+            merged = merge_chapter_reviews(primary_payload, secondary_payload, current_translations=current_trans)
+            primary_snapshots = list((primary_payload.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
+            secondary_snapshots = list((secondary_payload.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
+            if primary_snapshots or secondary_snapshots:
+                primary_ids = [item.get("context_snapshot_id") for item in primary_snapshots]
+                secondary_ids = [item.get("context_snapshot_id") for item in secondary_snapshots]
+                merged["review_diagnostics"] = {
+                    "context_snapshots": primary_snapshots,
+                    "dual_snapshot_match": primary_ids == secondary_ids,
+                }
+            return merged
+        raise RuntimeError(f"双审阅未完整完成: {'; '.join(errors)}")
 
     if cancel_check:
         cancel_check()
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
+    context_diagnostics: dict[str, Any] | None = None
+    pipeline_config = load_config().get("pipeline", {})
+    context_config = ReviewContextBudget.from_mapping(pipeline_config.get("review_context"))
+    if context_config.enabled:
+        _snapshot, context_diagnostics, segment_payload = build_budgeted_review_context(
+            base_payload,
+            items=items,
+            context_before=list(base_payload.get("context_before", []) or []),
+            context_after=list(base_payload.get("context_after", []) or []),
+            trigger_evidence=list(base_payload.get("trigger_findings", []) or []),
+            budget=context_config,
+            schema_path=schema_path,
+            autonomous=autonomous,
+        )
     expected_ids = {str(item.get("id", "")) for item in items if item.get("id")}
     context_before_ids = {
         str(item.get("id", ""))
@@ -1173,9 +1213,15 @@ def _execute_segment_with_adaptive_split(
             expected_ids,
             context_before_ids=context_before_ids,
         )
+        if context_diagnostics is not None:
+            res["review_diagnostics"] = {"context_snapshots": [context_diagnostics]}
         return res
     except Exception as exc:
-        if should_adaptively_split(exc) and len(items) > 1 and depth < max_depth:
+        if (
+            should_adaptively_split(exc)
+            and len(items) > 1
+            and (depth < max_depth or isinstance(exc, ReviewTargetSplitRequired))
+        ):
             # Content and exhausted read-timeout failures may benefit from a smaller target.
             midpoint = max(1, len(items) // 2)
             left_items = items[:midpoint]
@@ -1282,6 +1328,8 @@ def _replace_targeted_review(
         if str(item.get("id", "")) not in targeted_ids
     ]
     fixes.extend(targeted.get("fixes", []) or [])
+    context_snapshots = list((aggregate.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
+    context_snapshots.extend((targeted.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
     return _normalized_review({
         **aggregate,
         "checked_ids": list(dict.fromkeys(
@@ -1289,6 +1337,7 @@ def _replace_targeted_review(
             + list(targeted.get("checked_ids", []) or [])
         )),
         "fixes": fixes,
+        "review_diagnostics": {"context_snapshots": context_snapshots} if context_snapshots else None,
     })
 
 
@@ -1498,6 +1547,7 @@ def run_chapter_review(
         expected_ids,
         context_before_ids=expected_ids,
     )
+    context_snapshots = list((merged_payload.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
     merged_payload["review_diagnostics"] = {
         "chunking": {
             "mode": "paragraph_count" if chunk_size is not None else "source_chars",
@@ -1512,6 +1562,7 @@ def run_chapter_review(
             "candidate_count": len(merged_payload.get("context_findings", []) or []),
             "rechecks": backtrack_diagnostics,
         },
+        "context_snapshots": context_snapshots,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -48,6 +48,7 @@ from translator.glossary.extractor import run_glossary_extraction
 from translator.glossary.service import apply_glossary_delta, persist_glossary
 from translator.pipeline.preflight import PreflightError, run_preflight
 from translator.providers.translator import ProviderTranslator
+from translator.review.context_budget import ReviewContextOverflowError
 from translator.review.reviewer import (
     approved_fixes,
     has_target_script_residue,
@@ -1035,7 +1036,23 @@ class IterativePipeline:
         self._checkpoint()
         if self.on_phase_changed:
             self.on_phase_changed({"phase": "reviewing", "chapter_id": chapter_id})
-        reviewed_summary = self._review_chapter(chapter_id)
+        try:
+            reviewed_summary = self._review_chapter(chapter_id)
+        except ReviewContextOverflowError as exc:
+            progress.update({
+                "state": "running",
+                "last_chapter": chapter_id,
+                "chapter_status": "needs_oversized_review",
+                "review_overflow": {
+                    "reason": exc.reason,
+                    "context_snapshot_id": exc.diagnostics.get("context_snapshot_id"),
+                    "prompt_chars": exc.diagnostics.get("prompt_chars"),
+                    "operational_input_hard_limit_chars": exc.diagnostics.get("operational_input_hard_limit_chars"),
+                },
+                "updated_at": utc_now(),
+            })
+            write_json(self.workspace.progress_path, progress)
+            raise
         self._checkpoint()
         review_status = "needs_retry" if reviewed_summary.get("backfill_failed", 0) else "reviewed"
         progress.update({

@@ -230,6 +230,40 @@ def get_book_memory(book_id: str) -> BookMemoryResponse:
                     "category": cat or "fact",
                 })
 
+    # Project active glossary terms into characters & world settings if not already present
+    glossary_data = read_json(workspace.glossary_path, default={})
+    for term in glossary_data.get("terms", []):
+        if not isinstance(term, dict):
+            continue
+        source = str(term.get("source", "")).strip()
+        target = str(term.get("target", "")).strip()
+        cat = str(term.get("category", "")).strip().lower()
+        note = str(term.get("note", "")).strip()
+        first_seen = str(term.get("first_seen_chunk", "")).strip()
+        display_name = target or source
+        if not display_name:
+            continue
+
+        if cat in ("person", "character", "role"):
+            if not any(c.get("name") == display_name or c.get("name") == source for c in characters):
+                summary_text = note if note else f"译名: {target} (原文: {source})"
+                characters.append({
+                    "name": display_name,
+                    "role": "角色档案",
+                    "summary": summary_text,
+                    "first_seen": first_seen or None,
+                })
+        elif cat in ("location", "organization", "item", "skill", "lore", "terminology", "unresolved"):
+            if not any(w.get("term") == display_name or w.get("term") == source for w in world_settings):
+                expl_text = f"原文: {source} → 译文: {target}"
+                if note:
+                    expl_text = f"{expl_text} ({note})"
+                world_settings.append({
+                    "term": display_name,
+                    "explanation": expl_text,
+                    "category": cat,
+                })
+
     return BookMemoryResponse(
         book_id=book_id,
         characters=characters,

@@ -881,11 +881,53 @@ class IterativePipeline:
                 self.workspace, chapter_id, candidates, decision_map, conflicts,
                 evidence_texts=evidence,
             )
+            self._save_chapter_state(chapter_id)
         except Exception as exc:
             # Keep review/translation valid even when the final persistence
             # transaction fails; active stores are rolled back by the entry point.
             return {"status": "commit_failed", "error": str(exc), "candidates": len(candidates), "active": 0}
         return {"status": finalized.get("status", "completed"), "candidates": len(candidates), "conflicts": len(conflicts), "decisions": len(decision_map), **applied}
+
+    def _save_chapter_state(self, chapter_id: str) -> None:
+        """Aggregate window rolling context into persistent chapter state summary."""
+        windows = self._knowledge_windows.get(chapter_id, [])
+        all_entities: list[str] = []
+        all_locations: list[str] = []
+        all_relationships: list[str] = []
+        all_states: list[str] = []
+        all_notes: list[str] = []
+        for win in windows:
+            delta = win.get("rolling_context_delta", {}) if isinstance(win, dict) else {}
+            if not isinstance(delta, dict):
+                continue
+            for e in delta.get("active_entities", []):
+                if e and str(e) not in all_entities:
+                    all_entities.append(str(e))
+            for loc in delta.get("locations", []):
+                if loc and str(loc) not in all_locations:
+                    all_locations.append(str(loc))
+            for rel in delta.get("relationships", []):
+                if rel and str(rel) not in all_relationships:
+                    all_relationships.append(str(rel))
+            for st in delta.get("important_states", []):
+                if st and str(st) not in all_states:
+                    all_states.append(str(st))
+            for nt in delta.get("notes", []):
+                if nt and str(nt) not in all_notes:
+                    all_notes.append(str(nt))
+        summary_lines = all_states if all_states else all_notes
+        summary_text = "；".join(summary_lines) if summary_lines else ""
+        state_doc = {
+            "chapter_id": chapter_id,
+            "summary": summary_text,
+            "characters": all_entities,
+            "locations": all_locations,
+            "relationships": all_relationships,
+            "notes": all_notes,
+            "updated_at": utc_now(),
+        }
+        self.workspace.chapter_states_dir.mkdir(parents=True, exist_ok=True)
+        write_json(self.workspace.chapter_states_dir / f"{chapter_id}.json", state_doc)
 
     def _review_chapter(self, chapter_id: str) -> dict[str, Any]:
         self._checkpoint()

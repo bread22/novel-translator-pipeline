@@ -13,10 +13,7 @@ secondary_fallback_translator = "deepseek-original"
 reviewer = "nemotron"
 secondary_reviewer = "nemotron-3-super"
 dual_review = false
-fallback_reviewers = [
-    "gemini_lite",
-    "deepseek-original",
-]
+fallback_reviewers = []
 
 [providers.nemotron]
 type = "openai"

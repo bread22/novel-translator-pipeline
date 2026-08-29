@@ -196,9 +196,6 @@ def review_result(ids: list[str]) -> dict:
     return {
         "checked_ids": ids,
         "fixes": [],
-        "glossary_delta": {},
-        "memory_delta": {},
-        "chapter_state": {},
     }
 
 

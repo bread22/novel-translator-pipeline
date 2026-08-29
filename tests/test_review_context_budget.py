@@ -92,14 +92,14 @@ def test_optional_local_context_is_evicted_as_complete_paragraphs() -> None:
         context_after=after,
         budget={
             "enabled": True,
-            "operational_input_hard_limit_chars": 22_000,
+            "operational_input_hard_limit_chars": 16_000,
             "operational_headroom_chars": 500,
             "background_soft_limit_chars": 30_000,
         },
         schema_path=SCHEMA,
     )
 
-    assert diagnostics["prompt_chars"] <= 22_000
+    assert diagnostics["prompt_chars"] <= 16_000
     assert diagnostics["excluded_optional_entries"] > 0
     assert payload["context_before"][-1]["id"] == "b4"
     assert payload["context_after"][0]["id"] == "a0"
@@ -146,7 +146,7 @@ def test_required_overflow_splits_target_then_stops_at_one_paragraph() -> None:
     }
     common = dict(
         authoritative_context=authoritative,
-        budget={"enabled": True, "operational_input_hard_limit_chars": 18_000, "operational_headroom_chars": 0},
+        budget={"enabled": True, "operational_input_hard_limit_chars": 10_000, "operational_headroom_chars": 0},
         schema_path=SCHEMA,
     )
 
@@ -163,14 +163,12 @@ def test_required_overflow_splits_target_then_stops_at_one_paragraph() -> None:
 def test_rolling_state_does_not_replace_previous_chapter_seed() -> None:
     base = {
         "previous_chapter_state": {"summary": "上一章"},
-        "glossary": {"schema_version": "3.0", "terms": [{"source": "旧词", "target": "旧译"}]},
+        "current_chapter_review_context": {"active_entities": ["甲"]},
     }
     rolled = _update_rolling_payload(base, {
-        "checked_ids": ["p1"],
-        "glossary_delta": {"add": [{"source": "新词", "target": "新译"}]},
-        "chapter_state": {"summary": "本章窗口", "active_entities": ["甲"]},
+        "rolling_context_delta": {"active_entities": ["乙"], "locations": ["新宿"]},
     })
 
     assert rolled["previous_chapter_state"]["summary"] == "上一章"
-    assert rolled["current_chapter_rolling_state"]["summary"] == "本章窗口"
-    assert [term["source"] for term in rolled["glossary"]["terms"]] == ["旧词", "新词"]
+    assert rolled["current_chapter_review_context"]["active_entities"] == ["甲", "乙"]
+    assert rolled["current_chapter_review_context"]["locations"] == ["新宿"]

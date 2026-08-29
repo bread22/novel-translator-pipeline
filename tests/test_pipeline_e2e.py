@@ -65,9 +65,6 @@ def _mock_reviewer(input_path: Path, output_path: Path, **_kwargs: object) -> No
         json.dumps({
             "checked_ids": ids,
             "fixes": [],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {"summary": "章节完成", "important_changes": []},
         }),
         encoding="utf-8",
     )

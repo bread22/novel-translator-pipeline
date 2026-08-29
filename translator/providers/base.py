@@ -90,6 +90,13 @@ def extract_json_object(text: str) -> dict[str, Any]:
             candidates.append(base_c + suffix)
     decoder = json.JSONDecoder()
     found: list[dict[str, Any]] = []
+    protocol_keys = {
+        "items", "checked_ids", "fixes", "checked_chapters", "ok",
+        "structured_output", "response", "content", "output",
+        "schema_version", "knowledge_candidates", "rolling_context_delta",
+        "decisions", "conflicts", "candidates", "active_glossary", "related_memory",
+        "title_zh", "title_ja", "description",
+    }
     for candidate in candidates:
         try:
             val = json.loads(candidate)
@@ -97,18 +104,21 @@ def extract_json_object(text: str) -> dict[str, Any]:
                 found.append(val)
         except json.JSONDecodeError:
             pass
-        for index, char in enumerate(candidate):
-            if char != "{":
+        idx = 0
+        while idx < len(candidate):
+            if candidate[idx] != "{":
+                idx += 1
                 continue
             try:
-                val, _ = decoder.raw_decode(candidate[index:])
+                val, end_offset = decoder.raw_decode(candidate[idx:])
                 if isinstance(val, dict):
                     found.append(val)
+                idx += max(1, end_offset)
             except json.JSONDecodeError:
+                idx += 1
                 continue
     if found:
         # Prioritize candidate with expected top-level keys
-        protocol_keys = {"items", "checked_ids", "fixes", "checked_chapters", "ok", "structured_output", "response", "content", "output"}
         best = max(found, key=lambda item: (len(protocol_keys.intersection(item)), len(item)))
         if isinstance(best.get("structured_output"), dict) and best["structured_output"]:
             return best["structured_output"]
@@ -120,7 +130,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
                     return extract_json_object(nested)
                 except ValueError:
                     pass
-            if isinstance(nested, dict) and any(k in nested for k in ("items", "checked_ids", "fixes", "ok")):
+            if isinstance(nested, dict) and any(k in nested for k in protocol_keys):
                 return nested
         return best
     raise ValueError("输出中没有找到有效的 JSON 对象")

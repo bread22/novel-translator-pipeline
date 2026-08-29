@@ -5,14 +5,14 @@ translation_policy = "docs/prompts/france-shoin-90s-classic.md"
 [roles]
 primary_translator = "nemotron"
 fallback_translators = [
-    "nemotron-3-super",
     "gemini_lite",
+    "deepseek-original",
 ]
-fallback_translator = "nemotron-3-super"
-secondary_fallback_translator = "gemini_lite"
+fallback_translator = "gemini_lite"
+secondary_fallback_translator = "deepseek-original"
 reviewer = "nemotron"
 secondary_reviewer = "nemotron-3-super"
-dual_review = true
+dual_review = false
 fallback_reviewers = []
 
 [providers.nemotron]
@@ -42,7 +42,7 @@ base_url = "https://integrate.api.nvidia.com/v1"
 model = "deepseek-ai/deepseek-v4-flash-0731"
 context_tokens = 131072
 timeout = 600
-api_key = "$DEEPSEEK_API_KEY"
+api_key = "$NVIDIA_API_KEY"
 
 [providers.lmstudio]
 type = "openai"
@@ -119,15 +119,6 @@ context_tokens = 131072
 timeout = 600
 api_key = "$ONLINE_API_API_KEY"
 
-[providers.step-3_7-flash]
-type = "openai"
-model = "stepfun-ai/step-3.7-flash"
-base_url = "https://integrate.api.nvidia.com/v1"
-temperature = 0.3
-context_tokens = 262000
-timeout = 600
-api_key = "$NVIDIA_API_KEY"
-
 [providers.nemotron-3-super]
 type = "openai"
 model = "nvidia/nemotron-3-super-120b-a12b"
@@ -142,9 +133,18 @@ api_key = "$NVIDIA_API_KEY"
 thinking = false
 enable_thinking = false
 
+[providers.deepseek-original]
+type = "openai"
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
+temperature = 0.3
+context_tokens = 1000000
+timeout = 600
+api_key = "$DEEPSEEK_API_KEY"
+
 [knowledge_extractor]
-enabled = false
-provider = "nemotron-3-super"
+enabled = true
+provider = "gemini_lite"
 model = ""
 credential_ref = ""
 temperature = 0.2

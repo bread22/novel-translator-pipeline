@@ -89,25 +89,25 @@ def test_person_name_same_characters_pass_with_separate_honorific() -> None:
     assert check.name_target == "丙丁"
 
 
-def test_review_boundary_preserves_ambiguous_name_for_queue() -> None:
-    from translator.review.reviewer import validate_chapter_review_payload
+def test_review_boundary_preserves_ambiguous_name_for_queue(tmp_path: Path) -> None:
+    from translator.core.workspace import BookWorkspace
+    from translator.review.knowledge_extractor import apply_knowledge_delta
 
-    payload = {
-        "checked_ids": ["p1"],
-        "fixes": [],
-        "glossary_delta": {
-            "add": [{
-                "source": "甲髙乙君",
-                "target": "甲高乙君",
-                "category": "person",
-                "confidence": 0.99,
-                "evidence_ids": ["p1"],
-            }],
-            "update": [],
-            "conflicts": [],
-        },
-        "memory_delta": {"add": [], "update": [], "conflicts": []},
-        "chapter_state": {},
-    }
-    normalized = validate_chapter_review_payload(payload, {"p1"})
-    assert len(normalized["glossary_delta"]["add"]) == 1
+    workspace = BookWorkspace.at(tmp_path / "output", "test-book")
+    candidates = [{
+        "candidate_id": "c1",
+        "kind": "glossary",
+        "source": "甲髙乙君",
+        "target": "甲高乙君",
+        "category": "person",
+        "confidence": 0.99,
+        "source_window": "w1",
+        "source_paragraph_ids": ["p1"],
+        "evidence_ids": ["p1"],
+        "source_fragment": "甲髙乙君",
+        "target_fragment": "甲高乙君",
+    }]
+    decisions = [{"candidate_id": "c1", "action": "active", "reason": "ok"}]
+    summary = apply_knowledge_delta(workspace, "c1", candidates, decisions, evidence_texts={"p1": "甲髙乙君"})
+    assert summary["candidate"] == 1
+    assert workspace.knowledge_candidates_path.exists()

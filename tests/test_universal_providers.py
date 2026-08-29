@@ -70,9 +70,6 @@ class UniversalProviderTests(unittest.TestCase):
         rev_payload = {
             "checked_ids": ["p1"],
             "fixes": [],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {"summary": "摘要"},
         }
         rev_resp = _MockHTTPResponse({
             "choices": [{"message": {"content": json.dumps(rev_payload)}, "finish_reason": "stop"}]
@@ -94,9 +91,6 @@ class UniversalProviderTests(unittest.TestCase):
         rev_payload = {
             "checked_ids": ["p1", "p2"],
             "fixes": [{"id": "p2", "category": "mistranslation", "severity": "major", "confidence": 0.95, "replacement": "AGY审阅修复"}],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {"summary": "AGY章节状态"},
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

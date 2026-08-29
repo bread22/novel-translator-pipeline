@@ -64,9 +64,6 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertEqual(approved_fixes([fix], current_translations={"p1": "ランジェリー小偷"}), [])
         payload = {
             "checked_ids": ["p1"], "fixes": [fix],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {},
         }
         normalized = validate_chapter_review_payload(payload, {"p1"})
         self.assertFalse(normalized["fixes"][0]["auto_apply"])

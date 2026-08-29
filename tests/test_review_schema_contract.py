@@ -22,18 +22,17 @@ from translator.review.reviewer import (
 def review(label: str) -> dict:
     return {
         "checked_ids": [f"p-{label}"],
-        "fixes": [],
-        "glossary_delta": {
-            "add": [{"source": f"add-{label}", "target": f"新增-{label}"}],
-            "update": [{"source": "shared", "target": f"更新-{label}"}],
-            "conflicts": [{"key": f"g-{label}", "existing_value": "旧", "proposed_value": "新"}],
-        },
-        "memory_delta": {
-            "add": [{"key": f"memory-{label}", "value": f"事实-{label}"}],
-            "update": [{"key": "shared-memory", "value": f"更新-{label}"}],
-            "conflicts": [{"key": f"m-{label}", "existing_value": "旧", "proposed_value": "新"}],
-        },
-        "chapter_state": {"summary": f"summary-{label}", "important_changes": [label]},
+        "fixes": [
+            {
+                "id": f"p-{label}",
+                "category": "mistranslation",
+                "severity": "major",
+                "confidence": 0.95,
+                "replacement": f"修复-{label}",
+                "auto_apply": True,
+            }
+        ],
+        "context_findings": [],
     }
 
 
@@ -62,28 +61,22 @@ class ReviewSchemaContractTests(unittest.TestCase):
 
     def test_three_chunks_keep_every_delta_section(self) -> None:
         merged = _combine_chunk_reviews(_combine_chunk_reviews(review("a"), review("b")), review("c"))
-        self.assertEqual(len(merged["glossary_delta"]["add"]), 3)
-        self.assertEqual(len(merged["glossary_delta"]["conflicts"]), 3)
-        self.assertEqual(len(merged["memory_delta"]["add"]), 3)
-        self.assertEqual(len(merged["memory_delta"]["conflicts"]), 3)
-        self.assertEqual(merged["glossary_delta"]["update"][0]["target"], "更新-c")
+        self.assertEqual(merged["checked_ids"], ["p-a", "p-b", "p-c"])
+        self.assertEqual(len(merged["fixes"]), 3)
 
     def test_rolling_context_applies_memory_add_and_update(self) -> None:
-        base = {"glossary": [{"source": "shared", "target": "旧"}], "book_memory": {"entries": [{"key": "shared-memory", "value": "旧"}]}}
-        rolling = _update_rolling_payload(base, review("next"))
-        memory = {item["key"]: item for item in rolling["book_memory"]["entries"]}
-        glossary = {item["source"]: item for item in rolling["glossary"]}
-        self.assertEqual(memory["shared-memory"]["value"], "更新-next")
-        self.assertIn("memory-next", memory)
-        self.assertEqual(glossary["shared"]["target"], "更新-next")
+        base = {"current_chapter_review_context": {"active_entities": ["旧人物"]}}
+        delta = {"rolling_context_delta": {"active_entities": ["新人物"], "locations": ["新宿"]}}
+        rolling = _update_rolling_payload(base, delta)
+        self.assertEqual(rolling["current_chapter_review_context"]["active_entities"], ["旧人物", "新人物"])
+        self.assertEqual(rolling["current_chapter_review_context"]["locations"], ["新宿"])
 
     def test_dual_review_keeps_secondary_data_and_reporters(self) -> None:
         merged = merge_chapter_reviews(review("primary"), review("secondary"))
-        memory_keys = {item["key"] for item in merged["memory_delta"]["add"]}
-        self.assertEqual(memory_keys, {"memory-primary", "memory-secondary"})
-        shared = merged["memory_delta"]["update"][0]
-        self.assertEqual(set(shared["reporters"]), {"primary", "secondary"})
-        self.assertEqual(len(merged["glossary_delta"]["conflicts"]), 2)
+        fixes_by_id = {f["id"]: f for f in merged["fixes"]}
+        self.assertEqual(fixes_by_id["p-primary"]["reporters"], ["primary"])
+        self.assertEqual(fixes_by_id["p-secondary"]["reporters"], ["secondary"])
+        self.assertEqual(merged["dual_review"]["merged_fixes_count"], 2)
 
     def test_dual_review_reports_each_reviewer_state(self) -> None:
         states: list[dict[str, Any]] = []
@@ -172,3 +165,4 @@ class ReviewSchemaContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

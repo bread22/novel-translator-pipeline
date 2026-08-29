@@ -33,7 +33,17 @@ def manifest(translated: str = "") -> dict:
     }
 
 
+from unittest.mock import patch
+
+
 class PipelineFunctionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._sleep_patcher = patch("time.sleep", return_value=None)
+        self._sleep_patcher.start()
+
+    def tearDown(self) -> None:
+        self._sleep_patcher.stop()
+
     def test_newly_translated_only_returns_blank_to_filled(self) -> None:
         self.assertEqual(newly_translated(manifest(), manifest("银行职员美树"))[0]["id"], "p1")
         self.assertEqual(newly_translated(manifest("旧译"), manifest("新译")), [])
@@ -129,14 +139,12 @@ class PipelineFunctionTests(unittest.TestCase):
                 output.write_text(json.dumps({
                     "checked_ids": ["p1"],
                     "fixes": [],
-                    "glossary_delta": {"add": [], "update": [], "conflicts": []},
-                    "memory_delta": {"add": [], "update": [], "conflicts": []},
-                    "chapter_state": {"summary": "", "important_changes": []},
                 }, ensure_ascii=False), encoding="utf-8")
 
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+                knowledge_extractor=lambda *args, **kwargs: {},
                 targeted_translator=lambda *args, **kwargs: {"status": "error"},
             )
             pipeline.initialize()
@@ -165,9 +173,6 @@ class PipelineFunctionTests(unittest.TestCase):
                 output.write_text(json.dumps({
                     "checked_ids": ["p1"],
                     "fixes": [],
-                    "glossary_delta": {"add": [], "update": [], "conflicts": []},
-                    "memory_delta": {"add": [], "update": [], "conflicts": []},
-                    "chapter_state": {"summary": "", "important_changes": []},
                 }, ensure_ascii=False), encoding="utf-8")
 
             def mock_targeted_translator(provider, book, ids, source_chars=0, max_tokens=0):
@@ -182,6 +187,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+                knowledge_extractor=lambda *args, **kwargs: {},
                 targeted_translator=mock_targeted_translator,
             )
             pipeline.initialize()
@@ -198,9 +204,6 @@ class PipelineFunctionTests(unittest.TestCase):
                 {"id": "p1", "category": "mistranslation", "severity": "major", "confidence": 0.92, "replacement": "修复A"},
                 {"id": "p2", "category": "omission", "severity": "major", "confidence": 0.88, "replacement": "修复A2"},
             ],
-            "glossary_delta": {"add": [{"source": "東京", "target": "东京"}]},
-            "memory_delta": {"k1": "v1"},
-            "chapter_state": {"summary": "s1"},
         }
         rev_b = {
             "checked_ids": ["p2", "p3"],
@@ -208,9 +211,6 @@ class PipelineFunctionTests(unittest.TestCase):
                 {"id": "p1", "category": "mistranslation", "severity": "major", "confidence": 0.95, "replacement": "修复B (更准确)"},
                 {"id": "p3", "category": "subject_object", "severity": "major", "confidence": 0.91, "replacement": "修复B3"},
             ],
-            "glossary_delta": {"add": [{"source": "東京", "target": "东京"}, {"source": "京都", "target": "京都"}]},
-            "memory_delta": {"k2": "v2"},
-            "chapter_state": {"summary": "s2"},
         }
         merged = merge_chapter_reviews(rev_a, rev_b)
         self.assertEqual(merged["checked_ids"], ["p1", "p2", "p3"])
@@ -228,9 +228,6 @@ class PipelineFunctionTests(unittest.TestCase):
         # p3 was only reported by B
         self.assertFalse(fixes_by_id["p3"]["consensus"])
         self.assertEqual(fixes_by_id["p3"]["reporters"], ["secondary"])
-        
-        # Glossary deduplication
-        self.assertEqual(len(merged["glossary_delta"]["add"]), 2)
 
     def test_merge_chapter_reviews_least_invasive_priority(self) -> None:
         # Paragraph original: "这是原始译文，含有萨丁玫瑰花瓣。"
@@ -239,16 +236,10 @@ class PipelineFunctionTests(unittest.TestCase):
         rev_a = {
             "checked_ids": ["p1"],
             "fixes": [{"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.90, "replacement": "这是原始译文，含有缎面玫瑰花瓣。"}],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {"summary": "s1"},
         }
         rev_b = {
             "checked_ids": ["p1"],
             "fixes": [{"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.95, "replacement": "这里是全新的重写翻译，散落着色丁质感的玫瑰花瓣！"}],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {"summary": "s2"},
         }
         current_translations = {"p1": "这是原始译文，含有萨丁玫瑰花瓣。"}
         merged = merge_chapter_reviews(rev_a, rev_b, current_translations=current_translations)
@@ -261,9 +252,6 @@ class PipelineFunctionTests(unittest.TestCase):
     def test_merge_chapter_reviews_requires_identical_fix_for_consensus(self) -> None:
         base = {
             "checked_ids": ["p1"],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {},
         }
         fix = {"id": "p1", "category": "policy_violation", "severity": "critical",
                "confidence": 0.91, "replacement": "第二章·内衣小偷"}
@@ -277,9 +265,6 @@ class PipelineFunctionTests(unittest.TestCase):
     def test_merge_prefers_clean_chinese_over_hangul_replacement(self) -> None:
         base = {
             "checked_ids": ["p1"],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {},
         }
         merged = merge_chapter_reviews(
             {**base, "fixes": [{"id": "p1", "category": "policy_violation", "severity": "critical",
@@ -294,9 +279,6 @@ class PipelineFunctionTests(unittest.TestCase):
         payload = {
             "checked_ids": ["p1"],
             "fixes": [],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": {"summary": "", "important_changes": []},
         }
         with self.assertRaisesRegex(ValueError, "缺少 ID"):
             validate_chapter_review_payload(payload, {"p1", "p2"})
@@ -346,7 +328,7 @@ class PipelineFunctionTests(unittest.TestCase):
             reviewer_calls = 0
             phases: list[dict[str, str]] = []
 
-            def chapter_reviewer(input_path: Path, output_path: Path) -> None:
+            def chapter_reviewer(input_path: Path, output_path: Path, **kwargs) -> None:
                 nonlocal reviewer_calls
                 reviewer_calls += 1
                 payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -354,14 +336,39 @@ class PipelineFunctionTests(unittest.TestCase):
                 output_path.write_text(json.dumps({
                     "checked_ids": ["p1", "p2"],
                     "fixes": [{"id": "p2", "category": "mistranslation", "severity": "major", "confidence": 0.99, "reason": "动作错误", "replacement": "修正译文", "auto_apply": True}],
-                    "glossary_delta": {"add": [{"source": "第一段", "target": "译文一", "category": "other", "note": "测试", "confidence": 0.99}], "update": [], "conflicts": []},
-                    "memory_delta": {"add": [{"key": "fact-1", "value": "持续事实", "category": "fact", "note": "测试", "confidence": 0.99}], "update": [], "conflicts": []},
-                    "chapter_state": {"summary": "章节摘要", "important_changes": ["状态变化"]},
                 }, ensure_ascii=False), encoding="utf-8")
+
+            def mock_knowledge_extractor(kind, payload):
+                if kind == "window":
+                    return {
+                        "rolling_context_delta": {"active_entities": ["第一段"]},
+                        "knowledge_candidates": [
+                            {
+                                "candidate_id": "cand-1",
+                                "kind": "memory",
+                                "key": "fact-1",
+                                "value": "持续事实",
+                                "category": "fact",
+                                "confidence": 0.99,
+                                "source_window": "w1",
+                                "source_paragraph_ids": ["p1"],
+                                "evidence_ids": ["p1"],
+                                "source_fragment": "第一段",
+                                "target_fragment": "译文一",
+                            }
+                        ],
+                        "conflicts": [],
+                    }
+                elif kind == "finalize":
+                    return {
+                        "decisions": [{"candidate_id": "cand-1", "action": "active", "reason": "ok"}]
+                    }
+                return {}
 
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 tool_call=tool_call, chapter_reviewer=chapter_reviewer,
+                knowledge_extractor=mock_knowledge_extractor,
                 apply=True, autonomous=True, max_chapter_batches=5,
                 on_phase_changed=phases.append,
             )
@@ -378,8 +385,6 @@ class PipelineFunctionTests(unittest.TestCase):
             self.assertIn("apply-review-fixes", [call[0] for call in calls])
             memory = json.loads(workspace.book_memory_path.read_text(encoding="utf-8"))
             self.assertEqual(memory["entries"][0]["key"], "fact-1")
-            state = json.loads((workspace.chapter_states_dir / "c1.json").read_text(encoding="utf-8"))
-            self.assertEqual(state["status"], "reviewed")
 
     def test_two_level_fallback_recovers_when_primary_and_fb1_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -658,9 +663,6 @@ class PipelineFunctionTests(unittest.TestCase):
                             "auto_apply": True,
                         }
                     ],
-                    "glossary_delta": {"add": [{"source": f"term-{cids[0]}", "target": f"词-{cids[0]}"}]},
-                    "memory_delta": {"add": [{"key": f"char-{cids[0]}", "value": "角色", "category": "character"}], "update": [], "conflicts": []},
-                    "chapter_state": {"summary": f"总结-{','.join(cids)}"},
                 }
 
             with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=mock_execute):
@@ -669,10 +671,6 @@ class PipelineFunctionTests(unittest.TestCase):
             result = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(result["checked_ids"], ["p1", "p2", "p3", "p4", "p5"])
             self.assertEqual(len(result["fixes"]), 3)  # One per chunk (chunk1: p1, chunk2: p3, chunk3: p5)
-            self.assertEqual(len(result["glossary_delta"]["add"]), 3)
-            self.assertEqual(len(result["memory_delta"]["add"]), 3)
-            self.assertIn("总结-p1,p2", result["chapter_state"]["summary"])
-            self.assertIn("总结-p5", result["chapter_state"]["summary"])
 
     def test_run_chapter_review_adaptive_split_on_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -715,9 +713,6 @@ class PipelineFunctionTests(unittest.TestCase):
                 return {
                     "checked_ids": cids,
                     "fixes": [],
-                    "glossary_delta": {"add": []},
-                    "memory_delta": {},
-                    "chapter_state": {"summary": f"完成-{','.join(cids)}"},
                 }
 
             with patch("translator.review.reviewer._execute_review_with_fallbacks", side_effect=mock_failing_execute):
@@ -760,9 +755,6 @@ class PipelineFunctionTests(unittest.TestCase):
                     return {
                         "checked_ids": list(ids),
                         "fixes": [],
-                        "glossary_delta": {},
-                        "memory_delta": {},
-                        "chapter_state": {"summary": ",".join(ids)},
                     }
 
             from unittest.mock import patch
@@ -775,6 +767,10 @@ class PipelineFunctionTests(unittest.TestCase):
                     "dual_review": False,
                     "fallback_reviewers": ["fallback-reviewer"],
                     "fallback_translators": ["translation-only"],
+                },
+                "pipeline": {
+                    "transient_backoff_min_seconds": 0,
+                    "transient_backoff_max_seconds": 0,
                 },
             }
             with (
@@ -825,8 +821,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 def review(self, _kind, payload, _schema, **_kwargs):
                     ids = [item["id"] for item in payload["items"]]
                     return {
-                        "checked_ids": ids, "fixes": [], "glossary_delta": {},
-                        "memory_delta": {}, "chapter_state": {"summary": ",".join(ids)},
+                        "checked_ids": ids, "fixes": [],
                     }
 
             from unittest.mock import patch

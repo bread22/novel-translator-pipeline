@@ -62,7 +62,7 @@ class OpenCodeBackendTests(unittest.TestCase):
             input_path.write_text(json.dumps({"items": [{"id": "p1", "source": "原文", "translated": "译文"}]}), encoding="utf-8")
             with patch(
                 "translator.providers.opencode.run_prompt",
-                return_value=json.dumps({"checked_ids": ["p1"], "fixes": [], "glossary_delta": {"add": [], "update": []}, "memory_delta": {"add": [], "update": []}, "chapter_state": {}}),
+                return_value=json.dumps({"checked_ids": ["p1"], "fixes": []}),
             ):
                 run_chapter_review(input_path, output_path, backend="opencode")
             payload = json.loads(output_path.read_text(encoding="utf-8"))

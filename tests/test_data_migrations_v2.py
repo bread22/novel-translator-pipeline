@@ -62,7 +62,7 @@ def test_runtime_memory_write_normalizes_legacy_fields() -> None:
 def test_review_migration_validates_before_write_and_preserves_invalid(tmp_path: Path) -> None:
     valid = tmp_path / "c1-output.json"
     invalid = tmp_path / "c2-output.json"
-    write_json(valid, {"checked_ids": ["p1", "p1"], "chapter_state": {"significant_changes": ["x"]}})
+    write_json(valid, {"checked_ids": ["p1", "p1"], "fixes": []})
     write_json(invalid, {"checked_ids": [], "unexpected": True})
     invalid_original = invalid.read_bytes()
 

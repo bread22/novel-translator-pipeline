@@ -197,7 +197,9 @@ def normalize_finalize_output(payload: Mapping[str, Any] | None) -> dict[str, An
 
 def _settings(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     source = config if isinstance(config, Mapping) else load_config()
-    return dict(source.get("knowledge_extractor", {}) or {})
+    if "knowledge_extractor" in source:
+        return dict(source.get("knowledge_extractor", {}) or {})
+    return dict(source)
 
 
 def knowledge_extractor_enabled(config: Mapping[str, Any] | None = None) -> bool:
@@ -205,7 +207,8 @@ def knowledge_extractor_enabled(config: Mapping[str, Any] | None = None) -> bool
 
 
 def _provider(name: str, config: Mapping[str, Any], settings: Mapping[str, Any]) -> Any:
-    provider_cfg = deepcopy(dict(config))
+    full_config = config if isinstance(config, Mapping) and "providers" in config else load_config()
+    provider_cfg = deepcopy(dict(full_config))
     providers = provider_cfg.setdefault("providers", {})
     if name not in providers:
         raise ValueError(f"Knowledge Extractor provider 未配置：{name}")

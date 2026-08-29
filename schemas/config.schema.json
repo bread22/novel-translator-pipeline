@@ -45,6 +45,20 @@
         ]
       }
     },
+    "knowledge_extractor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "provider": {"type": "string"},
+        "model": {"type": "string"},
+        "credential_ref": {"type": "string"},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "max_output_tokens": {"type": "integer", "minimum": 1},
+        "request_timeout": {"type": "integer", "minimum": 1},
+        "input_hard_limit_chars": {"type": "integer", "minimum": 1}
+      }
+    },
     "pipeline": {
       "type": "object",
       "additionalProperties": false,
@@ -93,6 +107,7 @@
             "memory_soft_chars": {"type": "integer", "minimum": 0},
             "state_soft_chars": {"type": "integer", "minimum": 0},
             "book_summary_soft_chars": {"type": "integer", "minimum": 0},
+            "known_hits_soft_chars": {"type": "integer", "minimum": 0},
             "recent_evidence_chapters": {"type": "integer", "minimum": 0},
             "entity_relation_hops": {"type": "integer", "minimum": 0, "maximum": 1},
             "max_global_critical_facts": {"type": "integer", "minimum": 0}

@@ -97,82 +97,8 @@ class ChapterReviewOutput(StrictModel):
     checked_ids: list[str] = Field(default_factory=list)
     fixes: list[ChapterFix] = Field(default_factory=list)
     context_findings: list[ContextFinding] = Field(default_factory=list)
-    glossary_delta: GlossaryDelta = Field(default_factory=GlossaryDelta)
-    memory_delta: MemoryDelta = Field(default_factory=MemoryDelta)
-    chapter_state: ChapterState = Field(default_factory=ChapterState)
     dual_review: dict[str, Any] | None = None
     review_diagnostics: dict[str, Any] | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_shapes(cls, raw: Any) -> Any:
-        if not isinstance(raw, dict):
-            return raw
-        value = dict(raw)
-        raw_glossary = value.get("glossary_delta")
-        glossary: dict[str, Any] = raw_glossary if isinstance(raw_glossary, dict) else {}
-
-        def normalize_glossary_items(items: Any) -> list[dict[str, Any]]:
-            normalized: list[dict[str, Any]] = []
-            for item in items if isinstance(items, list) else []:
-                if not isinstance(item, dict):
-                    normalized.append(item)
-                    continue
-                candidate = dict(item)
-                # Compatibility is confined to legacy review reads.  The serialized
-                # result always contains an explicit confidence and v3 category.
-                original_category = str(candidate.get("category", "")).strip()
-                candidate.setdefault("category", "person")
-                candidate["category"] = canonical_category(candidate.get("category"))
-                if candidate["category"] in BLOCKED:
-                    # Explicit blocked model output is discarded at the review
-                    # boundary; legacy neutral values remain audit candidates.
-                    if original_category and original_category not in {"other", "general", "term", "terminology", "item"}:
-                        continue
-                    candidate["category"] = "person"
-                candidate.setdefault("confidence", 0.0)
-                if "evidence_ids" not in candidate:
-                    candidate["evidence_ids"] = list(candidate.get("sample_ids", []) or [])
-                allowed = {"source", "target", "category", "note", "confidence", "evidence_ids", "reporters"}
-                normalized.append({key: val for key, val in candidate.items() if key in allowed})
-            return normalized
-
-        value["glossary_delta"] = {
-            "add": normalize_glossary_items(glossary.get("add", []) or []),
-            "update": normalize_glossary_items(glossary.get("update", []) or []),
-            "conflicts": list(glossary.get("conflicts", []) or []),
-        }
-
-        raw_memory = value.get("memory_delta")
-        memory: dict[str, Any] = raw_memory if isinstance(raw_memory, dict) else {}
-        if any(key in memory for key in ("add", "update", "conflicts")):
-            normalized_memory = {
-                "add": list(memory.get("add", []) or []),
-                "update": list(memory.get("update", []) or []),
-                "conflicts": list(memory.get("conflicts", []) or []),
-            }
-        else:
-            legacy_entries: list[dict[str, Any]] = []
-            for collection, category in (("characters", "character"), ("world_settings", "fact"), ("entries", "fact")):
-                for item in memory.get(collection, []) if isinstance(memory.get(collection), list) else []:
-                    if not isinstance(item, dict):
-                        continue
-                    key = str(item.get("key") or item.get("name") or item.get("term") or "").strip()
-                    item_value = str(item.get("value") or item.get("summary") or item.get("explanation") or key).strip()
-                    if key and item_value:
-                        legacy_entries.append({"key": key, "value": item_value, "category": category})
-            for key, item_value in memory.items():
-                if key not in {"characters", "world_settings", "entries", "plot_hints"} and isinstance(item_value, str):
-                    legacy_entries.append({"key": key, "value": item_value})
-            normalized_memory = {"add": legacy_entries, "update": [], "conflicts": []}
-        value["memory_delta"] = normalized_memory
-
-        raw_state = value.get("chapter_state")
-        state: dict[str, Any] = dict(raw_state) if isinstance(raw_state, dict) else {}
-        if "important_changes" not in state and "significant_changes" in state:
-            state["important_changes"] = state.pop("significant_changes")
-        value["chapter_state"] = state
-        return value
 
     @model_validator(mode="after")
     def unique_checked_ids(self) -> "ChapterReviewOutput":

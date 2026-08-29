@@ -30,7 +30,8 @@
 ### 字符预算滚动审阅
 
 - 章节审阅按源文字符预算切块，只在自然段边界切分。
-- 每块携带可配置的前后文段落；新发现的 glossary、memory 与 chapter state 会滚动传给后续块。
+- 每块携带可配置的前后文段落；修复后由 Window Knowledge Extractor 生成临时 rolling context，供后续块的 Reviewer Budgeter 选择。
+- 整章审阅结束后由同一 Extractor 执行 Finalization，只有 active 的新 Glossary/Memory 候选传给下一章。
 - 可启用双 Reviewer 并发审阅、显式 Reviewer fallback、自适应二分重试与前文定向回查。
 - `checked_ids` 必须覆盖目标段落；自动写回还需通过类别、严重度、置信度、日文假名残留和 no-op 守卫。
 
@@ -38,16 +39,16 @@
 
 - `output/<book>/data/glossary.json` 是术语事实源，schema version 为 `3.0`。
 - 词条经过 taxonomy、形态、人名映射、证据和置信度校验后进入 `candidate`、`active`、`disputed`、`revised` 或 `retired` 生命周期。
-- 翻译前可用轻量 Provider 预提取实体；翻译时只投影与当前上下文相关的 active 词条。
+- 翻译完成后执行 deterministic known-hit pre-scan；审阅时只投影与当前上下文相关的 active/locked 词条。
 - 冲突、修订、证据和 provenance 保留在 v3 文档；`novel-translator-terms.json` 仅作为上游兼容投影。
-- 支持 v2→v3 dry-run 迁移、历史 review delta replay 和受控回填。
+- 支持 v2→v3 dry-run 迁移和受控回填；历史 review delta replay 已移除。
 
 ### Web Studio
 
 1. **Queue & Asset Hub**：上传 EPUB/TXT、资产统计、入队、调序、暂停、重试、导出、重置和删除。
 2. **Live Studio**：主译/Fallback/双审拓扑、阶段进度、策略切换和按书事件瀑布。
 3. **Bilingual Reader**：章节目录、日中对照、人工校对、单段重译和审阅报告。
-4. **Knowledge Hub**：Glossary v3、人物记忆、世界观、冲突/报告与人工术语增量。
+4. **Knowledge Hub**：只读展示 Glossary v3、人物记忆、世界观、冲突/报告。
 5. **Settings**：Provider、角色、密钥引用、Prompt Policy、配置备份和连通性预检。
 
 SSE 用于通知和事件显示，REST snapshot 是最终状态校准来源。服务端事件历史保存在每本书的 `data/events.jsonl`，浏览器断线重连后会刷新 books、queue 和 task snapshot。
@@ -219,7 +220,7 @@ Provider 的 `api_key` 应写成 `$ENV_NAME` 引用，真实值放在 `.env`。W
   - `data/glossary.json`：Glossary v3 事实源
   - `data/novel-translator-terms.json`：上游兼容投影
   - `data/book_memory.json`：长程人物/世界观记忆
-  - `data/chapter_states/`：章节叙事状态
+  - `data/chapter_states/`：历史章节状态，只作为审阅上下文
   - `data/events.jsonl`：服务端事件历史
   - `reviews/`、`reports/`、`snapshots/`：审阅证据
 - 任务状态：`output/jobs/job_state.v2.json`
@@ -292,7 +293,7 @@ python scripts/generate_release_evidence.py
 novel-translator-pipeline/
 ├── translator/
 │   ├── core/          # 配置、JobManager、工作区、导出布局和上游工具
-│   ├── glossary/      # v3 taxonomy、验证、生命周期、投影、预提取和回填
+│   ├── glossary/      # v3 taxonomy、验证、生命周期、投影和回填
 │   ├── pipeline/      # 章节翻译、Fallback、审阅和 finalize
 │   ├── providers/     # OpenAI/Antigravity/OpenCode/Codex 适配器
 │   ├── review/        # 滚动分块、双审、合并、回查和写回守卫

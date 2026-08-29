@@ -18,20 +18,7 @@ from typing import Any, Callable
 from translator.core.config import load_config, setting
 from translator.core.job_control import JobCancelled
 from translator.core.novel_tool import call_novel_translator
-from translator.core.workspace import (
-    BookWorkspace,
-    empty_book_memory,
-    merge_chapter_state,
-    merge_memory_delta,
-    merge_term_updates,
-    novel_translator_terms,
-    read_json,
-    utc_now,
-    write_json,
-)
-from translator.glossary.service import apply_glossary_delta, persist_glossary
-from translator.glossary.taxonomy import CategoryTier, category_tier
-from translator.glossary.validation import validate_term_candidate
+from translator.core.workspace import BookWorkspace, read_json, utc_now, write_json
 from translator.providers.registry import get_provider
 from translator.providers.errors import (
     ProviderConnectionError,
@@ -252,39 +239,6 @@ def validate_chapter_review_payload(
         sanitized_context_findings.append(finding)
     normalized["context_findings"] = sanitized_context_findings
 
-    # One deterministic taxonomy validator is shared with extraction, merge and projection.
-    def _is_valid_glossary_term(term: dict[str, Any]) -> bool:
-        if str(term.get("category", "")) == "unresolved":
-            # Preserve the legacy candidate shape for audit; merge/projection will
-            # keep unresolved permanently out of active injection.
-            probe = dict(term)
-            probe["category"] = "person"
-            probe["evidence_ids"] = ["__review_candidate__"]
-            validation = validate_term_candidate(probe, evidence_texts={"__review_candidate__": str(term.get("source", ""))})
-            return validation.valid or validation.reason.startswith("name_mapping_ambiguous:")
-        if category_tier(term.get("category")) is not CategoryTier.DIRECT_ALLOWED and category_tier(term.get("category")) is not CategoryTier.GATED_ALLOWED:
-            return False
-        evidence_ids = [str(item) for item in term.get("evidence_ids", []) if str(item).strip()]
-        if not evidence_ids:
-            # Legacy review payloads may omit evidence_ids. Keep them as a
-            # non-activatable candidate; lifecycle merge performs the real evidence gate.
-            evidence_ids = ["__review_candidate__"]
-            term["evidence_ids"] = []
-        evidence_texts = {item: str(term.get("source", "")) for item in evidence_ids}
-        probe = dict(term)
-        probe["evidence_ids"] = evidence_ids
-        validation = validate_term_candidate(probe, evidence_texts=evidence_texts)
-        # Preserve deterministic name-queue candidates for lifecycle handling.
-        # Shape-valid but ambiguous names are intentionally not discarded here.
-        return validation.valid or validation.reason.startswith("name_mapping_ambiguous:")
-
-    if "glossary_delta" in normalized and isinstance(normalized["glossary_delta"], dict):
-        for key in ["add", "update"]:
-            normalized["glossary_delta"][key] = [
-                t for t in normalized["glossary_delta"].get(key, [])
-                if isinstance(t, dict) and _is_valid_glossary_term(t)
-            ]
-
     received = set(checked_ids)
     missing = sorted(expected_ids - received)
     if missing:
@@ -353,65 +307,6 @@ def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str
 
 def _normalized_review(payload: dict[str, Any]) -> dict[str, Any]:
     return ChapterReviewOutput.model_validate(payload).model_dump(exclude_none=True)
-
-
-def _merge_delta(
-    left: dict[str, Any],
-    right: dict[str, Any],
-    *,
-    identity_key: str,
-    left_reporter: str | None = None,
-    right_reporter: str | None = None,
-    prefer_right: bool = False,
-) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {"add": [], "update": [], "conflicts": []}
-    for section in ("add", "update", "conflicts"):
-        by_identity: dict[str, dict[str, Any]] = {}
-        order: list[str] = []
-        for items, reporter, is_right in (
-            (left.get(section, []) or [], left_reporter, False),
-            (right.get(section, []) or [], right_reporter, True),
-        ):
-            for raw in items:
-                if not isinstance(raw, dict):
-                    continue
-                item = dict(raw)
-                identity = str(item.get(identity_key) or item.get("key") or json.dumps(item, ensure_ascii=False, sort_keys=True)).strip()
-                if not identity:
-                    continue
-                reporters = list(item.get("reporters", []) or [])
-                if reporter and reporter not in reporters:
-                    reporters.append(reporter)
-                item["reporters"] = reporters
-                if identity not in by_identity:
-                    by_identity[identity] = item
-                    order.append(identity)
-                    continue
-                existing = by_identity[identity]
-                existing_reporters = list(existing.get("reporters", []) or [])
-                for name in reporters:
-                    if name not in existing_reporters:
-                        existing_reporters.append(name)
-                if (prefer_right and is_right) or float(item.get("confidence", 0) or 0) > float(existing.get("confidence", 0) or 0):
-                    item["reporters"] = existing_reporters
-                    by_identity[identity] = item
-                else:
-                    existing["reporters"] = existing_reporters
-        result[section] = [by_identity[identity] for identity in order]
-    return result
-
-
-def _merge_chapter_state(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
-    summaries = [str(value.get("summary", "")).strip() for value in (left, right)]
-    merged = {
-        "summary": "\n".join(item for item in summaries if item),
-        "important_changes": list(dict.fromkeys((left.get("important_changes", []) or []) + (right.get("important_changes", []) or []))),
-        "active_entities": list(dict.fromkeys((left.get("active_entities", []) or []) + (right.get("active_entities", []) or []))),
-        "location": str(right.get("location") or left.get("location") or ""),
-        "timeline": list(dict.fromkeys((left.get("timeline", []) or []) + (right.get("timeline", []) or []))),
-        "open_questions": list(dict.fromkeys((left.get("open_questions", []) or []) + (right.get("open_questions", []) or []))),
-    }
-    return merged
 
 
 def edit_distance(s1: str, s2: str) -> int:
@@ -538,26 +433,10 @@ def merge_chapter_reviews(
             chosen["reporters"] = ["primary" if finding_a else "secondary"]
         merged_context_findings.append(chosen)
 
-    merged_glossary_delta = _merge_delta(
-        primary_review["glossary_delta"], secondary_review["glossary_delta"],
-        identity_key="source", left_reporter="primary", right_reporter="secondary",
-    )
-    merged_memory = _merge_delta(
-        primary_review["memory_delta"], secondary_review["memory_delta"],
-        identity_key="key", left_reporter="primary", right_reporter="secondary",
-    )
-
-    state_a = primary_review.get("chapter_state", {}) or {}
-    state_b = secondary_review.get("chapter_state", {}) or {}
-    merged_state = _merge_chapter_state(state_a, state_b)
-
     return _normalized_review({
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
         "context_findings": merged_context_findings,
-        "glossary_delta": merged_glossary_delta,
-        "memory_delta": merged_memory,
-        "chapter_state": merged_state,
         "dual_review": {
             "enabled": True,
             "primary_fixes_count": len(fixes_a),
@@ -837,53 +716,22 @@ def _execute_review_with_fallbacks(
     raise last_exc
 
 
-def _update_rolling_payload(base_payload: dict[str, Any], chunk_review: dict[str, Any]) -> dict[str, Any]:
-    """Forward newly extracted terms, character memory, and narrative state to subsequent chunks."""
+def _update_rolling_payload(base_payload: dict[str, Any], knowledge: dict[str, Any]) -> dict[str, Any]:
+    """Forward only temporary window context; formal knowledge stays untouched."""
     rolling = dict(base_payload)
-    chunk_review = _normalized_review(chunk_review)
-
-    # 1. Forward Glossary
-    raw_glossary = rolling.get("glossary", [])
-    glossary_document = dict(raw_glossary) if isinstance(raw_glossary, dict) else None
-    current_glossary = list(raw_glossary.get("terms", [])) if isinstance(raw_glossary, dict) else list(raw_glossary)
-    term_index = {str(term.get("source", "")).strip(): index for index, term in enumerate(current_glossary) if isinstance(term, dict)}
-    for term in chunk_review["glossary_delta"]["add"] + chunk_review["glossary_delta"]["update"]:
-        if isinstance(term, dict) and term.get("source"):
-            src = str(term["source"]).strip()
-            if src in term_index:
-                current_glossary[term_index[src]] = {**current_glossary[term_index[src]], **term}
-            elif src:
-                term_index[src] = len(current_glossary)
-                current_glossary.append(term)
-    if glossary_document is not None:
-        glossary_document["terms"] = current_glossary
-        rolling["glossary"] = glossary_document
-    else:
-        rolling["glossary"] = current_glossary
-
-    # 2. Forward Book Memory
-    current_memory = dict(rolling.get("book_memory", {}))
-    mem_delta = chunk_review.get("memory_delta", {})
-    if isinstance(mem_delta, dict):
-        merged_entries = {entry.get("key"): entry for entry in current_memory.get("entries", []) if isinstance(entry, dict) and entry.get("key")}
-        for entry in mem_delta.get("add", []) + mem_delta.get("update", []):
-            if isinstance(entry, dict) and entry.get("key"):
-                existing = merged_entries.get(entry["key"], {})
-                merged_entries[entry["key"]] = {**existing, **entry}
-        current_memory["entries"] = list(merged_entries.values())
-        conflicts = list(current_memory.get("conflicts", []))
-        for conflict in mem_delta.get("conflicts", []):
-            if conflict not in conflicts:
-                conflicts.append(conflict)
-        current_memory["conflicts"] = conflicts
-        rolling["book_memory"] = current_memory
-
-    # 3. Keep the previous chapter seed distinct from this chapter's rolling
-    # state. The caller invokes this only after a (possibly dual) result merged.
-    chunk_state = chunk_review.get("chapter_state")
-    if isinstance(chunk_state, dict) and chunk_state:
-        rolling["current_chapter_rolling_state"] = chunk_state
-
+    delta = knowledge.get("rolling_context_delta", knowledge) if isinstance(knowledge, dict) else {}
+    if not isinstance(delta, dict):
+        return rolling
+    current = dict(rolling.get("current_chapter_review_context", {}) or {})
+    for key in ("adopted_terms", "active_entities", "locations", "relationships", "important_states", "notes"):
+        values = delta.get(key, [])
+        if isinstance(values, list):
+            existing = current.get(key, [])
+            if not isinstance(existing, list):
+                existing = []
+            current[key] = list(dict.fromkeys(existing + values))
+    if current:
+        rolling["current_chapter_review_context"] = current
     return rolling
 
 
@@ -901,12 +749,6 @@ def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> 
 
     # Fixes concatenated
     merged_fixes = (chunk_a.get("fixes", []) or []) + (chunk_b.get("fixes", []) or [])
-
-    merged_glossary_delta = _merge_delta(chunk_a["glossary_delta"], chunk_b["glossary_delta"], identity_key="source", prefer_right=True)
-    merged_memory = _merge_delta(chunk_a["memory_delta"], chunk_b["memory_delta"], identity_key="key", prefer_right=True)
-
-    # Chapter State synthesis
-    merged_state = _merge_chapter_state(chunk_a["chapter_state"], chunk_b["chapter_state"])
 
     merged_findings: list[dict[str, Any]] = []
     finding_index: dict[str, int] = {}
@@ -929,9 +771,6 @@ def _combine_chunk_reviews(chunk_a: dict[str, Any], chunk_b: dict[str, Any]) -> 
         "checked_ids": merged_checked,
         "fixes": merged_fixes,
         "context_findings": merged_findings,
-        "glossary_delta": merged_glossary_delta,
-        "memory_delta": merged_memory,
-        "chapter_state": merged_state,
         "review_diagnostics": {"context_snapshots": context_snapshots} if context_snapshots else None,
     })
 
@@ -1092,9 +931,6 @@ def _execute_segment_with_adaptive_split(
         return _normalized_review({
             "checked_ids": [],
             "fixes": [],
-            "glossary_delta": {"add": [], "update": [], "conflicts": []},
-            "memory_delta": {"add": [], "update": [], "conflicts": []},
-            "chapter_state": base_payload.get("previous_chapter_state") or {},
         })
 
     if is_dual and secondary_backend and secondary_backend != backend:
@@ -1358,6 +1194,7 @@ def run_chapter_review(
     backtrack_min_confidence: float | None = None,
     on_reviewer_status: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
+    on_window_completed: Callable[[dict[str, Any], dict[str, list[dict[str, Any]]], int, int], dict[str, Any] | None] | None = None,
 ) -> None:
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
@@ -1434,6 +1271,7 @@ def run_chapter_review(
     attempt_lock = threading.Lock()
     already_rechecked: set[str] = set()
     backtrack_diagnostics: list[dict[str, Any]] = []
+    window_diagnostics: list[dict[str, Any]] = []
 
     for chunk_index, (start, end) in enumerate(spans, start=1):
         if cancel_check:
@@ -1469,7 +1307,25 @@ def run_chapter_review(
             aggregate = chunk_res
         else:
             aggregate = _combine_chunk_reviews(aggregate, chunk_res)
-        rolling_payload = _update_rolling_payload(rolling_payload, chunk_res)
+        if on_window_completed is not None:
+            try:
+                window_knowledge = on_window_completed(chunk_res, window, chunk_index, len(spans))
+                if isinstance(window_knowledge, dict):
+                    rolling_payload = _update_rolling_payload(rolling_payload, window_knowledge)
+                    window_diagnostics.append({
+                        "window_index": chunk_index,
+                        "status": window_knowledge.get("status", "completed"),
+                        "candidate_count": len(window_knowledge.get("knowledge_candidates", []) or []),
+                        "conflict_count": len(window_knowledge.get("conflicts", []) or []),
+                        "rolling_context_fields": sorted(
+                            key for key, value in (window_knowledge.get("rolling_context_delta", {}) or {}).items()
+                            if isinstance(value, list) and value
+                        ),
+                    })
+            except JobCancelled:
+                raise
+            except Exception as exc:  # knowledge extraction is advisory to review
+                window_diagnostics.append({"window_index": chunk_index, "status": "failed", "error": str(exc)})
 
         if effective_backtrack:
             context_ids = {
@@ -1563,6 +1419,7 @@ def run_chapter_review(
             "rechecks": backtrack_diagnostics,
         },
         "context_snapshots": context_snapshots,
+        "window_knowledge": window_diagnostics,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1673,28 +1530,15 @@ def review_book(
             ]
             if remaining_kana:
                 raise ValueError(f"章节 {c_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")
-        consistency_updates = review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", [])
-        evidence_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
-        prepared_updates: list[dict[str, Any]] = []
-        for raw in consistency_updates:
-            item = dict(raw)
-            source = str(item.get("source", "")).strip()
-            if not item.get("evidence_ids"):
-                item["evidence_ids"] = [item_id for item_id, text in evidence_texts.items() if source and source in text]
-            prepared_updates.append(item)
-        glossary, term_summary = apply_glossary_delta(
-            glossary,
-            prepared_updates,
-            chapter_id=c_id,
-            reporter="chapter_reviewer",
-            evidence_texts=evidence_texts,
-            name_mapping_queue_path=workspace.name_mapping_review_path,
-        )
-        memory, mem_summary = merge_memory_delta(memory, review["memory_delta"], c_id)
-        persist_glossary(workspace, glossary)
-        write_json(workspace.book_memory_path, memory)
-        chapter_state = merge_chapter_state(c_id, str(chapter.get("title", "")), review["chapter_state"])
-        write_json(workspace.chapter_states_dir / f"{c_id}.json", chapter_state)
+        # The standalone reviewer is deliberately read-only for knowledge.
+        # ChapterPipeline owns window extraction, final decisions, and the
+        # single apply_knowledge_delta persistence boundary.
+        knowledge_summary = {
+            "status": "not_run",
+            "reason": "knowledge extraction is orchestrated by ChapterPipeline",
+            "candidates": 0,
+            "active": 0,
+        }
         report_path = workspace.reports_dir / f"{c_id}.json"
         write_json(report_path, {
             "book": book,
@@ -1704,9 +1548,10 @@ def review_book(
             "reported_issues": len(review["fixes"]),
             "applied_fixes": len(fixes) if apply else 0,
             "approved_fixes": fixes,
-            "term_summary": term_summary,
-            "glossary": term_summary,
-            "memory_summary": mem_summary,
+            "term_summary": knowledge_summary,
+            "glossary": knowledge_summary,
+            "memory_summary": knowledge_summary,
+            "knowledge": knowledge_summary,
             "applied": applied_fixes,
         })
         results.append({

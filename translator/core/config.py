@@ -172,6 +172,13 @@ def validate_config_data(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"参数文件未通过 {CONFIG_SCHEMA_PATH.name}：{'; '.join(errors)}")
     providers = value["providers"]
     roles = value["roles"]
+    knowledge = value.get("knowledge_extractor", {})
+    if isinstance(knowledge, dict):
+        knowledge_provider = str(knowledge.get("provider", "")).strip()
+        if knowledge_provider and knowledge_provider not in providers:
+            raise ValueError(
+                f"knowledge_extractor.provider 引用了未定义 provider：{knowledge_provider}"
+            )
     
     # Validate primary translator
     primary = roles.get("primary_translator")

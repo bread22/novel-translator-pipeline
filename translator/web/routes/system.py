@@ -24,12 +24,17 @@ from translator.core.config import (
 )
 from translator.providers.registry import create_provider
 from translator.core.paths import PathResolver
+from translator.review.knowledge_extractor import knowledge_extractor_connection_test
 from translator.web.models import PreflightProviderResult, PreflightResponse
 from translator.web.path_policy import resolve_under, validate_prompt_filename
 
 
 ROOT = Path(__file__).resolve().parents[3]
 router = APIRouter(prefix="/system", tags=["System"])
+FIXED_KNOWLEDGE_PROMPTS = {
+    "knowledge_extractor_window.md",
+    "knowledge_extractor_finalize.md",
+}
 
 
 def get_config_path() -> Path:
@@ -131,6 +136,13 @@ def save_system_config(config_data: dict[str, Any]) -> dict[str, Any]:
     return {"status": "ok", "config": validated, "backup": str(backup_path) if backup_path else None}
 
 
+@router.post("/knowledge-extractor/test")
+def test_knowledge_extractor_connection() -> dict[str, Any]:
+    """Probe the configured extractor provider without creating review artifacts."""
+    _load_dotenv(override=True)
+    return knowledge_extractor_connection_test(load_config())
+
+
 def get_prompts_dir() -> Path:
     p = PathResolver.for_config(get_config_path()).prompts_root
     p.mkdir(parents=True, exist_ok=True)
@@ -161,12 +173,14 @@ def list_prompts() -> list[dict[str, Any]]:
                 first_heading = line.strip().lstrip("#").strip()
                 break
         name = friendly_names.get(filename, first_heading or filename)
+        prompt_type = "knowledge" if filename in FIXED_KNOWLEDGE_PROMPTS else ("review" if is_review else "translation")
         prompts.append({
             "id": filename,
             "filename": filename,
             "path": f"docs/prompts/{filename}",
             "name": name,
-            "type": "review" if is_review else "translation",
+            "type": prompt_type,
+            "editable": prompt_type != "knowledge",
             "content": content,
         })
     return prompts
@@ -197,12 +211,14 @@ def get_prompt_detail(prompt_id: str) -> dict[str, Any]:
             first_heading = line.strip().lstrip("#").strip()
             break
     name = friendly_names.get(prompt_id, first_heading or prompt_id)
+    prompt_type = "knowledge" if prompt_id in FIXED_KNOWLEDGE_PROMPTS else ("review" if is_review else "translation")
     return {
         "id": prompt_id,
         "filename": prompt_id,
         "path": f"docs/prompts/{prompt_id}",
         "name": name,
-        "type": "review" if is_review else "translation",
+        "type": prompt_type,
+        "editable": prompt_type != "knowledge",
         "content": content,
     }
 
@@ -214,6 +230,9 @@ def save_prompt(prompt_data: dict[str, Any]) -> dict[str, Any]:
     if not filename.endswith(".md"):
         filename = f"{filename}.md"
     filename = filename.lower().replace(" ", "-")
+
+    if filename in FIXED_KNOWLEDGE_PROMPTS:
+        raise HTTPException(status_code=400, detail="Knowledge Extractor 固定提示词不可编辑")
 
     if not content:
         raise HTTPException(status_code=400, detail="Prompt 内容不能为空")
@@ -258,7 +277,10 @@ def delete_prompt(prompt_id: str) -> dict[str, Any]:
         prompt_id = validate_prompt_filename(prompt_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    protected = {"erotic-novel-policy.md", "general-novel-policy.md", "translation-policy.md"}
+    protected = {
+        "erotic-novel-policy.md", "general-novel-policy.md", "translation-policy.md",
+        *FIXED_KNOWLEDGE_PROMPTS,
+    }
     if prompt_id in protected:
         raise HTTPException(status_code=400, detail="默认系统 Prompt 规范不可删除")
 

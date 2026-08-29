@@ -108,7 +108,8 @@ export interface PromptItem {
   filename: string;
   path: string;
   name: string;
-  type: 'translation' | 'review';
+  type: 'translation' | 'review' | 'knowledge';
+  editable?: boolean;
   content: string;
 }
 
@@ -203,38 +204,29 @@ export interface ChapterReviewReport {
     consensus?: boolean | null;
     reporters?: string[];
   }>;
-  glossary_delta: {
-    add: Array<{
-      source: string;
-      target: string;
-      category?: string;
-      note?: string;
-      confidence?: number;
-    }>;
-    update: Array<{
-      source: string;
-      target: string;
-      category?: string;
-      note?: string;
-      confidence?: number;
-    }>;
-    conflicts: Array<Record<string, unknown>>;
-  };
-  memory_delta: {
-    add: Array<Record<string, unknown>>;
-    update: Array<Record<string, unknown>>;
-    conflicts: Array<Record<string, unknown>>;
-  };
-  chapter_state?: {
-    chapter_id?: string;
-    title?: string;
+  knowledge?: {
     status?: string;
-    updated_at?: string;
-    summary?: string;
-    important_changes?: string[];
-    active_entities?: string[];
-    location?: string;
+    candidates?: number;
+    conflicts?: number;
+    decisions?: number;
+    active?: number;
+    candidate?: number;
+    conflict?: number;
+    discard?: number;
+    window_count?: number;
+    window_candidate_count?: number;
+    window_conflict_count?: number;
+    window_failure_count?: number;
   };
+  pre_scan?: {
+    extraction_status?: string;
+    known_hit_count?: number;
+    known_term_count?: number;
+  };
+  /** Legacy fields are accepted when rendering archived reports only. */
+  glossary_delta?: Record<string, unknown>;
+  memory_delta?: Record<string, unknown>;
+  chapter_state?: { summary?: string; [key: string]: unknown };
   dual_review?: {
     enabled?: boolean;
     primary_fixes_count?: number;
@@ -306,6 +298,16 @@ export interface SystemConfig {
     effort?: string;
     agent?: string;
   }>;
+  knowledge_extractor?: {
+    enabled?: boolean;
+    provider?: string;
+    model?: string;
+    credential_ref?: string;
+    temperature?: number;
+    max_output_tokens?: number;
+    request_timeout?: number;
+    input_hard_limit_chars?: number;
+  };
   pipeline?: {
     max_cycles?: number;
     max_chapter_batches?: number;

@@ -14,7 +14,7 @@
 ## 生命周期
 
 ```text
-review/extractor candidate
+Window Knowledge Extractor candidate
   → taxonomy + shape + evidence + confidence validation
   → candidate
       ├─ evidence 达标 → active
@@ -27,11 +27,11 @@ review/extractor candidate
 
 ## 日常流水线
 
-1. 章节翻译前，extractor 对源文自然段分块提取候选；失败 chunk 不丢弃其他成功结果。
-2. lifecycle service 校验候选并合并 evidence、occurrence、chapter/sample/provenance。
-3. projection 根据当前章节/批次文本选择相关 active 词条。
-4. translation payload 使用该投影，不把 disputed/retired/blocked 词条注入模型。
-5. rolling review 产生的 glossary delta 通过同一 lifecycle 合并。
+1. 整章翻译完成后，deterministic pre-scan 只查找已有 Glossary 命中，不产生候选或写入。
+2. Review Window 修复后，Knowledge Extractor 提取临时 rolling context、候选和冲突。
+3. 整章审阅完成后，同一 Extractor 只根据候选和相关 active/locked 知识决定最终动作。
+4. pipeline orchestrator 通过 `apply_knowledge_delta()` 校验并合并 active Glossary/Memory；candidate/conflict 写入独立记录。
+5. 下一章的 Context Budgeter 只投影相关 active/locked 词条，不把候选传给 Translator。
 6. 符合修订规则的 active 词条可触发受控 backfill；只改 source 或旧 target 精确匹配的段落。
 
 ## 迁移
@@ -51,9 +51,9 @@ python scripts/migrate_glossary_v3.py --output-root output --apply
 
 apply 前创建 v2 备份，写入临时文件并重新打开验证 v3 schema。`BookWorkspace.initialize()` 遇到旧 schema 时也会执行相同迁移逻辑。
 
-## Replay 与回填
+## Glossary 迁移与回填
 
-先检查历史 review delta 通过新 lifecycle 后的结果：
+历史 review delta replay 已移除；以下命令仅检查或应用 Glossary v2→v3 迁移：
 
 ```bash
 python scripts/replay_glossary_v3.py --output-root output
@@ -70,7 +70,7 @@ python scripts/replay_glossary_v3.py --output-root output --apply
 
 ## 诊断指标
 
-Release evidence 和章节报告汇总：`reported`、`candidates`、`rejected`、`shape_blocked`、`category_blocked`、`evidence_total/valid/discarded`、`activated`、`conflicts`、`revisions`、`backfill_affected/changed/failed`、`injected`。
+Release evidence 和章节报告汇总：`reported`、`known_hits`、`candidates`、`active`、`candidate`、`conflict`、`discard`、`rejected`、`category_blocked`、`backfill_affected/changed/failed`、`injected`。
 
 ## 回滚
 

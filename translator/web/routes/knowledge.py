@@ -295,9 +295,9 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
             "reported_issues": len(fixes),
             "applied_fixes": applied_count,
             "fixes": fixes,
-            "glossary_delta": rev.get("glossary_delta", {"add": [], "update": [], "conflicts": []}),
-            "memory_delta": rev.get("memory_delta", {"add": [], "update": [], "conflicts": []}),
-            "chapter_state": st or rev.get("chapter_state", {}),
+            "knowledge": rep.get("knowledge", {}),
+            "pre_scan": rep.get("pre_scan", {}),
+            "review_diagnostics": rev.get("review_diagnostics", {}),
             "dual_review": rev.get("dual_review", {}),
             "migration_warning": migration_warning,
         })
@@ -335,6 +335,6 @@ def get_chapter_review(book_id: str, chapter_id: str) -> dict[str, Any]:
         "report": report_data,
         "review_output": output_data,
         "fixes": fixes,
-        "chapter_state": state_data or (output_data.get("chapter_state") if output_data else {}),
+        "knowledge": report_data.get("knowledge", {}) if isinstance(report_data, dict) else {},
         "migration_warning": migration_warning,
     }

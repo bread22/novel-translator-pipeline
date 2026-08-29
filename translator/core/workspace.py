@@ -180,6 +180,14 @@ class BookWorkspace:
         return self.data_dir / "name-mapping-review.jsonl"
 
     @property
+    def knowledge_candidates_path(self) -> Path:
+        return self.data_dir / "knowledge-candidates.json"
+
+    @property
+    def knowledge_conflicts_path(self) -> Path:
+        return self.data_dir / "knowledge-conflicts.json"
+
+    @property
     def progress_path(self) -> Path:
         return self.data_dir / "progress.json"
 
@@ -288,6 +296,8 @@ class BookWorkspace:
             (self.data_dir / "events.jsonl").unlink(missing_ok=True)
             self.name_mapping_review_path.unlink(missing_ok=True)
             self.name_mapping_review_path.with_name(f".{self.name_mapping_review_path.name}.lock").unlink(missing_ok=True)
+            self.knowledge_candidates_path.unlink(missing_ok=True)
+            self.knowledge_conflicts_path.unlink(missing_ok=True)
 
         for dir_to_clean in (self.reviews_dir, self.reports_dir, self.snapshots_dir):
             if dir_to_clean.exists():

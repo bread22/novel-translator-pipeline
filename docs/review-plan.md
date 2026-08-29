@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-审阅必须覆盖目标段落、利用相邻上下文、持续推进术语/记忆/叙事状态，同时防止模型用主观润色或幻觉破坏有效译文。
+审阅必须覆盖目标段落、利用相邻上下文并防止模型用主观润色或幻觉破坏有效译文。术语与记忆候选由独立 Knowledge Extractor 在章节结束时处理。
 
 ## 2. 字符预算滚动分块
 
@@ -12,12 +12,12 @@
 
 - `review_context_before` 个前文段落；
 - `review_context_after` 个后文段落；
-- 当前 Glossary 投影；
-- Book Memory；
-- 上一章/上一块 chapter state；
+- 当前 active/locked Glossary 投影；
+- Book Memory、上一章状态和本章临时 review context；
+- deterministic known_hits 与 targeted backtrack 证据；
 - translation policy。
 
-只要求 `checked_ids` 覆盖目标块，前后文是只读 context。每块产生的 glossary、memory 和 chapter state 会更新 rolling payload 后再执行下一块。
+只要求 `checked_ids` 覆盖目标块，前后文是只读 context。每块修复完成后，Window Knowledge Extractor 更新本章临时 rolling context；它不写正式 Glossary/Memory。
 
 ## 3. Reviewer 路由
 
@@ -34,10 +34,7 @@
 {
   "checked_ids": ["c0001-p00001"],
   "fixes": [],
-  "context_findings": [],
-  "glossary_delta": {"add": [], "update": [], "conflicts": []},
-  "memory_delta": {"add": [], "update": [], "conflicts": []},
-  "chapter_state": {"summary": "", "important_changes": []}
+  "context_findings": []
 }
 ```
 
@@ -60,9 +57,10 @@ Schema 与 Pydantic model 必须一致，未知 operation/category、重复或�
 
 后文可报告前文 context 的潜在错误。仅当 `review_backtrack_enabled=true` 且 confidence 达到 `review_backtrack_min_confidence` 时，系统对对应前文 ID 发起定向复核。回查仍执行完整写回守卫，不直接采用后文模型的单方 replacement。
 
-## 7. Glossary 与 Memory 合并
+## 7. Knowledge Finalization 与 Glossary/Memory 合并
 
-Review delta 先经过确定性 schema/taxonomy/证据校验，再进入 Glossary v3 生命周期或 Memory merge。冲突不直接覆盖；记录 reporter、chapter/paragraph evidence、旧值、新值和修订状态。
+每个窗口只产生带 source/target 片段和 paragraph evidence 的临时候选。整章完成后，同一 Knowledge Extractor 对候选作 `active`、`candidate`、`conflict`、`discard` 决定。
+只有 pipeline orchestrator 调用 `apply_knowledge_delta()`；active 进入 Glossary v3 或 Book Memory，candidate/conflict 分别写入候选与冲突记录，discard 不写入。冲突不覆盖既有 active/locked 值。
 
 ## 8. 独立命令
 
@@ -79,4 +77,4 @@ python scripts/chapter_review.py \
 
 ## 9. 证据
 
-每章保存 review input/output、checked IDs、原始 fixes、approved fixes、未应用原因、glossary/memory delta、chapter state、snapshot 和 report。报告用于解释决策，manifest 与 workspace 文件仍是权威数据源。
+每章保存 review input/output、known-hits、checked IDs、原始 fixes、approved fixes、未应用原因、窗口知识结果、finalization、snapshot 和 report。报告用于解释决策，manifest 与 workspace 文件仍是权威数据源。

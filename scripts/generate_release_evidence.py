@@ -43,15 +43,22 @@ def generate(output_dir: Path) -> dict[str, Any]:
         "reported": 0, "candidates": 0, "rejected": 0, "shape_blocked": 0,
         "category_blocked": 0, "evidence_insufficient": 0, "evidence_total": 0,
         "evidence_valid": 0, "evidence_discarded": 0,
-        "activated": 0,
-        "conflicts": 0, "revisions": 0, "backfill_affected": 0, "backfill_changed": 0,
-        "backfill_failed": 0, "injected": 0,
+        "known_hits": 0, "known_terms": 0, "activated": 0,
+        "candidate": 0, "conflicts": 0, "discard": 0, "revisions": 0,
+        "backfill_affected": 0, "backfill_changed": 0, "backfill_failed": 0,
+        "injected": 0,
     }
     for report_path in sorted(output_root.glob("*/reports/*.json")):
         report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else {}
         metrics = report.get("glossary", {}) if isinstance(report, dict) else {}
         if not isinstance(metrics, dict):
-            continue
+            metrics = {}
+        knowledge = report.get("knowledge", {}) if isinstance(report, dict) else {}
+        if not isinstance(knowledge, dict):
+            knowledge = {}
+        pre_scan = report.get("pre_scan", {}) if isinstance(report, dict) else {}
+        if not isinstance(pre_scan, dict):
+            pre_scan = {}
         glossary_runtime["reported"] += int(metrics.get("reported", 0) or 0)
         glossary_runtime["candidates"] += int(metrics.get("accepted_candidates", 0) or 0)
         glossary_runtime["rejected"] += int(metrics.get("rejected", 0) or 0)
@@ -68,6 +75,13 @@ def generate(output_dir: Path) -> dict[str, Any]:
         glossary_runtime["backfill_changed"] += int(metrics.get("backfill_changed", 0) or 0)
         glossary_runtime["backfill_failed"] += int(metrics.get("backfill_failed", 0) or 0)
         glossary_runtime["injected"] += int(metrics.get("injected_into_translation", 0) or 0)
+        glossary_runtime["known_hits"] += int(pre_scan.get("known_hit_count", 0) or 0)
+        glossary_runtime["known_terms"] += int(pre_scan.get("known_term_count", 0) or 0)
+        glossary_runtime["candidates"] += int(knowledge.get("candidates", 0) or 0)
+        glossary_runtime["activated"] += int(knowledge.get("active", 0) or 0)
+        glossary_runtime["candidate"] += int(knowledge.get("candidate", 0) or 0)
+        glossary_runtime["conflicts"] += int(knowledge.get("conflict", knowledge.get("conflicts", 0)) or 0)
+        glossary_runtime["discard"] += int(knowledge.get("discard", 0) or 0)
     memory_reports = [migrate_memory(path) for path in sorted(output_root.glob("*/data/book_memory.json")) if path.is_file()]
     review_reports = [migrate_review(path) for path in sorted(output_root.glob("*/reviews/c*-output.json")) if path.is_file()]
     queue_path = output_root / "jobs" / "job_state.v2.json"

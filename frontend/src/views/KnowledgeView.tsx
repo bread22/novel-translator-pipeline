@@ -398,11 +398,11 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                   已核查 {rep.checked_paragraphs} 段落，发现 {rep.reported_issues} 处客观问题，已自动修正 {rep.applied_fixes} 处。
                 </p>
 
-                {rep.chapter_state?.summary && (
+                {rep.knowledge && (
                   <div className="space-y-1.5">
-                    <h4 className="text-[11px] font-mono font-bold text-[#666666]">章节与长程记忆摘要</h4>
+                    <h4 className="text-[11px] font-mono font-bold text-[#666666]">章节知识提取</h4>
                     <p className="text-xs text-[#4A4A4A] font-serif leading-relaxed border-l-2 border-[#BFDBFE] pl-3">
-                      {rep.chapter_state.summary}
+                      状态：{rep.knowledge.status || '未执行'}；候选 {rep.knowledge.candidates || 0} 条，冲突 {rep.knowledge.conflicts || 0} 条，激活 {rep.knowledge.active || 0} 条。
                     </p>
                   </div>
                 )}

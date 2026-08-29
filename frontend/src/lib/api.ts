@@ -229,6 +229,7 @@ export const api = {
   // a 120s floor), so keep the browser request alive long enough to collect
   // the complete result instead of reporting a client-side timeout at 30s.
   runPreflight: () => request<PreflightResponse>('/system/preflight', { method: 'POST' }, { timeoutMs: 180_000 }),
+  testKnowledgeExtractor: () => request<any>('/system/knowledge-extractor/test', { method: 'POST' }, { timeoutMs: 180_000 }),
   getPrompts: (options?: RequestOptions) => request<PromptItem[]>('/system/prompts', undefined, options),
   getPromptDetail: (promptId: string, options?: RequestOptions) => request<PromptItem>(`/system/prompts/${encodeURIComponent(promptId)}`, undefined, options),
   savePrompt: (data: { filename: string; content: string }) =>

@@ -35,20 +35,24 @@ from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
     empty_book_memory,
-    merge_chapter_state,
-    merge_memory_delta,
-    merge_term_updates,
-    novel_translator_terms,
     read_json,
     utc_now,
     write_json,
 )
-from translator.glossary.backfill import BackfillResult, affected_paragraph_ids
-from translator.glossary.extractor import run_glossary_extraction
-from translator.glossary.service import apply_glossary_delta, persist_glossary
 from translator.pipeline.preflight import PreflightError, run_preflight
 from translator.providers.translator import ProviderTranslator
 from translator.review.context_budget import ReviewContextOverflowError
+from translator.review.knowledge_extractor import (
+    apply_knowledge_delta,
+    build_finalization_payload,
+    finalization_prompt_chars,
+    knowledge_extractor_enabled,
+    normalize_finalize_output,
+    normalize_window_output,
+    run_knowledge_extractor_window,
+    run_knowledge_finalization,
+)
+from translator.review.prescan import deterministic_known_hit_scan
 from translator.review.reviewer import (
     approved_fixes,
     has_target_script_residue,
@@ -214,7 +218,7 @@ class IterativePipeline:
         on_reviewer_status: Callable[[dict[str, Any]], None] | None = None,
         cancellation_token: CancellationToken | None = None,
         pause_gate: PauseGate | None = None,
-        glossary_extractor: Callable[..., Any] | None = None,
+        knowledge_extractor: Callable[..., Any] | None = None,
     ) -> None:
         self.book = book
         self.workspace = workspace
@@ -283,8 +287,14 @@ class IterativePipeline:
         self.on_reviewer_status = on_reviewer_status
         self.cancellation_token = cancellation_token or CancellationToken()
         self.pause_gate = pause_gate or PauseGate()
-        self.glossary_extractor = glossary_extractor
-        self._preextract_reports: dict[str, dict[str, Any]] = {}
+        self.knowledge_extractor = knowledge_extractor
+        self._builtin_reviewer = chapter_reviewer is None or bool(
+            getattr(chapter_reviewer, "_uses_window_knowledge", False)
+        )
+        self._prescan_reports: dict[str, dict[str, Any]] = {}
+        self._knowledge_candidates: dict[str, list[dict[str, Any]]] = {}
+        self._knowledge_conflicts: dict[str, list[dict[str, Any]]] = {}
+        self._knowledge_windows: dict[str, list[dict[str, Any]]] = {}
 
     def _checkpoint(self) -> None:
         self.pause_gate.wait(self.cancellation_token)
@@ -381,8 +391,6 @@ class IterativePipeline:
             report_data = read_json(report_path, {})
             if report_data.get("remaining_kana_ids"):
                 return False
-            if report_data.get("backfill_failed"):
-                return False
         return True
 
     @staticmethod
@@ -425,7 +433,7 @@ class IterativePipeline:
         summary = result.get("summary", {}) if isinstance(result, Mapping) else {}
         count = int(summary.get("glossary_terms_injected", 0) or 0) if isinstance(summary, Mapping) else 0
         if count:
-            report = self._preextract_reports.setdefault(chapter_id, {})
+            report = self._prescan_reports.setdefault(chapter_id, {})
             report["injected_into_translation"] = int(report.get("injected_into_translation", 0) or 0) + count
 
     def _translate_segment_with_recovery(
@@ -555,142 +563,35 @@ class IterativePipeline:
             raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")
         return
 
-    def _preextract_chapter(self, chapter_id: str) -> dict[str, Any]:
-        """Extract entities before the first translation batch without blocking fallback translation."""
+    def _prescan_chapter(self, chapter_id: str) -> dict[str, Any]:
+        """Find existing glossary hits after translation; this operation is read-only."""
         self._checkpoint()
         chapter = self._chapter(chapter_id)
         items = [
-            {"id": str(item["id"]), "source": str(item.get("source", ""))}
+            {"id": str(item["id"]), "source": str(item.get("source", "")), "translated": str(item.get("translated", ""))}
             for item in chapter.get("paragraphs", [])
             if isinstance(item, dict) and item.get("id")
         ]
-        if not items:
-            report = {"reported": 0, "diagnostic": "empty_chapter"}
-            self._preextract_reports[chapter_id] = report
-            return report
-        payload: Any = None
-        diagnostic = ""
-        try:
-            if self.glossary_extractor is not None:
-                try:
-                    payload = self.glossary_extractor(chapter_id, items, read_json(self.workspace.glossary_path, {}))
-                except TypeError:
-                    payload = self.glossary_extractor(items)
-            elif self.chapter_reviewer is run_chapter_review:
-                preextract_backend = self.secondary_fallback_translator or (
-                    self.fallback_translators[1] if len(self.fallback_translators) > 1 else None
-                )
-                if not preextract_backend:
-                    report = {"reported": 0, "extraction_status": "skipped", "diagnostic": "preextract_skipped_no_secondary_fallback"}
-                    self._preextract_reports[chapter_id] = report
-                    return report
-
-                input_path = self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-input.json"
-                output_path = self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-output.json"
-                write_json(input_path, {
-                    "schema_version": "3.0",
-                    "book": self.book,
-                    "chapter_id": chapter_id,
-                    "items": items,
-                    "active_terms": read_json(self.workspace.glossary_path, {}).get("terms", []),
-                })
-                try:
-                    payload = run_glossary_extraction(
-                        input_path,
-                        output_path,
-                        backend=preextract_backend,
-                        cancel_check=self.cancellation_token.check,
-                        fallback_backends=[],
-                    )
-                except JobCancelled:
-                    raise
-                except Exception as exc:
-                    diagnostic = f"preextract_failed:{exc}"
-                    report = {"reported": 0, "extraction_status": "failed", "failed_chunks": 0, "diagnostic": diagnostic}
-                    self._preextract_reports[chapter_id] = report
-                    write_json(self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-diagnostic.json", report)
-                    return report
-            else:
-                report = {"reported": 0, "diagnostic": "extractor_not_configured"}
-                self._preextract_reports[chapter_id] = report
-                return report
-        except JobCancelled:
-            raise
-        except Exception as exc:  # extraction is diagnostic and must not stop main translation
-            diagnostic = f"preextract_failed:{exc}"
-            report = {"reported": 0, "extraction_status": "failed", "failed_chunks": 0, "diagnostic": diagnostic}
-            self._preextract_reports[chapter_id] = report
-            write_json(self.workspace.reviews_dir / f"{chapter_id}-glossary-extract-diagnostic.json", report)
-            return report
-        raw_candidates = payload.get("candidates", []) if isinstance(payload, dict) else payload
-        candidates: list[dict[str, Any]] = []
-        evidence_texts: dict[str, str] = {}
-        for item in items:
-            evidence_texts[str(item["id"])] = str(item.get("source", ""))
-        for raw in raw_candidates if isinstance(raw_candidates, list) else []:
-            if not isinstance(raw, dict):
-                continue
-            candidate = dict(raw)
-            source = str(candidate.get("source", "")).strip()
-            ids = [str(value) for value in candidate.get("evidence_ids", []) if str(value).strip()]
-            if not ids:
-                ids = [str(item["id"]) for item in items if source and source in str(item.get("source", ""))]
-            candidate["evidence_ids"] = ids
-            candidates.append(candidate)
-        glossary = read_json(self.workspace.glossary_path, {"schema_version": "3.0", "book": self.book, "terms": [], "conflicts": [], "revisions": []})
-        merged, summary = apply_glossary_delta(
-            glossary,
-            candidates,
-            chapter_id=chapter_id,
-            reporter="preextractor",
-            evidence_texts=evidence_texts,
-            name_mapping_queue_path=self.workspace.name_mapping_review_path,
-        )
-        persist_glossary(self.workspace, merged)
-        summary_with_diagnostic: dict[str, Any] = dict(summary)
-        extraction_status = str(payload.get("extraction_status", "completed")) if isinstance(payload, dict) else "completed"
-        failed_chunks = payload.get("failed_chunks", []) if isinstance(payload, dict) else []
-        summary_with_diagnostic["extraction_status"] = extraction_status
-        summary_with_diagnostic["failed_chunks"] = len(failed_chunks) if isinstance(failed_chunks, list) else 0
-        summary_with_diagnostic["extraction_attempts"] = len(payload.get("attempts", [])) if isinstance(payload, dict) and isinstance(payload.get("attempts", []), list) else 0
-        summary_with_diagnostic["diagnostic"] = diagnostic or (f"preextract_{extraction_status}" if extraction_status != "completed" else "")
-        self._preextract_reports[chapter_id] = summary_with_diagnostic
-        return summary_with_diagnostic
-
-    def _backfill_revisions(self, revisions: list[dict[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {"affected": [], "changed": [], "unchanged": [], "failed": []}
-        if not revisions:
-            return result
-        manifest = read_json(self.manifest, {})
-        for revision in revisions:
-            ids = affected_paragraph_ids(manifest, revision)
-            result["affected"].extend(ids)
-            if not self.apply or self.targeted_translator is None:
-                result["unchanged"].extend(ids)
-                continue
-            for item_id in ids:
-                before = str(paragraph_map(manifest).get(item_id, {}).get("translated", ""))
-                try:
-                    response = self._translate_target(self.primary_translator, [item_id], len(str(paragraph_map(manifest).get(item_id, {}).get("source", ""))))
-                    if response.get("status") != "ok":
-                        result["failed"].append(item_id)
-                        continue
-                    manifest = read_json(self.manifest, {})
-                    after = str(paragraph_map(manifest).get(item_id, {}).get("translated", ""))
-                    if after == before:
-                        result["unchanged"].append(item_id)
-                    else:
-                        result["changed"].append(item_id)
-                except Exception:
-                    result["failed"].append(item_id)
-        for key in result:
-            result[key] = sorted(dict.fromkeys(result[key]))
-        write_json(self.workspace.reports_dir / "glossary-backfill-latest.json", result)
-        return result
+        glossary = read_json(self.workspace.glossary_path, {"terms": []})
+        report = deterministic_known_hit_scan(items, glossary, chapter_id=chapter_id)
+        report.update({"status": "completed", "deterministic": True})
+        write_json(self.workspace.reviews_dir / f"{chapter_id}-known-hits.json", report)
+        previous_report = self._prescan_reports.get(chapter_id, {})
+        self._prescan_reports[chapter_id] = {
+            "extraction_status": "deterministic",
+            "known_hit_count": report["hit_count"],
+            "known_term_count": report["term_count"],
+            "diagnostic": "",
+        }
+        if previous_report.get("injected_into_translation"):
+            self._prescan_reports[chapter_id]["injected_into_translation"] = previous_report["injected_into_translation"]
+        return report
 
     def _translate_chapter(self, chapter_id: str, _cycle: int) -> dict[str, Any]:
         chapter = self._chapter(chapter_id)
-        preextract = self._preextract_chapter(chapter_id)
+        # The normal pipeline translates the complete chapter before the
+        # deterministic known-hit scan. Knowledge extraction starts only in
+        # the review phase and never participates in translation.
         before_path = self.workspace.snapshots_dir / f"{chapter_id}-before.json"
         if not before_path.exists():
             try:
@@ -738,7 +639,6 @@ class IterativePipeline:
             "translated": len(initial_pending),
             "translated_paragraphs": len(initial_pending),
             "attempts": len(attempts),
-            "preextract": preextract,
         }
 
     def _repair_remaining_kana(self, chapter_id: str, remaining_kana_ids: list[str]) -> list[str]:
@@ -799,13 +699,205 @@ class IterativePipeline:
                     continue
         return repaired
 
+    def _knowledge_config(self) -> dict[str, Any]:
+        return dict(load_config().get("knowledge_extractor", {}) or {})
+
+    @staticmethod
+    def _project_window_fixes(window: dict[str, list[dict[str, Any]]], review: dict[str, Any], *, apply: bool) -> dict[str, list[dict[str, Any]]]:
+        projected = {key: [dict(item) for item in values] for key, values in window.items()}
+        if not apply:
+            return projected
+        by_id = {str(item.get("id", "")): item for item in projected.get("items", []) if isinstance(item, dict)}
+        for fix in review.get("fixes", []) if isinstance(review.get("fixes"), list) else []:
+            if not isinstance(fix, dict):
+                continue
+            item = by_id.get(str(fix.get("id", "")))
+            if item is None:
+                continue
+            if str(fix.get("operation", "replace")) == "clear":
+                item["translated"] = ""
+            elif fix.get("replacement") or fix.get("approved_translation"):
+                item["translated"] = str(fix.get("replacement") or fix.get("approved_translation"))
+        return projected
+
+    def _extract_window_knowledge(
+        self,
+        chapter_id: str,
+        window: dict[str, list[dict[str, Any]]],
+        review: dict[str, Any],
+        window_index: int,
+        total_windows: int,
+    ) -> dict[str, Any]:
+        """Extract one temporary window result without touching formal stores."""
+        projected = self._project_window_fixes(window, review, apply=self.apply)
+        window_id = f"{chapter_id}:window:{window_index:04d}"
+        rolling_context: dict[str, list[str]] = {}
+        for previous_window in self._knowledge_windows.get(chapter_id, []):
+            delta = previous_window.get("rolling_context_delta", {}) if isinstance(previous_window, dict) else {}
+            if not isinstance(delta, dict):
+                continue
+            for key in ("adopted_terms", "active_entities", "locations", "relationships", "important_states", "notes"):
+                values = delta.get(key, [])
+                if isinstance(values, list):
+                    rolling_context[key] = list(dict.fromkeys(rolling_context.get(key, []) + [str(value) for value in values]))
+        payload = {
+            "schema_version": "1.0",
+            "window_id": window_id,
+            "chapter_id": chapter_id,
+            "window_index": window_index,
+            "total_windows": total_windows,
+            "items": projected.get("items", []),
+            "context_before": projected.get("context_before", []),
+            "context_after": projected.get("context_after", []),
+            "current_chapter_review_context": rolling_context,
+        }
+        output_path = self.workspace.reviews_dir / f"{chapter_id}-window-{window_index:04d}-knowledge.json"
+        try:
+            if self.knowledge_extractor is not None:
+                try:
+                    result = self.knowledge_extractor("window", payload)
+                except TypeError:
+                    result = self.knowledge_extractor(chapter_id, projected.get("items", []), payload)
+                if not isinstance(result, dict):
+                    result = {}
+                result = {
+                    **normalize_window_output(
+                        result,
+                        window_id=window_id,
+                        items=[item for item in projected.get("items", []) if isinstance(item, dict)],
+                    ),
+                    "status": "completed",
+                }
+                write_json(output_path, result)
+            else:
+                result = run_knowledge_extractor_window(payload, output_path=output_path)
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            result = {"schema_version": "1.0", "status": "failed", "error": str(exc), "rolling_context_delta": {}, "knowledge_candidates": [], "conflicts": []}
+            write_json(output_path, result)
+        result.setdefault("knowledge_candidates", [])
+        result.setdefault("conflicts", [])
+        for candidate in result["knowledge_candidates"] if isinstance(result["knowledge_candidates"], list) else []:
+            if isinstance(candidate, dict):
+                candidate.setdefault("source_window", window_id)
+        for conflict in result["conflicts"] if isinstance(result["conflicts"], list) else []:
+            if isinstance(conflict, dict):
+                conflict.setdefault("source_window", window_id)
+        self._knowledge_candidates.setdefault(chapter_id, []).extend(
+            item for item in result["knowledge_candidates"] if isinstance(item, dict)
+        )
+        self._knowledge_conflicts.setdefault(chapter_id, []).extend(
+            item for item in result["conflicts"] if isinstance(item, dict)
+        )
+        self._knowledge_windows.setdefault(chapter_id, []).append(result)
+        return result
+
+    def _finalize_chapter_knowledge(self, chapter_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        candidates = self._knowledge_candidates.get(chapter_id, [])
+        conflicts = self._knowledge_conflicts.get(chapter_id, [])
+        config = self._knowledge_config()
+        if self.knowledge_extractor is None and not knowledge_extractor_enabled(config):
+            return {"status": "skipped", "reason": "disabled", "candidates": len(candidates), "active": 0}
+
+        def retain_without_promotion(status: str, *, error: str = "") -> dict[str, Any]:
+            """Keep extraction evidence auditable when finalization is unavailable."""
+            evidence = {str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")}
+            try:
+                retained = apply_knowledge_delta(
+                    self.workspace, chapter_id, candidates, {}, conflicts,
+                    evidence_texts=evidence,
+                )
+            except Exception as commit_exc:
+                return {
+                    "status": "commit_failed",
+                    "error": str(commit_exc),
+                    "finalization_error": error,
+                    "candidates": len(candidates),
+                    "active": 0,
+                }
+            return {
+                "status": status,
+                "error": error,
+                "candidates": len(candidates),
+                "active": 0,
+                **retained,
+            }
+
+        try:
+            glossary = read_json(self.workspace.glossary_path, {"terms": []})
+            memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
+            hard_limit = int(config.get("input_hard_limit_chars", 30_000) or 30_000)
+            payload_limit = hard_limit
+            final_input: dict[str, Any] = {}
+            for _attempt in range(10):
+                final_input = build_finalization_payload(
+                    candidates, conflicts, glossary, memory,
+                    max_chars=payload_limit,
+                )
+                final_input.update({
+                    "chapter_id": chapter_id,
+                    "candidate_count": len(candidates),
+                    "conflict_count": len(conflicts),
+                })
+                if finalization_prompt_chars(final_input) <= hard_limit:
+                    break
+                payload_limit = max(1, int(payload_limit * 0.8))
+            else:
+                raise ValueError(
+                    f"Knowledge Finalization Prompt exceeds input_hard_limit_chars={hard_limit}"
+                )
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            return retain_without_promotion("failed", error=str(exc))
+        input_path = self.workspace.reviews_dir / f"{chapter_id}-knowledge-finalize-input.json"
+        output_path = self.workspace.reviews_dir / f"{chapter_id}-knowledge-finalize.json"
+        write_json(input_path, final_input)
+        try:
+            if self.knowledge_extractor is not None:
+                try:
+                    finalized = self.knowledge_extractor("finalize", final_input)
+                except TypeError:
+                    finalized = self.knowledge_extractor(final_input)
+                finalized = normalize_finalize_output(finalized if isinstance(finalized, dict) else {})
+                finalized["status"] = "completed"
+                write_json(output_path, finalized)
+            else:
+                finalized = run_knowledge_finalization(final_input, output_path=output_path)
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            finalized = {"schema_version": "1.0", "status": "failed", "error": str(exc), "decisions": []}
+            write_json(output_path, finalized)
+        decisions = finalized.get("decisions", []) if isinstance(finalized, dict) else []
+        decision_map = {
+            str(item.get("candidate_id", "")): item
+            for item in decisions if isinstance(item, dict) and item.get("candidate_id")
+        }
+        evidence = {str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")}
+        try:
+            applied = apply_knowledge_delta(
+                self.workspace, chapter_id, candidates, decision_map, conflicts,
+                evidence_texts=evidence,
+            )
+        except Exception as exc:
+            # Keep review/translation valid even when the final persistence
+            # transaction fails; active stores are rolled back by the entry point.
+            return {"status": "commit_failed", "error": str(exc), "candidates": len(candidates), "active": 0}
+        return {"status": finalized.get("status", "completed"), "candidates": len(candidates), "conflicts": len(conflicts), "decisions": len(decision_map), **applied}
+
     def _review_chapter(self, chapter_id: str) -> dict[str, Any]:
         self._checkpoint()
+        self._knowledge_candidates[chapter_id] = []
+        self._knowledge_conflicts[chapter_id] = []
+        self._knowledge_windows[chapter_id] = []
         chapter = self._chapter(chapter_id)
         paragraphs = [p for p in chapter.get("paragraphs", []) if isinstance(p, dict) and p.get("id")]
         items = [{"id": str(p["id"]), "source": str(p.get("source", "")), "translated": str(p.get("translated", ""))} for p in paragraphs if str(p.get("translated", "")).strip()]
         glossary = read_json(self.workspace.glossary_path, {"book": self.book, "terms": [], "conflicts": []})
         memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
+        known_hits_doc = read_json(self.workspace.reviews_dir / f"{chapter_id}-known-hits.json", {})
         input_path = self.workspace.reviews_dir / f"{chapter_id}-input.json"
         output_path = self.workspace.reviews_dir / f"{chapter_id}-output.json"
         write_json(input_path, {
@@ -817,16 +909,25 @@ class IterativePipeline:
             "previous_chapter_state": self._previous_chapter_state(chapter_id),
             "items": items,
             "glossary": glossary,
+            "known_hits": known_hits_doc.get("known_hits", []) if isinstance(known_hits_doc, dict) else [],
+            "current_chapter_review_context": {},
         })
-        if self.chapter_reviewer is run_chapter_review:
-            run_chapter_review(
-                input_path,
-                output_path,
-                autonomous=self.autonomous,
-                backend=self.reviewer,
-                on_reviewer_status=self.on_reviewer_status,
-                cancel_check=self.cancellation_token.check,
-            )
+        window_callback = None
+        if self._builtin_reviewer:
+            def window_callback(review_result: dict[str, Any], window: dict[str, list[dict[str, Any]]], index: int, total: int) -> dict[str, Any]:
+                return self._extract_window_knowledge(chapter_id, window, review_result, index, total)
+            if self.chapter_reviewer is run_chapter_review:
+                run_chapter_review(
+                    input_path,
+                    output_path,
+                    autonomous=self.autonomous,
+                    backend=self.reviewer,
+                    on_reviewer_status=self.on_reviewer_status,
+                    cancel_check=self.cancellation_token.check,
+                    on_window_completed=window_callback,
+                )
+            else:
+                self.chapter_reviewer(input_path, output_path, on_window_completed=window_callback)
         else:
             self.chapter_reviewer(input_path, output_path)
         self._checkpoint()
@@ -838,15 +939,18 @@ class IterativePipeline:
             if not missing_checked_ids(review, expected_ids):
                 break
             retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
-            if self.chapter_reviewer is run_chapter_review:
-                run_chapter_review(
-                    input_path,
-                    retry_path,
-                    autonomous=self.autonomous,
-                    backend=self.reviewer,
-                    on_reviewer_status=self.on_reviewer_status,
-                    cancel_check=self.cancellation_token.check,
-                )
+            if self._builtin_reviewer:
+                if self.chapter_reviewer is run_chapter_review:
+                    run_chapter_review(
+                        input_path,
+                        retry_path,
+                        autonomous=self.autonomous,
+                        backend=self.reviewer,
+                        on_reviewer_status=self.on_reviewer_status,
+                        cancel_check=self.cancellation_token.check,
+                    )
+                else:
+                    self.chapter_reviewer(input_path, retry_path)
             else:
                 self.chapter_reviewer(input_path, retry_path)
             self._checkpoint()
@@ -928,36 +1032,39 @@ class IterativePipeline:
                 # after earlier fixes have already been written to the manifest.
                 write_json(output_path, review)
         self._checkpoint()
-        updates = review["glossary_delta"].get("add", []) + review["glossary_delta"].get("update", [])
-        evidence_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
-        prepared_updates: list[dict[str, Any]] = []
-        for raw in updates:
-            item = dict(raw)
-            source = str(item.get("source", "")).strip()
-            if not item.get("evidence_ids"):
-                item["evidence_ids"] = [item_id for item_id, text in evidence_texts.items() if source and source in text]
-            prepared_updates.append(item)
-        previous_revision_count = len(glossary.get("revisions", []))
-        merged_terms, term_summary = apply_glossary_delta(
-            glossary,
-            prepared_updates,
-            chapter_id=chapter_id,
-            reporter="chapter_reviewer",
-            evidence_texts=evidence_texts,
-            name_mapping_queue_path=self.workspace.name_mapping_review_path,
-        )
-        backfill = self._backfill_revisions(merged_terms.get("revisions", [])[previous_revision_count:])
-        term_summary.update({
-            "injected_into_translation": int(self._preextract_reports.get(chapter_id, {}).get("injected_into_translation", 0) or 0),
-            "backfill_affected": len(backfill["affected"]),
-            "backfill_changed": len(backfill["changed"]),
-            "backfill_failed": len(backfill["failed"]),
+        # Custom reviewer integrations do not expose window callbacks. Treat
+        # the complete chapter as one window so the same extractor/finalizer
+        # boundary still applies.
+        if not self._knowledge_windows.get(chapter_id):
+            self._extract_window_knowledge(
+                chapter_id,
+                {"items": items, "context_before": [], "context_after": []},
+                review,
+                1,
+                1,
+            )
+        knowledge_summary = self._finalize_chapter_knowledge(chapter_id, items)
+        window_results = self._knowledge_windows.get(chapter_id, [])
+        knowledge_summary.update({
+            "window_count": len(window_results),
+            "window_candidate_count": sum(
+                len(item.get("knowledge_candidates", []) or [])
+                for item in window_results if isinstance(item, dict)
+            ),
+            "window_conflict_count": sum(
+                len(item.get("conflicts", []) or [])
+                for item in window_results if isinstance(item, dict)
+            ),
+            "window_failure_count": sum(
+                1 for item in window_results
+                if isinstance(item, dict) and item.get("status") == "failed"
+            ),
         })
-        merged_memory, mem_summary = merge_memory_delta(memory, review["memory_delta"], chapter_id)
-        persist_glossary(self.workspace, merged_terms)
-        write_json(self.workspace.book_memory_path, merged_memory)
-        chapter_state = merge_chapter_state(chapter_id, str(chapter.get("title", "")), review["chapter_state"])
-        write_json(self.workspace.chapter_states_dir / f"{chapter_id}.json", chapter_state)
+        term_summary = {
+            "reported": len(self._knowledge_candidates.get(chapter_id, [])),
+            "known_hits": len(known_hits_doc.get("known_hits", [])) if isinstance(known_hits_doc, dict) else 0,
+            "knowledge": knowledge_summary,
+        }
         report_path = self.workspace.reports_dir / f"{chapter_id}.json"
         write_json(report_path, {
             "book": self.book,
@@ -970,32 +1077,8 @@ class IterativePipeline:
             "applied_fixes": len(fixes) if self.apply else 0,
             "approved_fixes": fixes,
             "term_summary": term_summary,
-            "preextract": self._preextract_reports.get(chapter_id, {}),
-            "glossary": {
-                "reported": term_summary.get("reported", 0),
-                "accepted_candidates": term_summary.get("accepted_candidates", 0),
-                "activated": term_summary.get("activated", 0),
-                "confirmed": term_summary.get("confirmed", 0),
-                "blocked_by_category": term_summary.get("blocked_by_category", 0),
-                "blocked_by_shape": term_summary.get("blocked_by_shape", 0),
-                "blocked_by_evidence": term_summary.get("blocked_by_evidence", 0),
-                "evidence_total": term_summary.get("evidence_total", 0),
-                "evidence_valid": term_summary.get("evidence_valid", 0),
-                "evidence_discarded": term_summary.get("evidence_discarded", 0),
-                "name_normalized": term_summary.get("name_normalized", 0),
-                "blocked_by_name": term_summary.get("blocked_by_name", 0),
-                "name_review_queued": term_summary.get("name_review_queued", 0),
-                "disputed": term_summary.get("disputed", 0),
-                "revised": term_summary.get("revised", 0),
-                "retired": term_summary.get("retired", 0),
-                "injected_into_translation": term_summary.get("injected_into_translation", 0),
-                "backfill_affected": term_summary.get("backfill_affected", 0),
-                "backfill_changed": term_summary.get("backfill_changed", 0),
-                "backfill_failed": term_summary.get("backfill_failed", 0),
-            },
-            "backfill": backfill,
-            "backfill_failed": len(backfill["failed"]),
-            "memory_summary": mem_summary,
+            "pre_scan": self._prescan_reports.get(chapter_id, {}),
+            "knowledge": knowledge_summary,
             "applied": applied_fixes,
             "remaining_kana_ids": remaining_kana,
         })
@@ -1010,7 +1093,6 @@ class IterativePipeline:
             "context_findings": len(review.get("context_findings", []) or []),
             "fixes": len(fixes),
             "applied": applied_fixes,
-            "backfill_failed": len(backfill["failed"]),
         }
 
     def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
@@ -1030,6 +1112,40 @@ class IterativePipeline:
             "last_chapter": chapter_id,
             "chapter_status": "translated",
             "last_translated": translated_summary["translated_paragraphs"],
+            "updated_at": utc_now(),
+        })
+        write_json(self.workspace.progress_path, progress)
+        self._checkpoint()
+        try:
+            known_hits = self._prescan_chapter(chapter_id)
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            # The scan is advisory: an unreadable glossary or malformed
+            # chapter must not prevent translation/review from continuing.
+            known_hits = {
+                "schema_version": "1.0",
+                "chapter_id": chapter_id,
+                "known_hits": [],
+                "hit_count": 0,
+                "term_count": 0,
+                "status": "failed",
+                "deterministic": True,
+                "error": str(exc),
+            }
+            write_json(self.workspace.reviews_dir / f"{chapter_id}-known-hits.json", known_hits)
+            previous_report = self._prescan_reports.get(chapter_id, {})
+            self._prescan_reports[chapter_id] = {
+                "extraction_status": "failed",
+                "known_hit_count": 0,
+                "known_term_count": 0,
+                "diagnostic": str(exc),
+            }
+            if previous_report.get("injected_into_translation"):
+                self._prescan_reports[chapter_id]["injected_into_translation"] = previous_report["injected_into_translation"]
+        progress.update({
+            "chapter_status": "known_hits_scanned",
+            "known_hit_count": int(known_hits.get("hit_count", 0) or 0),
             "updated_at": utc_now(),
         })
         write_json(self.workspace.progress_path, progress)
@@ -1054,7 +1170,9 @@ class IterativePipeline:
             write_json(self.workspace.progress_path, progress)
             raise
         self._checkpoint()
-        review_status = "needs_retry" if reviewed_summary.get("backfill_failed", 0) else "reviewed"
+        # Knowledge extraction is advisory; its failure never invalidates an
+        # otherwise translated and semantically reviewed chapter.
+        review_status = "reviewed"
         progress.update({
             "state": "running",
             "completed_cycles": cycle,
@@ -1200,12 +1318,13 @@ def main() -> int:
     except PreflightError as exc:
         print(json.dumps(exc.report, ensure_ascii=False, indent=2), file=sys.stderr)
         return 2
-    pipeline = IterativePipeline(
-        book=args.book,
-        workspace=workspace,
-        manifest=manifest_path(args.book),
-        targeted_translator=targeted_translator,
-        chapter_reviewer=lambda input_path, output_path: run_chapter_review(
+    def configured_chapter_reviewer(
+        input_path: Path,
+        output_path: Path,
+        *,
+        on_window_completed: Callable[..., Any] | None = None,
+    ) -> None:
+        run_chapter_review(
             input_path,
             output_path,
             autonomous=args.autonomous,
@@ -1218,7 +1337,17 @@ def main() -> int:
             context_after=args.review_context_after,
             backtrack_enabled=args.review_backtrack,
             backtrack_min_confidence=args.review_backtrack_min_confidence,
-        ),
+            on_window_completed=on_window_completed,
+        )
+
+    configured_chapter_reviewer._uses_window_knowledge = True
+
+    pipeline = IterativePipeline(
+        book=args.book,
+        workspace=workspace,
+        manifest=manifest_path(args.book),
+        targeted_translator=targeted_translator,
+        chapter_reviewer=configured_chapter_reviewer,
         primary_batch_max_chars=args.primary_batch_max_chars,
         primary_translator=args.primary_translator,
         max_provider_split_depth=args.max_provider_split_depth,

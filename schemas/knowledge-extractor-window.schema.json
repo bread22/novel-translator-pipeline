@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WindowKnowledgeOutput",
+  "$defs": {
+    "KnowledgeCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "glossary",
+            "memory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "default": "",
+          "title": "Target",
+          "type": "string"
+        },
+        "category": {
+          "default": "",
+          "title": "Category",
+          "type": "string"
+        },
+        "key": {
+          "default": "",
+          "title": "Key",
+          "type": "string"
+        },
+        "value": {
+          "default": "",
+          "title": "Value",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "source_window": {
+          "minLength": 1,
+          "title": "Source Window",
+          "type": "string"
+        },
+        "source_paragraph_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Paragraph Ids",
+          "type": "array"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "source_fragment": {
+          "minLength": 1,
+          "title": "Source Fragment",
+          "type": "string"
+        },
+        "target_fragment": {
+          "minLength": 1,
+          "title": "Target Fragment",
+          "type": "string"
+        },
+        "referenced_glossary_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Referenced Glossary Ids",
+          "type": "array"
+        },
+        "referenced_memory_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Referenced Memory Keys",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "kind",
+        "source_window",
+        "source_fragment",
+        "target_fragment"
+      ],
+      "title": "KnowledgeCandidate",
+      "type": "object"
+    },
+    "KnowledgeConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "conflict_id": {
+          "minLength": 1,
+          "title": "Conflict Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "glossary",
+            "memory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "candidate_id": {
+          "default": "",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "key": {
+          "default": "",
+          "title": "Key",
+          "type": "string"
+        },
+        "existing_value": {
+          "default": "",
+          "title": "Existing Value",
+          "type": "string"
+        },
+        "proposed_value": {
+          "default": "",
+          "title": "Proposed Value",
+          "type": "string"
+        },
+        "note": {
+          "minLength": 1,
+          "title": "Note",
+          "type": "string"
+        },
+        "source_window": {
+          "minLength": 1,
+          "title": "Source Window",
+          "type": "string"
+        },
+        "source_paragraph_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Paragraph Ids",
+          "type": "array"
+        },
+        "source_fragment": {
+          "minLength": 1,
+          "title": "Source Fragment",
+          "type": "string"
+        },
+        "target_fragment": {
+          "minLength": 1,
+          "title": "Target Fragment",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conflict_id",
+        "kind",
+        "note",
+        "source_window",
+        "source_paragraph_ids",
+        "source_fragment",
+        "target_fragment"
+      ],
+      "title": "KnowledgeConflict",
+      "type": "object"
+    },
+    "RollingContextDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "adopted_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Adopted Terms",
+          "type": "array"
+        },
+        "active_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Active Entities",
+          "type": "array"
+        },
+        "locations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Locations",
+          "type": "array"
+        },
+        "relationships": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Relationships",
+          "type": "array"
+        },
+        "important_states": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Important States",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "title": "RollingContextDelta",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "rolling_context_delta": {
+      "$ref": "#/$defs/RollingContextDelta"
+    },
+    "knowledge_candidates": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeCandidate"
+      },
+      "title": "Knowledge Candidates",
+      "type": "array"
+    },
+    "conflicts": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeConflict"
+      },
+      "title": "Conflicts",
+      "type": "array"
+    }
+  },
+  "type": "object"
+}

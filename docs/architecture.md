@@ -21,17 +21,18 @@ EPUB/TXT
   → BookWorkspace 初始化/迁移
   → JobManager 创建唯一活动任务
   → ChapterPipeline 按章节推进
-      → Glossary v3 轻量预提取（可选 fallback #2）
-      → 相关 active 术语投影到翻译 payload
       → Primary 翻译
       → 自适应 split / fallback_translators
       → 原子写回 manifest + provenance
+      → deterministic known-hit pre-scan
       → 字符预算滚动审阅
           → 双 Reviewer / Reviewer fallback
           → checked_ids、fixes、context_findings
-          → glossary_delta、memory_delta、chapter_state
+          → Window Knowledge Extractor 临时上下文与候选
+      → Chapter Knowledge Finalization
+          → active/candidate/conflict/discard
+          → 单一 apply_knowledge_delta 写入正式知识
       → 客观修复守卫与定向回查
-      → 原子合并 workspace 证据
   → finalize：导出、布局/metadata 注入、EPUB 校验、复制、hash
 ```
 
@@ -60,7 +61,8 @@ EPUB/TXT
 
 - `review_chunk_min_chars` / `review_chunk_max_chars` 控制目标字符预算；只在自然段边界切分。
 - `review_context_before` / `review_context_after` 加入只读前后文。
-- 每个 chunk 新增的术语、记忆和章节状态会合并到 rolling payload，供后续 chunk 使用。
+- 每个 chunk 在修复投影后调用 Window Knowledge Extractor；仅临时 rolling context 会传给后续 chunk。
+- 整章完成后由同一 Extractor 做一次 Finalization，只有 active 候选进入下一章的正式知识上下文。
 - 模型失败时对目标 items 自适应二分；双审模式下两个 Reviewer 独立执行并合并共识。
 - 后文发现前文问题时，`review_backtrack_enabled` 可触发只针对 context finding 的回查。
 
@@ -75,10 +77,9 @@ EPUB/TXT
 - `name_validation.py`：人名敬称、确定性映射与人工复核队列。
 - `lifecycle.py` / `resolution.py`：candidate、active、disputed、revised、retired 状态和冲突处理。
 - `projection.py`：按章节文本选择相关 active 术语。
-- `extractor.py`：章节翻译前预提取，并保留分块成功结果。
 - `backfill.py`：受证据约束的历史译文回填。
 
-`glossary.json` 是单一事实源；上游 terms 文件是兼容投影。人工增量、review merge 和 extractor 使用相同锁与生命周期服务。
+`glossary.json` 是单一事实源；上游 terms 文件是兼容投影。ChapterPipeline 的 `apply_knowledge_delta()` 统一调用生命周期服务；deterministic pre-scan 与 Reviewer 都不写正式知识。
 
 ## 7. Web、认证与事件
 
@@ -105,14 +106,14 @@ FastAPI 应用工厂注册 books、queue、tasks、knowledge、system 和 events
 ```text
 translator/
 ├── core/       # JobManager、workspace、config、paths、layout、metadata、novel tool
-├── glossary/   # v3 taxonomy、models、validation、lifecycle、projection、extractor、backfill
+├── glossary/   # v3 taxonomy、models、validation、lifecycle、projection、backfill
 ├── pipeline/   # ChapterPipeline 与 preflight
 ├── providers/  # Provider adapters
 ├── review/     # chunk、dual review、merge、guards
 └── web/        # FastAPI、routes、SSE、models
 ```
 
-每章可产生：翻译前后 snapshot、review input/output、applied fixes、report、chapter state、glossary/memory delta 和 provenance。最终 EPUB 需验证 `mimetype`、container/OPF、spine、章节、HTML/XML 和资源引用。
+每章可产生：翻译前后 snapshot、known-hits、review input/output、窗口知识结果、finalization、applied fixes、report 和 provenance。历史 chapter state 只作为上下文读取。最终 EPUB 需验证 `mimetype`、container/OPF、spine、章节、HTML/XML 和资源引用。
 
 ## 10. 发布边界
 

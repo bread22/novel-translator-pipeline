@@ -27,6 +27,8 @@ export const SettingsView: React.FC = () => {
   const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [preflightData, setPreflightData] = useState<PreflightResponse | null>(null);
   const [isRunningPreflight, setIsRunningPreflight] = useState(false);
+  const [isTestingKnowledgeExtractor, setIsTestingKnowledgeExtractor] = useState(false);
+  const [knowledgeTestResult, setKnowledgeTestResult] = useState<{ status: string; error?: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [providerPendingDeletion, setProviderPendingDeletion] = useState<string | null>(null);
@@ -76,10 +78,11 @@ export const SettingsView: React.FC = () => {
   const loadPrompts = async () => {
     try {
       const list = await api.getPrompts();
-      setPrompts(list);
-      if (list.length > 0) {
+      const editablePrompts = list.filter((prompt) => prompt.type !== 'knowledge');
+      setPrompts(editablePrompts);
+      if (editablePrompts.length > 0) {
         setSelectedPromptId((prev) => {
-          const current = list.find((p) => p.id === prev) || list[0];
+          const current = editablePrompts.find((p) => p.id === prev) || editablePrompts[0];
           setEditingPromptContent(current.content);
           return current.id;
         });
@@ -136,7 +139,7 @@ export const SettingsView: React.FC = () => {
       setShowAddPromptModal(false);
       setNewPromptFilename('');
       setNewPromptContent('');
-      const list = await api.getPrompts();
+      const list = (await api.getPrompts()).filter((prompt) => prompt.type !== 'knowledge');
       setPrompts(list);
       const selected = list.find((prompt) => prompt.id === saved.id);
       if (selected) {
@@ -178,6 +181,19 @@ export const SettingsView: React.FC = () => {
       alert(`预检请求异常: ${err.message || err}`);
     } finally {
       setIsRunningPreflight(false);
+    }
+  };
+
+  const runKnowledgeExtractorTest = async () => {
+    setIsTestingKnowledgeExtractor(true);
+    setKnowledgeTestResult(null);
+    try {
+      const result = await api.testKnowledgeExtractor();
+      setKnowledgeTestResult(result);
+    } catch (err: any) {
+      setKnowledgeTestResult({ status: 'error', error: err?.message || String(err) });
+    } finally {
+      setIsTestingKnowledgeExtractor(false);
     }
   };
 
@@ -602,7 +618,7 @@ export const SettingsView: React.FC = () => {
                     <label className="text-xs font-serif font-bold text-[#1A1A1A] block mb-1">
                       一致性主审 (Primary Reviewer)
                     </label>
-                    <p className="text-[11px] text-[#666666] mb-2 font-sans">负责客观错译、漏译与实体提取</p>
+                    <p className="text-[11px] text-[#666666] mb-2 font-sans">负责客观错译、漏译与语义一致性</p>
                     <select
                       value={config.roles?.reviewer || ''}
                       onChange={(e) =>
@@ -671,12 +687,131 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Section 3: AI Provider Manager & API Key Configurator */}
+              {/* Section 3: Chapter Knowledge Extractor */}
+              <div className="bg-white border border-[#E5E0D8] rounded-sm p-6 space-y-4 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs font-serif font-bold text-[#1D4ED8] uppercase tracking-wider">
+                    <Sparkles className="w-4 h-4" />
+                    3. 章节 Knowledge Extractor
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-[#4A4A4A] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={config.knowledge_extractor?.enabled ?? false}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, enabled: e.target.checked },
+                      })}
+                      className="rounded-sm border-[#E5E0D8] text-[#1D4ED8] focus:ring-0 w-4 h-4 cursor-pointer"
+                    />
+                    启用章节知识提取
+                  </label>
+                </div>
+                <p className="text-[11px] text-[#666666] font-sans">
+                  每个审阅窗口只生成临时上下文和候选；章节结束后再统一决定 active、candidate、conflict 或 discard。固定提示词不在此页面编辑。
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div>
+                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">Extractor Provider</label>
+                    <select
+                      value={config.knowledge_extractor?.provider || ''}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, provider: e.target.value },
+                      })}
+                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                    >
+                      <option value="">-- 选择 Provider --</option>
+                      {providersList.map((p) => (
+                        <option key={p} value={p}>{p} ({config.providers?.[p]?.model || config.providers?.[p]?.type})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">模型覆盖 (可选)</label>
+                    <input
+                      value={config.knowledge_extractor?.model || ''}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, model: e.target.value },
+                      })}
+                      placeholder="沿用 Provider 模型"
+                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">Credential Ref (可选)</label>
+                    <input
+                      value={config.knowledge_extractor?.credential_ref || ''}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, credential_ref: e.target.value },
+                      })}
+                      placeholder="$API_KEY 或 lm-studio"
+                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">Temperature</label>
+                    <input
+                      type="number" min="0" max="2" step="0.1"
+                      value={config.knowledge_extractor?.temperature ?? 0.2}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, temperature: Number(e.target.value) },
+                      })}
+                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">Max Output Tokens</label>
+                    <input
+                      type="number" min="1"
+                      value={config.knowledge_extractor?.max_output_tokens ?? 2048}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, max_output_tokens: Number(e.target.value) },
+                      })}
+                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">Request Timeout (秒)</label>
+                    <input
+                      type="number" min="1"
+                      value={config.knowledge_extractor?.request_timeout ?? 300}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        knowledge_extractor: { ...config.knowledge_extractor, request_timeout: Number(e.target.value) },
+                      })}
+                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                    />
+                  </div>
+                  <div className="lg:col-span-2 flex items-end gap-3">
+                    <button
+                      type="button"
+                      onClick={runKnowledgeExtractorTest}
+                      disabled={isTestingKnowledgeExtractor}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-sm bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[#1D4ED8] text-xs font-semibold shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      <RotateCw className={`w-3.5 h-3.5 ${isTestingKnowledgeExtractor ? 'animate-spin' : ''}`} />
+                      {isTestingKnowledgeExtractor ? '测试中...' : '测试 Extractor 连接'}
+                    </button>
+                    {knowledgeTestResult && (
+                      <span className={`text-xs ${knowledgeTestResult.status === 'ok' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {knowledgeTestResult.status === 'ok' ? '✓ 连接成功' : `连接失败：${knowledgeTestResult.error || '请检查配置'}`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 4: AI Provider Manager & API Key Configurator */}
               <div className="bg-white border border-[#E5E0D8] rounded-sm p-6 space-y-5 shadow-sm">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-serif font-bold text-[#1A1A1A] uppercase tracking-wider">
                     <Server className="w-4 h-4 text-[#1D4ED8]" />
-                    3. AI Provider 与 API Key 管理器 ({providersList.length} 个配置)
+                    4. AI Provider 与 API Key 管理器 ({providersList.length} 个配置)
                   </div>
                   <button
                     type="button"

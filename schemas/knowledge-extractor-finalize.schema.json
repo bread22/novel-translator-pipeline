@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FinalKnowledgeOutput",
+  "$defs": {
+    "KnowledgeDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "active",
+            "candidate",
+            "conflict",
+            "discard"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "conflict_id": {
+          "default": "",
+          "title": "Conflict Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "action"
+      ],
+      "title": "KnowledgeDecision",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    }
+  },
+  "type": "object"
+}

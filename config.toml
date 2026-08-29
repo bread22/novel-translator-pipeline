@@ -142,6 +142,16 @@ api_key = "$NVIDIA_API_KEY"
 thinking = false
 enable_thinking = false
 
+[knowledge_extractor]
+enabled = false
+provider = "nemotron-3-super"
+model = ""
+credential_ref = ""
+temperature = 0.2
+max_output_tokens = 2048
+request_timeout = 300
+input_hard_limit_chars = 30000
+
 [pipeline]
 max_cycles = 1000
 max_chapter_batches = 1000
@@ -166,7 +176,7 @@ timeout_retries = 1
 connection_retries = 2
 
 [pipeline.review_context]
-enabled = false
+enabled = true
 budget_version = "review-context-v2"
 selector_version = "review-selector-v1"
 operational_input_hard_limit_chars = 50000
@@ -177,6 +187,7 @@ glossary_soft_chars = 8000
 memory_soft_chars = 14000
 state_soft_chars = 4000
 book_summary_soft_chars = 1500
+known_hits_soft_chars = 4000
 recent_evidence_chapters = 3
 entity_relation_hops = 1
 max_global_critical_facts = 8

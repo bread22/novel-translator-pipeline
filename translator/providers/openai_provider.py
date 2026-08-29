@@ -328,17 +328,24 @@ class OpenAIProvider(BaseProvider):
     ) -> dict[str, Any]:
         effective_timeout = timeout or self.timeout
         prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
+        system_content = (
+            "你是本书 Knowledge Extractor。严格按输入的固定提示词和 JSON Schema 提取临时上下文、长期候选或最终动作；不要输出 Markdown 或额外文字。"
+            if kind in {"knowledge_window", "knowledge_finalize"}
+            else "你是资深日译中小说语义审阅专家。只检查译文相对于原文的客观错误，并严格输出本次 kind 指定的 JSON 对象；不要输出知识库、记忆或章节状态字段，不要输出 Markdown 或额外文字。"
+        )
         body_data: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是资深日译中小说审阅专家。你的任务是找出译文中改变原意的实质性客观错误。你输出的所有 fixes（包括 replacement 修正译文）、glossary 与 memory 必须是纯正流畅的简体中文，严禁在修正译文中残留任何日文假名（平假名/片假名）或未翻译词汇。严格只输出合规的 JSON 对象，不包含 Markdown 代码块或额外文字。",
+                    "content": system_content,
                 },
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.2,
+            "temperature": float(self.config.get("temperature", 0.2)),
         }
+        if self.config.get("max_output_tokens"):
+            body_data["max_tokens"] = int(self.config["max_output_tokens"])
         if self.chat_template_kwargs:
             body_data["chat_template_kwargs"] = self.chat_template_kwargs
         if self.extra_body:

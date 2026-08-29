@@ -62,6 +62,7 @@ class ReviewContextBudget:
     memory_soft_chars: int = 14_000
     state_soft_chars: int = 4_000
     book_summary_soft_chars: int = 1_500
+    known_hits_soft_chars: int = 4_000
     recent_evidence_chapters: int = 3
     entity_relation_hops: int = 1
     max_global_critical_facts: int = 8
@@ -98,6 +99,7 @@ class ReviewContextSnapshot:
     memory: dict[str, Any]
     previous_chapter_state: dict[str, Any]
     current_chapter_rolling_state: dict[str, Any]
+    known_hits: tuple[dict[str, Any], ...]
     policy: str
     entries: tuple[SelectedEntry, ...]
 
@@ -112,6 +114,7 @@ class ReviewContextSnapshot:
             "memory": self.memory,
             "previous_chapter_state": self.previous_chapter_state,
             "current_chapter_rolling_state": self.current_chapter_rolling_state,
+            "known_hits": self.known_hits,
             "policy_hash": _hash(self.policy),
             "entries": [
                 {
@@ -215,6 +218,17 @@ def _compact_entry(item: dict[str, Any], *, memory: bool = False) -> dict[str, A
     return projected or deepcopy(item)
 
 
+def _compact_known_hit(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep the deterministic hit's traceability fields in the review request."""
+    keys = (
+        "hit_id", "term_id", "source", "target", "category", "status", "matched",
+        "paragraph_id", "paragraph_ids", "source_fragment", "target_fragment",
+        "evidence_ids", "occurrence_count",
+    )
+    projected = {key: deepcopy(item[key]) for key in keys if key in item}
+    return projected or deepcopy(item)
+
+
 def _state_projection(state: Any) -> dict[str, Any]:
     if not isinstance(state, dict):
         return {}
@@ -266,7 +280,8 @@ def _make_payload(base: dict[str, Any], snapshot: ReviewContextSnapshot) -> dict
         key: deepcopy(value)
         for key, value in base.items()
         if key not in {"items", "context_before", "context_after", "glossary", "book_memory",
-                       "previous_chapter_state", "current_chapter_rolling_state", "translation_policy"}
+                       "previous_chapter_state", "current_chapter_rolling_state",
+                       "current_chapter_review_context", "translation_policy", "known_hits"}
     }
     glossary_projection: Any = [deepcopy(item) for item in snapshot.glossary]
     if isinstance(base.get("glossary"), dict):
@@ -276,6 +291,8 @@ def _make_payload(base: dict[str, Any], snapshot: ReviewContextSnapshot) -> dict
         "book_memory": deepcopy(snapshot.memory),
         "previous_chapter_state": deepcopy(snapshot.previous_chapter_state),
         "current_chapter_rolling_state": deepcopy(snapshot.current_chapter_rolling_state),
+        "current_chapter_review_context": deepcopy(snapshot.current_chapter_rolling_state),
+        "known_hits": [deepcopy(item) for item in snapshot.known_hits],
         "glossary": glossary_projection,
         "items": [deepcopy(item) for item in snapshot.target],
         "context_before": [deepcopy(item) for item in snapshot.context_before],
@@ -312,6 +329,12 @@ def build_budgeted_review_context(
 
     previous = _state_projection(authoritative_context.get("previous_chapter_state"))
     rolling = _state_projection(authoritative_context.get("current_chapter_rolling_state"))
+    review_context = authoritative_context.get("current_chapter_review_context")
+    if isinstance(review_context, dict):
+        rolling = {**rolling, **_state_projection(review_context)}
+        for key in ("adopted_terms", "locations", "relationships", "important_states", "notes"):
+            if isinstance(review_context.get(key), list):
+                rolling[key] = deepcopy(review_context[key])
     active_entities = list(dict.fromkeys(
         [str(value) for state in (rolling, previous) for value in state.get("active_entities", []) or [] if value]
     ))
@@ -328,6 +351,28 @@ def build_budgeted_review_context(
     selected: list[SelectedEntry] = []
     optional: list[SelectedEntry] = []
 
+    # Deterministic pre-scan hits are candidates only.  They are promoted into
+    # the request by this budgeter, never written to the authoritative glossary.
+    raw_known_hits = authoritative_context.get("known_hits", [])
+    known_hits = [deepcopy(item) for item in raw_known_hits if isinstance(item, dict)] if isinstance(raw_known_hits, list) else []
+    target_ids = {str(item.get("id", "")) for item in targets if item.get("id")}
+    local_ids = {str(item.get("id", "")) for item in before + after if item.get("id")}
+    for hit in known_hits:
+        hit_ids = {str(hit.get("paragraph_id", "")), *(str(value) for value in hit.get("paragraph_ids", []) if value)}
+        direct = bool(target_ids.intersection(hit_ids))
+        local = bool(local_ids.intersection(hit_ids))
+        if not (direct or local):
+            continue
+        entry = SelectedEntry(
+            "known_hits",
+            _stable_id("known-hit", hit, ("hit_id", "term_id", "source")),
+            _compact_known_hit(hit),
+            direct,
+            "direct_term_match" if direct else None,
+            priority=(0 if direct else 2, 0, str(hit.get("source", ""))),
+        )
+        (selected if direct else optional).append(entry)
+
     # The closest complete paragraph on each side is protected.  More distant
     # paragraphs are optional and ordered by distance from the target.
     for side, paragraphs in (("before", before), ("after", after)):
@@ -340,7 +385,7 @@ def build_budgeted_review_context(
             elif distance == 1:
                 selected.append(SelectedEntry("local", stable_id, paragraph, True, "local_context_minimum"))
             else:
-                optional.append(SelectedEntry(f"local_{side}", stable_id, paragraph, False, priority=(0, distance)))
+                optional.append(SelectedEntry(f"local_{side}", stable_id, paragraph, False, priority=(0, distance, stable_id)))
 
     raw_glossary = authoritative_context.get("glossary", [])
     if isinstance(raw_glossary, dict):
@@ -406,38 +451,38 @@ def build_budgeted_review_context(
         elif direct:
             selected.append(SelectedEntry("memory", stable_id, item, True, "active_relationship", priority=(0, stable_id)))
         elif related:
-            optional.append(SelectedEntry("memory", stable_id, item, False, priority=(2, stable_id)))
+            optional.append(SelectedEntry("memory", stable_id, item, False, priority=(2, 0, stable_id)))
 
     # Bound global critical facts deterministically.
     critical_entries = sorted((entry for entry in selected if entry.required_reason == "global_critical"), key=lambda entry: entry.stable_id)
     for entry in critical_entries[cfg.max_global_critical_facts:]:
         selected.remove(entry)
-        optional.append(SelectedEntry(entry.pool, entry.stable_id, entry.value, False, priority=(3, entry.stable_id)))
+        optional.append(SelectedEntry(entry.pool, entry.stable_id, entry.value, False, priority=(3, 0, entry.stable_id)))
 
     for raw in conflicts:
         stable_id = _stable_id("conflict", raw, ("id", "key"))
         relevant = any(_contains(target_text + local_text, alias) for alias in _aliases(raw))
         targeted = stable_id in evidence_ids or str(raw.get("key", "")) in evidence_ids
         entry = SelectedEntry("memory_conflict", stable_id, _compact_entry(raw, memory=True), relevant or targeted,
-                              "targeted_evidence" if targeted else ("relevant_conflict" if relevant else None), priority=(3, stable_id))
+                              "targeted_evidence" if targeted else ("relevant_conflict" if relevant else None), priority=(3, 0, stable_id))
         (selected if entry.required else optional).append(entry)
 
     for index, raw in enumerate(timeline):
         value = deepcopy(raw)
         stable_id = f"timeline:{index}:{_hash(value)[7:15]}"
         relevant = any(_contains(target_text + local_text, entity) for entity in _aliases(raw)) if isinstance(raw, dict) else False
-        entry = SelectedEntry("timeline", stable_id, value, relevant, "timeline_constraint" if relevant else None, priority=(4, index))
+        entry = SelectedEntry("timeline", stable_id, value, relevant, "timeline_constraint" if relevant else None, priority=(4, index, stable_id))
         (selected if entry.required else optional).append(entry)
 
     if isinstance(authoritative_memory, dict) and authoritative_memory.get("summary"):
         optional.append(SelectedEntry(
             "book_summary", "book-summary", deepcopy(authoritative_memory["summary"]), False,
-            priority=(9, "book-summary"),
+            priority=(9, 0, "book-summary"),
         ))
 
     for label, state in (("rolling", rolling), ("previous", previous)):
         if state:
-            optional.append(SelectedEntry(f"state_{label}", f"state:{label}", state, False, priority=(1 if label == "rolling" else 2, label)))
+            optional.append(SelectedEntry(f"state_{label}", f"state:{label}", state, False, priority=(1 if label == "rolling" else 2, 0, label)))
 
     required_chars = sum(_chars(entry.value) for entry in selected)
     optional.sort(key=lambda entry: entry.priority)
@@ -459,6 +504,7 @@ def build_budgeted_review_context(
         "memory": cfg.memory_soft_chars,
         "state": cfg.state_soft_chars,
         "book_summary": cfg.book_summary_soft_chars,
+        "known_hits": cfg.known_hits_soft_chars,
     }
     pool_used = {name: 0 for name in quotas}
     for entry in selected:
@@ -517,7 +563,9 @@ def build_budgeted_review_context(
         selected_rolling = rolling if "state_rolling" in included_pools else {}
         snapshot = ReviewContextSnapshot(
             cfg.budget_version, cfg.selector_version, tuple(targets), tuple(selected_before), tuple(selected_after),
-            tuple(terms), memory_projection, selected_previous, selected_rolling, policy, tuple(included),
+            tuple(terms), memory_projection, selected_previous, selected_rolling,
+            tuple(entry.value for entry in selected + entries if entry.pool == "known_hits"),
+            policy, tuple(included),
         )
         payload = _make_payload(authoritative_context, snapshot)
         prompt = build_review_prompt("chapter", payload, schema_path, autonomous)
@@ -537,13 +585,14 @@ def build_budgeted_review_context(
             reason_counts[entry.required_reason] = reason_counts.get(entry.required_reason, 0) + 1
     pool_chars = {
         pool: sum(_chars(entry.value) for entry in selected + kept_optional if entry.pool.startswith(pool))
-        for pool in ("local", "glossary", "memory", "state")
+        for pool in ("local", "glossary", "memory", "state", "known_hits")
     }
     fixed_payload = deepcopy(payload)
     fixed_payload.update({
         "items": [], "context_before": [], "context_after": [], "glossary": [],
         "book_memory": {"schema_version": "2.0", "entries": [], "conflicts": [], "timeline": []},
         "previous_chapter_state": {}, "current_chapter_rolling_state": {},
+        "current_chapter_review_context": {}, "known_hits": [],
     })
     fixed_chars = len(build_review_prompt("chapter", fixed_payload, schema_path, autonomous))
     oversized_entries = [
@@ -553,7 +602,8 @@ def build_budgeted_review_context(
             "glossary": cfg.glossary_soft_chars,
             "memory": cfg.memory_soft_chars,
             "state": cfg.state_soft_chars,
-        }.get(entry.pool.split("_")[0], cfg.background_soft_limit_chars))
+            "known_hits": cfg.known_hits_soft_chars,
+        }.get(quota_pool(entry.pool), cfg.background_soft_limit_chars))
     ]
     diagnostics = {
         "budget_version": cfg.budget_version,
@@ -594,6 +644,7 @@ def build_budgeted_review_context(
         "memory_index_hash": memory_index.content_hash,
         "memory_source_hash": memory_index.source_content_hash,
         "state_projection_hash": _hash({"previous": snapshot.previous_chapter_state, "rolling": snapshot.current_chapter_rolling_state}),
+        "known_hits_chars": pool_chars["known_hits"],
         "rendered_prompt_hash": "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
     }
     if len(prompt) > cfg.operational_input_hard_limit_chars:

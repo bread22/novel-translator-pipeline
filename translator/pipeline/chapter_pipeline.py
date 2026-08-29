@@ -65,7 +65,7 @@ from translator.review.reviewer import (
 
 ROOT = Path(__file__).resolve().parents[2]
 ToolCall = Callable[..., dict[str, Any]]
-Reviewer = Callable[[Path, Path], None]
+Reviewer = Callable[..., Any]
 
 
 def parse_args() -> argparse.Namespace:
@@ -1340,7 +1340,7 @@ def main() -> int:
             on_window_completed=on_window_completed,
         )
 
-    configured_chapter_reviewer._uses_window_knowledge = True
+    setattr(configured_chapter_reviewer, "_uses_window_knowledge", True)
 
     pipeline = IterativePipeline(
         book=args.book,

@@ -16,7 +16,7 @@ from translator.providers.base import (
 )
 from translator.providers.codex import CodexProvider
 from translator.providers.opencode import OpenCodeProvider
-from translator.providers.openai_provider import OpenAIProvider
+from translator.providers.openai_provider import OpenAIProvider, _load_json_from_text, _plain_single_translation
 from translator.providers.registry import get_provider
 from translator.review.reviewer import run_chapter_review, run_global_consistency_review
 
@@ -37,6 +37,30 @@ class _MockHTTPResponse:
 
 
 class UniversalProviderTests(unittest.TestCase):
+    def test_openai_helper_and_api_key_selection_branches(self) -> None:
+        self.assertEqual(_load_json_from_text("not json"), {})
+        self.assertIsNone(_plain_single_translation("text", []))
+        self.assertIsNone(_plain_single_translation("{json}", [{"id": "p1", "text": "source"}]))
+        self.assertIsNone(_plain_single_translation("x" * 513, [{"id": "p1", "text": ""}]))
+
+        with patch.dict("os.environ", {
+            "GEMINI_API_KEY": "gemini-test",
+            "NVIDIA_API_KEY": "nvidia-test",
+            "DEEPSEEK_API_KEY": "deepseek-test",
+        }, clear=False):
+            self.assertEqual(
+                OpenAIProvider("gemini_lite", {"base_url": "https://generativelanguage.googleapis.com/v1", "model": "m"}).api_key,
+                "gemini-test",
+            )
+            self.assertEqual(
+                OpenAIProvider("nemotron", {"base_url": "https://integrate.api.nvidia.com/v1", "model": "m"}).api_key,
+                "nvidia-test",
+            )
+            self.assertEqual(
+                OpenAIProvider("deepseek-original", {"base_url": "https://api.deepseek.com", "model": "m"}).api_key,
+                "deepseek-test",
+            )
+
     def test_provider_registry_instantiates_all_types(self) -> None:
         cfg = load_config()
         self.assertIsInstance(get_provider("antigravity", cfg), AntigravityProvider)

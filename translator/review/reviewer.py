@@ -18,7 +18,7 @@ from typing import Any, Callable
 from translator.core.config import load_config, setting
 from translator.core.job_control import JobCancelled
 from translator.core.novel_tool import call_novel_translator
-from translator.core.workspace import BookWorkspace, read_json, utc_now, write_json
+from translator.core.workspace import BookWorkspace, empty_book_memory, read_json, utc_now, write_json
 from translator.providers.registry import get_provider
 from translator.providers.errors import (
     ProviderConnectionError,

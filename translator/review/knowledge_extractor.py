@@ -12,7 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -253,8 +253,8 @@ def run_knowledge_extractor_window(
 
 
 def build_finalization_payload(
-    candidates: list[Mapping[str, Any]],
-    conflicts: list[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+    conflicts: Sequence[Mapping[str, Any]],
     glossary: Mapping[str, Any],
     memory: Mapping[str, Any],
     *,
@@ -434,9 +434,9 @@ def knowledge_extractor_connection_test(config: Mapping[str, Any] | None = None)
 def apply_knowledge_delta(
     workspace: BookWorkspace,
     chapter_id: str,
-    candidates: list[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
     decisions: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None,
-    conflicts: list[Mapping[str, Any]] | None = None,
+    conflicts: Sequence[Mapping[str, Any]] | None = None,
     *,
     evidence_texts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:

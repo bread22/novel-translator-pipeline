@@ -5,11 +5,11 @@ translation_policy = "docs/prompts/france-shoin-90s-classic.md"
 [roles]
 primary_translator = "nemotron"
 fallback_translators = [
-    "gemini_lite",
     "deepseek-original",
+    "gemini_lite",
 ]
-fallback_translator = "gemini_lite"
-secondary_fallback_translator = "deepseek-original"
+fallback_translator = "deepseek-original"
+secondary_fallback_translator = "gemini_lite"
 reviewer = "nemotron"
 secondary_reviewer = "nemotron-3-super"
 dual_review = false
@@ -135,7 +135,7 @@ enable_thinking = false
 
 [providers.deepseek-original]
 type = "openai"
-model = "deepseek-v4-flash"
+model = "deepseek-chat"
 base_url = "https://api.deepseek.com"
 temperature = 0.3
 context_tokens = 1000000

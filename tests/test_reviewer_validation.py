@@ -164,6 +164,45 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         approved = approved_fixes(fixes, current_translations=current_translations)
         self.assertEqual(len(approved), 0, "Identical replacement should be skipped")
 
+    def test_review_boundary_normalizes_contradictory_fix_to_pass(self) -> None:
+        normalized = validate_chapter_review_payload(
+            {
+                "checked_ids": ["p1"],
+                "fixes": [{
+                    "id": "p1",
+                    "decision": "FIX_REQUIRED",
+                    "category": "mistranslation",
+                    "severity": "major",
+                    "reason": "译文可接受，无错误，无需修改",
+                    "replacement": "",
+                    "auto_apply": True,
+                }],
+            },
+            {"p1"},
+        )
+        self.assertEqual(normalized["fixes"], [])
+
+    def test_review_boundary_downgrades_empty_fix_to_report_only(self) -> None:
+        normalized = validate_chapter_review_payload(
+            {
+                "checked_ids": ["p1"],
+                "fixes": [{
+                    "id": "p1",
+                    "decision": "FIX_REQUIRED",
+                    "category": "mistranslation",
+                    "severity": "major",
+                    "reason": "原文与译文含义不一致",
+                    "replacement": "",
+                    "auto_apply": True,
+                }],
+            },
+            {"p1"},
+        )
+        fix = normalized["fixes"][0]
+        self.assertEqual(fix["decision"], "REPORT_ONLY")
+        self.assertEqual(fix["invalid_reason"], "missing_replacement")
+        self.assertFalse(fix["auto_apply"])
+
     def test_legitimate_objective_fixes_still_approved(self) -> None:
         current_translations = {
             "c0001-p00001": "田中老师走了进来。",

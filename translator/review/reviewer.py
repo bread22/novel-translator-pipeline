@@ -78,6 +78,11 @@ REVIEW_META_REGEX = re.compile(
     r"(?:译者注|审阅|修改(?:为|说明|建议)|可改为|建议译为|replacement|option\s*[a-z]?|答案[一二12]|以下(?:是|为))",
     re.IGNORECASE,
 )
+NON_ERROR_REASON_REGEX = re.compile(
+    r"(?:\bpass\b|无(?:实质)?错误|无需(?:修改|修正|改动)|不需要(?:修改|修正|改动)|"
+    r"译文(?:正确|可接受)|当前译文(?:正确|可接受)|没有问题|无问题)",
+    re.IGNORECASE,
+)
 MARKDOWN_REGEX = re.compile(r"(?:^|\n)\s*(?:#{1,6}\s|[-*+]\s|```|>\s)|\[[^\]]+\]\([^)]+\)")
 MULTIPLE_ANSWER_REGEX = re.compile(r"(?:^|\n)\s*(?:[A-Da-d][.)、]|[12一二][.)、])\s*")
 
@@ -126,6 +131,35 @@ def replacement_validation_errors(replacement: str, *, source: str | None = None
     return list(dict.fromkeys(errors))
 
 
+def _reason_indicates_no_error(item: Mapping[str, Any]) -> bool:
+    """Detect an explicit PASS conclusion hidden inside a FIX_REQUIRED record."""
+    reason = str(item.get("reason", "")).strip()
+    return bool(reason and NON_ERROR_REASON_REGEX.search(reason))
+
+
+def _normalize_decision_contract(item: dict[str, Any], replacement: str, *, is_clear: bool) -> str:
+    """Make the decision/replacement contract deterministic before gate evaluation."""
+    decision = str(item.get("decision", "FIX_REQUIRED") or "FIX_REQUIRED").strip().upper()
+    item["decision"] = decision
+    if decision == "FIX_REQUIRED" and _reason_indicates_no_error(item):
+        item["decision"] = "PASS"
+        item["replacement"] = ""
+        item["approved_translation"] = ""
+        item["auto_apply"] = False
+        item["invalid_reason"] = "reason_indicates_pass"
+        item["apply_reason"] = "reason_indicates_pass"
+        return "PASS"
+    if decision == "FIX_REQUIRED" and not is_clear and not replacement:
+        item["decision"] = "REPORT_ONLY"
+        item["auto_apply"] = False
+        item["invalid_reason"] = "missing_replacement"
+        item["apply_state"] = "blocked"
+        item["apply_reason"] = "missing_replacement"
+        item["validation_errors"] = ["empty_replacement"]
+        return "REPORT_ONLY"
+    return decision
+
+
 def evaluate_apply_gate(
     items: list[dict[str, Any]],
     threshold: float = 0.9,
@@ -155,8 +189,10 @@ def evaluate_apply_gate(
             item["apply_reason"] = "unknown_target"
             evaluated.append(item)
             continue
-        if str(item.get("decision")) != "FIX_REQUIRED":
-            item["apply_reason"] = "pass" if item.get("decision") == "PASS" else "report_only"
+        decision = _normalize_decision_contract(item, replacement, is_clear=is_clear)
+        if decision != "FIX_REQUIRED":
+            if item.get("apply_reason") not in {"reason_indicates_pass", "missing_replacement"}:
+                item["apply_reason"] = "pass" if decision == "PASS" else "report_only"
             evaluated.append(item)
             continue
         if current_translations and not is_clear and replacement == current_text:
@@ -297,6 +333,13 @@ def validate_chapter_review_payload(
         if item.get("decision") == "PASS" or item["category"] == "style":
             continue
         source_text = str(source_texts.get(str(item.get("id", "")), "")) if source_texts is not None else None
+        decision = _normalize_decision_contract(
+            item,
+            rep,
+            is_clear=str(item.get("operation", "replace") or "replace") == "clear",
+        )
+        if decision == "PASS":
+            continue
         errors = (
             replacement_validation_errors(rep, source=source_text)
             if item.get("decision") == "FIX_REQUIRED"

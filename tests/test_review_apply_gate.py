@@ -1,4 +1,4 @@
-from translator.review.reviewer import evaluate_apply_gate, merge_chapter_reviews
+from translator.review.reviewer import approved_fixes, evaluate_apply_gate, merge_chapter_reviews
 
 
 def proposal(**overrides):
@@ -33,6 +33,22 @@ def test_identical_replacement_becomes_pass_and_stale_hash_is_not_applied():
     stale = evaluate_apply_gate([proposal(base_translation_hash="bad")], current_translations={"p1": "当前译文"})[0]
     assert (same["decision"], same["apply_reason"]) == ("PASS", "no_op")
     assert stale["apply_reason"] == "stale_base_translation"
+
+
+def test_inconsistent_fix_reason_is_normalized_to_pass():
+    result = evaluate_apply_gate([proposal(reason="当前译文正确、无实质错误，无需修改")], autonomous=True)[0]
+    assert result["decision"] == "PASS"
+    assert result["replacement"] == ""
+    assert result["apply_reason"] == "reason_indicates_pass"
+    assert result["auto_apply"] is False
+
+
+def test_fix_without_replacement_is_report_only_and_never_approved():
+    result = evaluate_apply_gate([proposal(replacement="")], autonomous=True)[0]
+    assert result["decision"] == "REPORT_ONLY"
+    assert result["apply_reason"] == "missing_replacement"
+    assert result["apply_state"] == "blocked"
+    assert approved_fixes([proposal(replacement="")], autonomous=True) == []
 
 
 def test_dual_review_divergence_is_report_only_without_selected_replacement():

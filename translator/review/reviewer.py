@@ -897,7 +897,7 @@ def _execute_review_with_fallbacks(
                     elif isinstance(exc, ProviderConnectionError):
                         delay = min(5.0, random_uniform(1.0, 2.0) * (2 ** retry_index))
                     elif isinstance(exc, ProviderTimeoutError):
-                        delay = 0.25
+                        delay = random_uniform(15.0, 30.0)
                     else:
                         low = min(backoff_cap, backoff_min * (backoff_multiplier ** retry_index))
                         high = min(backoff_cap, backoff_max * (backoff_multiplier ** retry_index))
@@ -1023,6 +1023,10 @@ def _execute_single_segment_review(
     attempt_counters: dict[str, int] | None = None,
     attempt_lock: threading.Lock | None = None,
     role: str = "primary",
+    random_uniform: Callable[[float, float], float] = random.uniform,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    wall_clock: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     """Execute single segment review with dual review (if configured) and backend failover."""
     primary_cand = backend
@@ -1049,6 +1053,10 @@ def _execute_single_segment_review(
             split_path=split_path,
             attempt_counters=attempt_counters,
             attempt_lock=attempt_lock,
+            random_uniform=random_uniform,
+            monotonic=monotonic,
+            sleeper=sleeper,
+            wall_clock=wall_clock,
         )
         try:
             while not future.done():
@@ -1097,6 +1105,10 @@ def _execute_single_segment_review(
             split_path=split_path,
             attempt_counters=attempt_counters,
             attempt_lock=attempt_lock,
+            random_uniform=random_uniform,
+            monotonic=monotonic,
+            sleeper=sleeper,
+            wall_clock=wall_clock,
         ): (role, candidate)
         for role, candidate in reviewers.items()
     }
@@ -1156,6 +1168,10 @@ def _execute_segment_with_adaptive_split(
     max_depth: int = 4,
     context_before_size: int = 0,
     context_after_size: int = 0,
+    random_uniform: Callable[[float, float], float] = random.uniform,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    wall_clock: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     """Execute review and split only failures whose classification can benefit from smaller input."""
     if not items:
@@ -1186,6 +1202,10 @@ def _execute_segment_with_adaptive_split(
                 split_path=split_path,
                 attempt_counters=attempt_counters,
                 attempt_lock=attempt_lock,
+                random_uniform=random_uniform,
+                monotonic=monotonic,
+                sleeper=sleeper,
+                wall_clock=wall_clock,
                 role=reviewer_role,
                 depth=depth,
                 max_depth=max_depth,
@@ -1273,6 +1293,10 @@ def _execute_segment_with_adaptive_split(
             split_path=split_path,
             attempt_counters=attempt_counters,
             attempt_lock=attempt_lock,
+            random_uniform=random_uniform,
+            monotonic=monotonic,
+            sleeper=sleeper,
+            wall_clock=wall_clock,
             role=role,
         )
         res = validate_chapter_review_payload(
@@ -1320,6 +1344,10 @@ def _execute_segment_with_adaptive_split(
                 split_path=f"{split_path}.L",
                 attempt_counters=attempt_counters,
                 attempt_lock=attempt_lock,
+                random_uniform=random_uniform,
+                monotonic=monotonic,
+                sleeper=sleeper,
+                wall_clock=wall_clock,
                 role=role,
                 depth=depth + 1,
                 max_depth=max_depth,
@@ -1349,6 +1377,10 @@ def _execute_segment_with_adaptive_split(
                 split_path=f"{split_path}.R",
                 attempt_counters=attempt_counters,
                 attempt_lock=attempt_lock,
+                random_uniform=random_uniform,
+                monotonic=monotonic,
+                sleeper=sleeper,
+                wall_clock=wall_clock,
                 role=role,
                 depth=depth + 1,
                 max_depth=max_depth,

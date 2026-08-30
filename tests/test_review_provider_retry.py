@@ -275,6 +275,7 @@ def test_503_exhaustion_uses_fallback_without_adaptive_children() -> None:
 def test_timeout_retries_original_then_splits_into_children() -> None:
     states: list[dict] = []
     calls: list[tuple[str, ...]] = []
+    clock = FakeClock()
 
     class Provider:
         def review(self, _kind, payload, _schema, **_kwargs):
@@ -292,6 +293,9 @@ def test_timeout_retries_original_then_splits_into_children() -> None:
         result = _execute_segment_with_adaptive_split(
             {}, [{"id": "p1"}, {"id": "p2"}], Path("schema.json"),
             backend="primary", on_reviewer_status=states.append,
+            random_uniform=lambda low, _high: low,
+            monotonic=clock.monotonic,
+            sleeper=clock.sleep,
         )
 
     assert result["checked_ids"] == ["p1", "p2"]
@@ -300,3 +304,5 @@ def test_timeout_retries_original_then_splits_into_children() -> None:
         state["split_path"] for state in states if state["status"] in {"reviewing", "retrying"}
     ]
     assert reviewing_paths == ["root", "root", "root.L", "root.R"]
+    assert sum(clock.sleeps) == pytest.approx(15.0)
+    assert [state["retry_delay_seconds"] for state in states if state["status"] == "retry_wait"] == [15.0]

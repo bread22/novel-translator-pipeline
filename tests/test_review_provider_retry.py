@@ -78,6 +78,43 @@ def test_503_retries_same_payload_and_split_path_then_succeeds() -> None:
     assert [state["retry_delay_seconds"] for state in states if state["status"] == "retry_wait"] == [10.0, 20.0]
 
 
+def test_404_uses_transient_backoff_retry_then_succeeds() -> None:
+    calls = 0
+    states: list[dict] = []
+
+    class Provider:
+        def review(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise http_error(status=404)
+            return {"checked_ids": ["p1"]}
+
+    clock = FakeClock()
+    with (
+        patch("translator.review.reviewer._review_backends", return_value=["primary"]),
+        patch("translator.review.reviewer.get_provider", return_value=Provider()),
+    ):
+        result = _execute_review_with_fallbacks(
+            "chapter",
+            {"items": [{"id": "p1"}]},
+            Path("schema.json"),
+            on_reviewer_status=states.append,
+            retry_config={"transient_http_retries": 1},
+            random_uniform=lambda low, _high: low,
+            monotonic=clock.monotonic,
+            sleeper=clock.sleep,
+        )
+
+    assert result == {"checked_ids": ["p1"]}
+    assert calls == 2
+    assert [state["status"] for state in states] == ["reviewing", "retry_wait", "retrying", "completed"]
+    assert states[1]["retry_reason"] == "http_404"
+    assert states[1]["http_status"] == 404
+    assert states[1]["retry_delay_seconds"] == 10.0
+    assert sum(clock.sleeps) == pytest.approx(10.0)
+
+
 def test_transient_retry_exhaustion_falls_back_without_split() -> None:
     calls: list[str] = []
     states: list[dict] = []

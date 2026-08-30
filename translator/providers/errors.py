@@ -21,7 +21,7 @@ class ProviderHTTPError(ProviderRequestError):
         response_excerpt: str,
         retry_after_seconds: float | None = None,
     ) -> None:
-        super().__init__(message, provider=provider, retryable=status_code in {429, 500, 502, 503, 504})
+        super().__init__(message, provider=provider, retryable=status_code in {404, 429, 500, 502, 503, 504})
         self.status_code = status_code
         self.response_excerpt = response_excerpt
         self.retry_after_seconds = retry_after_seconds

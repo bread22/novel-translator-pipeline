@@ -335,7 +335,14 @@ class IterativePipeline:
         """Treat blank, source-copied, or script-residue output as unfinished."""
         source = str(paragraph.get("source", "")).strip()
         translated = str(paragraph.get("translated", "")).strip()
-        return not translated or (bool(source) and translated == source) or has_target_script_residue(translated)
+        if not translated or has_target_script_residue(translated):
+            return True
+        # Compact CJK-only names are intentionally left for semantic review:
+        # providers commonly preserve proper names, while the Reviewer can use
+        # glossary/metadata evidence to decide whether transliteration is needed.
+        copied = bool(source) and translated == source
+        name_like = bool(re.fullmatch(r"[\u3400-\u9fff]{2,8}", source))
+        return copied and not name_like
 
     def _read_translation_policy(self) -> str:
         if self.translation_policy and self.translation_policy.exists():

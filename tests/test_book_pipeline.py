@@ -50,8 +50,9 @@ class PipelineFunctionTests(unittest.TestCase):
 
     def test_source_copied_or_script_residue_is_pending_translation(self) -> None:
         chapter = {"paragraphs": [
-            {"id": "same", "source": "日文标题", "translated": "日文标题"},
+            {"id": "same", "source": "第一章・兄嫁", "translated": "第一章・兄嫁"},
             {"id": "kana", "source": "本文", "translated": "本文かな"},
+            {"id": "name", "source": "嶋悦史", "translated": "嶋悦史"},
             {"id": "done", "source": "原文", "translated": "译文"},
         ]}
         self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same", "kana"})

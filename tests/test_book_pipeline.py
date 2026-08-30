@@ -48,6 +48,14 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertEqual(newly_translated(manifest(), manifest("银行职员美树"))[0]["id"], "p1")
         self.assertEqual(newly_translated(manifest("旧译"), manifest("新译")), [])
 
+    def test_source_copied_or_script_residue_is_pending_translation(self) -> None:
+        chapter = {"paragraphs": [
+            {"id": "same", "source": "日文标题", "translated": "日文标题"},
+            {"id": "kana", "source": "本文", "translated": "本文かな"},
+            {"id": "done", "source": "原文", "translated": "译文"},
+        ]}
+        self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same", "kana"})
+
     def test_approved_fixes_requires_all_guards(self) -> None:
         items = [
             {"id": "a", "auto_apply": True, "confidence": 0.9, "approved_translation": "修复"},

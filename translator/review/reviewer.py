@@ -1699,6 +1699,8 @@ def review_book(
             ]
             if remaining_kana:
                 raise ValueError(f"章节 {c_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")
+        # Keep the review artifact aligned with the final apply gate state.
+        write_json(output_path, review)
         # The standalone reviewer is deliberately read-only for knowledge.
         # ChapterPipeline owns window extraction, final decisions, and the
         # single apply_knowledge_delta persistence boundary.

@@ -327,8 +327,15 @@ class IterativePipeline:
         return {
             str(paragraph["id"])
             for paragraph in chapter.get("paragraphs", [])
-            if isinstance(paragraph, dict) and paragraph.get("id") and not str(paragraph.get("translated", "")).strip()
+            if isinstance(paragraph, dict) and paragraph.get("id") and IterativePipeline._paragraph_needs_translation(paragraph)
         }
+
+    @staticmethod
+    def _paragraph_needs_translation(paragraph: dict[str, Any]) -> bool:
+        """Treat blank, source-copied, or script-residue output as unfinished."""
+        source = str(paragraph.get("source", "")).strip()
+        translated = str(paragraph.get("translated", "")).strip()
+        return not translated or (bool(source) and translated == source) or has_target_script_residue(translated)
 
     def _read_translation_policy(self) -> str:
         if self.translation_policy and self.translation_policy.exists():
@@ -384,7 +391,7 @@ class IterativePipeline:
         chapter = self._chapter(chapter_id)
         return [
             paragraph for paragraph in chapter.get("paragraphs", [])
-            if isinstance(paragraph, dict) and paragraph.get("id") and not str(paragraph.get("translated", "")).strip()
+            if isinstance(paragraph, dict) and paragraph.get("id") and self._paragraph_needs_translation(paragraph)
         ]
 
     def is_chapter_completed(self, chapter_id: str) -> bool:
@@ -394,7 +401,7 @@ class IterativePipeline:
             return False
         # Japanese kana or Korean script in a Chinese translation keeps the chapter incomplete.
         chapter = self._chapter(chapter_id)
-        if any(has_target_script_residue(str(p.get("translated", ""))) for p in chapter.get("paragraphs", []) if isinstance(p, dict)):
+        if any(self._paragraph_needs_translation(p) for p in chapter.get("paragraphs", []) if isinstance(p, dict)):
             return False
         state_path = self.workspace.chapter_states_dir / f"{chapter_id}.json"
         report_path = self.workspace.reports_dir / f"{chapter_id}.json"
@@ -1121,6 +1128,9 @@ class IterativePipeline:
                 # Persist the guard findings before failing, so the UI never reports 0 issues
                 # after earlier fixes have already been written to the manifest.
                 write_json(output_path, review)
+        # Persist the final gate decisions, including report_only/blocked/failed
+        # reasons, rather than leaving the raw provider response on disk.
+        write_json(output_path, review)
         self._checkpoint()
         for deferred_window, deferred_index, deferred_total in self._deferred_knowledge_windows.pop(chapter_id, []):
             self._extract_window_knowledge(

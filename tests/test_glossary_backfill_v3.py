@@ -23,3 +23,18 @@ def test_backfill_reports_changed_unchanged_and_failed() -> None:
     assert result.changed == ["p1"]
     assert result.failed == ["p2"]
     assert manifest["chapters"][0]["paragraphs"][0]["translated"] == "新译"
+
+
+def test_backfill_writes_legal_source_text_reference() -> None:
+    source = "変体仮名で「くじり」と書いてあった。"
+    translated = "用变体假名写着“くじり”二字。"
+    manifest = {"chapters": [{"id": "c1", "paragraphs": [
+        {"id": "p1", "source": source, "translated": "旧译"},
+    ]}]}
+    revision = {"source": "変体仮名", "baseline_target": "旧译", "new_target": "新译"}
+
+    result = run_targeted_backfill(manifest, revision, rewrite=lambda _item_id, _p: translated)
+
+    assert result.changed == ["p1"]
+    assert result.failed == []
+    assert manifest["chapters"][0]["paragraphs"][0]["translated"] == translated

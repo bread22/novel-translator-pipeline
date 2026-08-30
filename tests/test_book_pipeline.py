@@ -58,6 +58,16 @@ class PipelineFunctionTests(unittest.TestCase):
             {"id": "ellipsis", "source": "「…………」", "translated": "「…………」"},
             {"id": "digit_fw", "source": "２", "translated": "２"},
             {"id": "digit_hw", "source": "1", "translated": "1"},
+            {
+                "id": "quoted_kana",
+                "source": "変体仮名で「くじり」と書いてあった。",
+                "translated": "用变体假名写着“くじり”二字。",
+            },
+            {
+                "id": "glyph_kana",
+                "source": "双臀をのの字を描くようにうねらせた。",
+                "translated": "双臀画着“の”字形扭动。",
+            },
             {"id": "done", "source": "原文", "translated": "译文"},
         ]}
         self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same_kana", "kana"})
@@ -413,6 +423,66 @@ class PipelineFunctionTests(unittest.TestCase):
             self.assertIn("apply-review-fixes", [call[0] for call in calls])
             memory = json.loads(workspace.book_memory_path.read_text(encoding="utf-8"))
             self.assertEqual(memory["entries"][0]["key"], "fact-1")
+
+    def test_source_text_reference_survives_review_writeback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            raw = manifest("旧译")
+            raw["chapters"][0]["id"] = "c1"
+            raw["chapters"][0]["paragraphs"][0].update({
+                "id": "p1",
+                "source": "変体仮名で「くじり」と書いてあった。",
+            })
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            workspace = BookWorkspace.at(root / "output", "成品")
+            replacement = "用变体假名写着“くじり”二字。"
+
+            def tool_call(*args: str) -> dict[str, Any]:
+                if args[0] == "apply-review-fixes":
+                    input_path = Path(args[args.index("--input") + 1])
+                    fixes = json.loads(input_path.read_text(encoding="utf-8")).get("items", [])
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    for fix in fixes:
+                        for paragraph in data["chapters"][0]["paragraphs"]:
+                            if paragraph["id"] == fix["id"]:
+                                paragraph["translated"] = fix["replacement"]
+                    manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                return {"status": "ok"}
+
+            def chapter_reviewer(_input_path: Path, output_path: Path) -> None:
+                output_path.write_text(json.dumps({
+                    "checked_ids": ["p1"],
+                    "fixes": [{
+                        "id": "p1",
+                        "decision": "FIX_REQUIRED",
+                        "category": "mistranslation",
+                        "severity": "major",
+                        "confidence": 0.99,
+                        "replacement": replacement,
+                        "auto_apply": True,
+                    }],
+                }, ensure_ascii=False), encoding="utf-8")
+
+            pipeline = IterativePipeline(
+                book="book",
+                workspace=workspace,
+                manifest=manifest_path,
+                tool_call=tool_call,
+                chapter_reviewer=chapter_reviewer,
+                knowledge_extractor=lambda *_args, **_kwargs: {},
+                apply=True,
+                autonomous=True,
+                review_apply_mode="hard_fix",
+            )
+            pipeline.initialize()
+            result = pipeline._review_chapter("c1")
+
+            saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+            report = json.loads((workspace.reports_dir / "c1.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["checked_paragraphs"], 1)
+            self.assertEqual(saved["chapters"][0]["paragraphs"][0]["translated"], replacement)
+            self.assertEqual(report["remaining_kana_ids"], [])
 
     def test_two_level_fallback_recovers_when_primary_and_fb1_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

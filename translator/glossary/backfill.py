@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Callable, Mapping
 
-from translator.review.reviewer import has_japanese_kana
+from translator.script_residue import has_illegal_japanese_kana
 
 
 @dataclass
@@ -49,7 +49,7 @@ def affected_paragraph_ids(manifest: Mapping[str, Any], revision: Mapping[str, A
 def validate_backfill_text(text: str, *, source: str, target: str, baseline: str = "", baseline_text: str = "") -> str | None:
     if not text.strip():
         return "empty_translation"
-    if has_japanese_kana(text):
+    if has_illegal_japanese_kana(text, source=source):
         return "japanese_kana"
     if source and source in text:
         return "source_left_untranslated"

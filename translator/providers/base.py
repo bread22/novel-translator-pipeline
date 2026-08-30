@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from translator.script_residue import has_target_script_residue
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -265,14 +266,15 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
         flagged_kana_ids = [
             str(item.get("id"))
             for item in items
-            if isinstance(item, dict) and bool(re.search(
-                r"[\u3040-\u309f\u30a0-\u30ff\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]",
+            if isinstance(item, dict)
+            and has_target_script_residue(
                 str(item.get("translated", "")),
-            ))
+                source=str(item.get("source", "")),
+            )
         ]
         kana_warning = ""
         if flagged_kana_ids:
-            kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留日文假名或韩文字符，必须逐一在 fixes 中输出 policy_violation 修复并提供纯正中文 replacement】：\n    {', '.join(flagged_kana_ids)}"
+            kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留未被原文语境支持的日文假名或韩文字符，必须逐一在 fixes 中输出 policy_violation 修复并提供 replacement】：\n    {', '.join(flagged_kana_ids)}"
 
         instructions = f"""
 这是章节级语义审阅，知识提取由独立的 Knowledge Extractor 负责。
@@ -342,7 +344,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 """.strip()
 
     auto_rule = (
-        "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整中文段落，不得含多个答案、编辑说明、Markdown、日文、韩文或遮掩符号。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
+        "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整段落，不得含多个答案、编辑说明、Markdown、未被原文语境支持的日文或韩文字符，或遮掩符号；原文明确讨论文字、写法、字形或引用内容时，可保留对应假名并附带中文说明。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
         if autonomous
         else "只报告明确客观错误；普通润色和同义表达必须 PASS。证据不足时使用 REPORT_ONLY 且 auto_apply=false。"
     )

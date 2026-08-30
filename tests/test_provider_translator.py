@@ -164,6 +164,34 @@ class ProviderTranslatorTests(unittest.TestCase):
             saved = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], "正常的译文。")
 
+    def test_legal_source_text_reference_is_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            _manifest(manifest_path)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["chapters"][0]["paragraphs"][1]["source"] = "変体仮名で「くじり」と書いてあった。"
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            translated = "用变体假名写着“くじり”二字。"
+            response = {
+                "choices": [{
+                    "message": {
+                        "content": json.dumps(
+                            {"items": [{"id": "p2", "text": translated}]},
+                            ensure_ascii=False,
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }]
+            }
+            with patch("translator.providers.openai_provider.urlopen", return_value=_Response(response)):
+                result = self._translator(manifest_path)(
+                    "lmstudio", "book", ["p2"], source_chars=20, max_tokens=8192
+                )
+
+            self.assertEqual(result["status"], "ok")
+            saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["chapters"][0]["paragraphs"][1]["translated"], translated)
+
     def test_local_request_is_split_before_context_overflow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path = Path(temporary) / "manifest.json"

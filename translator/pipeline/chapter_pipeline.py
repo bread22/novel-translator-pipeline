@@ -337,16 +337,14 @@ class IterativePipeline:
         """Treat blank, source-copied, or script-residue output as unfinished."""
         source = str(paragraph.get("source", "")).strip()
         translated = str(paragraph.get("translated", "")).strip()
-        if not translated or has_target_script_residue(translated):
+        if not translated:
             return True
         copied = bool(source) and (translated == source or translated.replace(" ", "") == source.replace(" ", ""))
-        if not copied:
-            return False
-        # If the output is identical to the source, it is only considered unfinished
-        # if the source text actually contains Japanese kana (hiragana/katakana) or Hangul.
-        # Digits, punctuation, Latin subtitles/headings ('lynching'), and pure CJK titles
-        # carry no untranslated kana and are validly preserved by translators.
-        return has_japanese_kana(source) or has_hangul(source)
+        if copied:
+            # Source-copied paragraphs stay pending when the source contains Japanese
+            # or Korean script, even if that source discusses a quoted kana object.
+            return has_japanese_kana(source) or has_hangul(source)
+        return has_target_script_residue(translated, source=source)
 
     def _read_translation_policy(self) -> str:
         if self.translation_policy and self.translation_policy.exists():
@@ -698,7 +696,9 @@ class IterativePipeline:
             cleaned = current_trans
             for pattern, rep in kana_shapes:
                 cleaned = pattern.sub(rep, cleaned)
-            if cleaned != current_trans and not has_target_script_residue(cleaned):
+            if cleaned != current_trans and not has_target_script_residue(
+                cleaned, source=str(p_data.get("source", ""))
+            ):
                 p_data["translated"] = cleaned
                 write_json(self.manifest, manifest_data)
                 repaired.append(item_id)
@@ -723,7 +723,7 @@ class IterativePipeline:
                         fresh_manifest = read_json(self.manifest)
                         fresh_p_map = paragraph_map(fresh_manifest)
                         new_trans = str(fresh_p_map.get(item_id, {}).get("translated", ""))
-                        if new_trans and not has_target_script_residue(new_trans):
+                        if new_trans and not has_target_script_residue(new_trans, source=source_text):
                             repaired.append(item_id)
                             break
                 except Exception:
@@ -1046,13 +1046,16 @@ class IterativePipeline:
             review,
             expected_ids,
             context_before_ids=expected_ids,
+            source_texts={str(item["id"]): str(item.get("source", "")) for item in items},
         )
         current_translations = {item["id"]: item["translated"] for item in items}
+        source_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
         gate_results = evaluate_apply_gate(
             review["fixes"],
             threshold=self.review_apply_threshold,
             autonomous=self.autonomous,
             current_translations=current_translations,
+            source_texts=source_texts,
         )
         # Re-read immediately before producing the write artifact so a manifest
         # change during review becomes stale instead of being overwritten.
@@ -1061,11 +1064,16 @@ class IterativePipeline:
             item_id: str(fresh_paragraphs.get(item_id, {}).get("translated", ""))
             for item_id in expected_ids
         }
+        fresh_sources = {
+            item_id: str(fresh_paragraphs.get(item_id, {}).get("source", ""))
+            for item_id in expected_ids
+        }
         gate_results = evaluate_apply_gate(
             gate_results,
             threshold=self.review_apply_threshold,
             autonomous=self.autonomous,
             current_translations=fresh_translations,
+            source_texts=fresh_sources,
         )
         if not self.review_apply_enabled:
             for item in gate_results:
@@ -1107,7 +1115,11 @@ class IterativePipeline:
             remaining_kana = [
                 item_id
                 for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                if item_id in expected_ids and has_target_script_residue(str(paragraph.get("translated", "")))
+                if item_id in expected_ids
+                and has_target_script_residue(
+                    str(paragraph.get("translated", "")),
+                    source=str(paragraph.get("source", "")),
+                )
             ]
             if remaining_kana:
                 repaired_ids = self._repair_remaining_kana(chapter_id, remaining_kana)
@@ -1116,7 +1128,11 @@ class IterativePipeline:
                     remaining_kana = [
                         item_id
                         for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                        if item_id in expected_ids and has_target_script_residue(str(paragraph.get("translated", "")))
+                        if item_id in expected_ids
+                        and has_target_script_residue(
+                            str(paragraph.get("translated", "")),
+                            source=str(paragraph.get("source", "")),
+                        )
                     ]
             if remaining_kana:
                 guarded_fixes = list(review["fixes"])

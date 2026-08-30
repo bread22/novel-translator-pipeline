@@ -17,6 +17,23 @@ def test_chapter_review_prompt_scans_existing_translated_fields_for_kana() -> No
     assert "Knowledge Extractor" in prompt
 
 
+def test_chapter_review_prompt_does_not_warn_on_source_text_reference() -> None:
+    schema = Path(__file__).resolve().parents[1] / "schemas" / "chapter-review-output.schema.json"
+    prompt = build_review_prompt(
+        "chapter",
+        {
+            "items": [{
+                "id": "p1",
+                "source": "変体仮名で「くじり」と書いてあった。",
+                "translated": "用变体假名写着“くじり”二字。",
+            }],
+        },
+        schema,
+        autonomous=True,
+    )
+    assert "系统预检警报" not in prompt
+
+
 def test_chapter_review_prompt_uses_meaning_first_titles_and_allows_polishing() -> None:
     schema = Path(__file__).resolve().parents[1] / "schemas" / "chapter-review-output.schema.json"
     prompt = build_review_prompt(

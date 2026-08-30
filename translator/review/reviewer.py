@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from translator.core.config import load_config, setting
 from translator.core.job_control import JobCancelled
@@ -34,6 +34,12 @@ from translator.review.context_budget import (
     ReviewContextOverflowError,
     ReviewTargetSplitRequired,
     build_budgeted_review_context,
+)
+from translator.script_residue import (
+    JAPANESE_KANA_REGEX,
+    has_hangul,
+    has_japanese_kana,
+    has_target_script_residue,
 )
 
 
@@ -66,10 +72,6 @@ class ReviewValidationError(ValueError):
 import re
 import hashlib
 
-# U+30FB (・) is punctuation, not kana. Exclude it while retaining the
-# surrounding katakana ranges so translated Chinese titles are not rejected.
-JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30fa\u30fc-\u30ff]")
-HANGUL_REGEX = re.compile(r"[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]")
 MASKING_SYMBOL_REGEX = re.compile(r"[○●×＊※□]")
 ASCII_WORD_REGEX = re.compile(r"(?<![A-Za-z])[A-Za-z]{2,}(?![A-Za-z])")
 REVIEW_META_REGEX = re.compile(
@@ -78,19 +80,6 @@ REVIEW_META_REGEX = re.compile(
 )
 MARKDOWN_REGEX = re.compile(r"(?:^|\n)\s*(?:#{1,6}\s|[-*+]\s|```|>\s)|\[[^\]]+\]\([^)]+\)")
 MULTIPLE_ANSWER_REGEX = re.compile(r"(?:^|\n)\s*(?:[A-Da-d][.)、]|[12一二][.)、])\s*")
-
-
-def has_japanese_kana(text: str) -> bool:
-    return bool(JAPANESE_KANA_REGEX.search(text))
-
-
-def has_hangul(text: str) -> bool:
-    return bool(HANGUL_REGEX.search(text))
-
-
-def has_target_script_residue(text: str) -> bool:
-    """Return whether a Simplified-Chinese translation still contains Japanese or Korean script."""
-    return has_japanese_kana(text) or has_hangul(text)
 
 
 def has_masking_symbol(text: str) -> bool:
@@ -115,12 +104,12 @@ def translation_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def replacement_validation_errors(replacement: str) -> list[str]:
+def replacement_validation_errors(replacement: str, *, source: str | None = None) -> list[str]:
     """Return deterministic format/script errors; semantic quality stays with reviewers."""
     errors: list[str] = []
     if not replacement.strip():
         errors.append("empty_replacement")
-    if has_target_script_residue(replacement):
+    if has_target_script_residue(replacement, source=source):
         errors.append("target_script_residue")
     if has_masking_symbol(replacement):
         errors.append("masking_symbol")
@@ -143,6 +132,7 @@ def evaluate_apply_gate(
     *,
     autonomous: bool = False,
     current_translations: dict[str, str] | None = None,
+    source_texts: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate every proposal and retain its final report-facing gate state."""
     evaluated: list[dict[str, Any]] = []
@@ -156,6 +146,7 @@ def evaluate_apply_gate(
         )
         is_new_contract = "category" in item or "replacement" in item
         current_text = str(current_translations.get(item_id, "")) if current_translations else ""
+        source_text = str(source_texts.get(item_id, "")) if source_texts is not None else None
         item.setdefault("decision", "FIX_REQUIRED")
         item["apply_state"] = "not_applied"
         item["apply_reason"] = ""
@@ -177,7 +168,7 @@ def evaluate_apply_gate(
             continue
         mandatory_script_cleanup = bool(
             current_translations
-            and has_target_script_residue(current_text)
+            and has_target_script_residue(current_text, source=source_text)
         )
         category = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
         reason = str(item.get("reason", "")).lower()
@@ -215,7 +206,7 @@ def evaluate_apply_gate(
             item["apply_reason"] = "clear_disabled"
             evaluated.append(item)
             continue
-        errors = replacement_validation_errors(replacement)
+        errors = replacement_validation_errors(replacement, source=source_text)
         if errors:
             item["apply_state"] = "blocked"
             item["apply_reason"] = "replacement_validation_failed"
@@ -254,10 +245,15 @@ def evaluate_apply_gate(
 def approved_fixes(
     items: list[dict[str, Any]], threshold: float = 0.9, *, autonomous: bool = False,
     current_translations: dict[str, str] | None = None,
+    source_texts: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     return [
         item for item in evaluate_apply_gate(
-            items, threshold, autonomous=autonomous, current_translations=current_translations
+            items,
+            threshold,
+            autonomous=autonomous,
+            current_translations=current_translations,
+            source_texts=source_texts,
         )
         if item.get("apply_reason") == "gate_passed"
     ]
@@ -273,6 +269,7 @@ def validate_chapter_review_payload(
     expected_ids: set[str],
     *,
     context_before_ids: set[str] | None = None,
+    source_texts: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
         normalized = ChapterReviewOutput.model_validate(payload).model_dump(exclude_none=True)
@@ -299,7 +296,12 @@ def validate_chapter_review_payload(
         # ordinary acceptable wording differences and normalize to PASS.
         if item.get("decision") == "PASS" or item["category"] == "style":
             continue
-        errors = replacement_validation_errors(rep) if item.get("decision") == "FIX_REQUIRED" else []
+        source_text = str(source_texts.get(str(item.get("id", "")), "")) if source_texts is not None else None
+        errors = (
+            replacement_validation_errors(rep, source=source_text)
+            if item.get("decision") == "FIX_REQUIRED"
+            else []
+        )
         if errors:
             item["auto_apply"] = False
             item["apply_state"] = "blocked"
@@ -1188,6 +1190,7 @@ def _execute_segment_with_adaptive_split(
             res,
             expected_ids,
             context_before_ids=context_before_ids,
+            source_texts={str(item["id"]): str(item.get("source", "")) for item in items},
         )
         if context_diagnostics is not None:
             res["review_diagnostics"] = {"context_snapshots": [context_diagnostics]}
@@ -1542,6 +1545,7 @@ def run_chapter_review(
         merged_payload,
         expected_ids,
         context_before_ids=expected_ids,
+        source_texts={str(item["id"]): str(item.get("source", "")) for item in items},
     )
     context_snapshots = list((merged_payload.get("review_diagnostics") or {}).get("context_snapshots", []) or [])
     merged_payload["review_diagnostics"] = {
@@ -1651,15 +1655,22 @@ def review_book(
             review,
             expected,
             context_before_ids=set(expected),
+            source_texts={str(item["id"]): str(item.get("source", "")) for item in items},
         )
         current_translations = {item["id"]: item["translated"] for item in items}
+        source_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
         gate_results = evaluate_apply_gate(
             review["fixes"],
             threshold=gate_threshold,
             autonomous=autonomous,
             current_translations=current_translations,
+            source_texts=source_texts,
         )
         fresh_paragraphs = paragraph_map(read_json(manifest_path(book)))
+        fresh_sources = {
+            item_id: str(fresh_paragraphs.get(item_id, {}).get("source", ""))
+            for item_id in expected
+        }
         gate_results = evaluate_apply_gate(
             gate_results,
             threshold=gate_threshold,
@@ -1668,6 +1679,7 @@ def review_book(
                 item_id: str(fresh_paragraphs.get(item_id, {}).get("translated", ""))
                 for item_id in expected
             },
+            source_texts=fresh_sources,
         )
         if not apply:
             for item in gate_results:
@@ -1700,7 +1712,11 @@ def review_book(
             remaining_kana = [
                 item_id
                 for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                if item_id in expected and has_target_script_residue(str(paragraph.get("translated", "")))
+                if item_id in expected
+                and has_target_script_residue(
+                    str(paragraph.get("translated", "")),
+                    source=str(paragraph.get("source", "")),
+                )
             ]
             if remaining_kana:
                 raise ValueError(f"章节 {c_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")

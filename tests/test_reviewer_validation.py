@@ -10,6 +10,7 @@ from translator.review.reviewer import (
     has_masking_symbol,
     has_target_script_residue,
     normalize_target_punctuation,
+    replacement_validation_errors,
     validate_chapter_review_payload,
     verify_applied_fixes,
 )
@@ -73,6 +74,40 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertEqual(normalized["fixes"][0]["apply_state"], "blocked")
         self.assertIn("target_script_residue", normalized["fixes"][0]["validation_errors"])
         self.assertEqual(normalized["fixes"][0]["invalid_reason"], "target_script_residue")
+
+    def test_allow_source_text_reference_in_review_and_apply_gate(self) -> None:
+        source = "変体仮名で「くじり」と書いてあった。"
+        replacement = "用变体假名写着“くじり”二字。"
+        fix = {
+            "id": "p1",
+            "decision": "FIX_REQUIRED",
+            "category": "mistranslation",
+            "severity": "major",
+            "confidence": 0.99,
+            "replacement": replacement,
+            "auto_apply": True,
+        }
+
+        normalized = validate_chapter_review_payload(
+            {"checked_ids": ["p1"], "fixes": [fix]},
+            {"p1"},
+            source_texts={"p1": source},
+        )
+        approved = approved_fixes(
+            [fix],
+            autonomous=True,
+            current_translations={"p1": "旧译"},
+            source_texts={"p1": source},
+        )
+
+        self.assertEqual(normalized["fixes"][0]["replacement"], replacement)
+        self.assertEqual([item["id"] for item in approved], ["p1"])
+        self.assertEqual(replacement_validation_errors(replacement, source=source), [])
+
+    def test_source_match_without_text_reference_context_stays_invalid(self) -> None:
+        source = "ヒクッヒクッと痙攣した。"
+        replacement = "她“ヒクッヒクッ”地抽搐。"
+        self.assertIn("target_script_residue", replacement_validation_errors(replacement, source=source))
 
     def test_approve_real_kana_policy_violation_when_text_actually_has_kana(self) -> None:
         current_translations = {

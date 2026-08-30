@@ -141,11 +141,14 @@ class PipelineE2ETests(unittest.TestCase):
         c2_paragraphs = manifest_data["chapters"][1]["paragraphs"]
         self.assertEqual(c2_paragraphs[0]["translated"], "译文：c0002-p00001")
 
+    @patch("translator.review.knowledge_extractor.run_knowledge_finalization", return_value={"decisions": []})
+    @patch("translator.review.knowledge_extractor.run_knowledge_extractor_window", return_value={"rolling_context_delta": {}, "knowledge_candidates": [], "conflicts": []})
     @patch("translator.pipeline.chapter_pipeline.run_chapter_review", side_effect=_mock_reviewer)
     @patch("translator.core.job_manager.manifest_path")
     @patch("translator.providers.openai_provider.urlopen")
     def test_job_manager_runs_pipeline_worker_e2e(
-        self, mock_urlopen: MagicMock, mock_manifest_path: MagicMock, mock_rev: MagicMock
+        self, mock_urlopen: MagicMock, mock_manifest_path: MagicMock, mock_rev: MagicMock,
+        mock_win_k: MagicMock, mock_fin_k: MagicMock
     ) -> None:
         """Test JobManager starts worker thread and executes ChapterPipeline to completion without errors."""
         mock_manifest_path.return_value = self.manifest_file
@@ -153,15 +156,40 @@ class PipelineE2ETests(unittest.TestCase):
         def urlopen_side_effect(req, *args, **kwargs):
             payload = json.loads(req.data.decode("utf-8"))
             user_prompt = payload["messages"][-1]["content"]
-            input_items = json.loads(user_prompt)["items"]
-            translated_items = [
-                {"id": item["id"], "text": f"译文：{item['id']}"}
-                for item in input_items
-            ]
+            try:
+                parsed_prompt = json.loads(user_prompt)
+                if isinstance(parsed_prompt, dict) and "items" in parsed_prompt:
+                    input_items = parsed_prompt["items"]
+                    if input_items and "translated" in input_items[0]:
+                        response_json = {
+                            "choices": [
+                                {
+                                    "message": {"content": json.dumps({"checked_ids": [it["id"] for it in input_items], "fixes": []})},
+                                    "finish_reason": "stop",
+                                }
+                            ]
+                        }
+                        return _MockResponse(response_json)
+                    translated_items = [
+                        {"id": item["id"], "text": f"译文：{item['id']}"}
+                        for item in input_items
+                    ]
+                    response_json = {
+                        "choices": [
+                            {
+                                "message": {"content": json.dumps({"items": translated_items}, ensure_ascii=False)},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    }
+                    return _MockResponse(response_json)
+            except Exception:
+                pass
+            # Knowledge extractor or other json output response
             response_json = {
                 "choices": [
                     {
-                        "message": {"content": json.dumps({"items": translated_items}, ensure_ascii=False)},
+                        "message": {"content": json.dumps({"schema_version": "1.0", "rolling_context_delta": {}, "knowledge_candidates": [], "conflicts": [], "decisions": []})},
                         "finish_reason": "stop",
                     }
                 ]

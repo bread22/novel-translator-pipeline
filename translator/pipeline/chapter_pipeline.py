@@ -56,6 +56,8 @@ from translator.review.prescan import deterministic_known_hit_scan
 from translator.review.reviewer import (
     evaluate_apply_gate,
     finalize_writeback_states,
+    has_hangul,
+    has_japanese_kana,
     has_target_script_residue,
     missing_checked_ids,
     run_chapter_review,
@@ -337,18 +339,14 @@ class IterativePipeline:
         translated = str(paragraph.get("translated", "")).strip()
         if not translated or has_target_script_residue(translated):
             return True
-        # Compact CJK-only names are intentionally left for semantic review:
-        # providers commonly preserve proper names, while the Reviewer can use
-        # glossary/metadata evidence to decide whether transliteration is needed.
-        copied = bool(source) and translated == source
-        # Formatting-only paragraphs (censorship marks, quotation marks,
-        # ellipses, etc.) carry no translatable language. Preserve them when a
-        # provider returns the same text instead of retrying forever.
-        formatting_only = bool(source) and all(not char.isalnum() for char in source)
-        if copied and formatting_only:
+        copied = bool(source) and (translated == source or translated.replace(" ", "") == source.replace(" ", ""))
+        if not copied:
             return False
-        name_like = bool(re.fullmatch(r"[\u3400-\u9fff]{2,8}", source))
-        return copied and not name_like
+        # If the output is identical to the source, it is only considered unfinished
+        # if the source text actually contains Japanese kana (hiragana/katakana) or Hangul.
+        # Digits, punctuation, Latin subtitles/headings ('lynching'), and pure CJK titles
+        # carry no untranslated kana and are validly preserved by translators.
+        return has_japanese_kana(source) or has_hangul(source)
 
     def _read_translation_policy(self) -> str:
         if self.translation_policy and self.translation_policy.exists():

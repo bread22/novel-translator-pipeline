@@ -50,6 +50,34 @@ def test_target_shape_and_kana_are_deterministic() -> None:
         assert not result.valid
 
 
+def test_metadata_sources_are_not_glossary_candidates() -> None:
+    result = validate_term_candidate(
+        {
+            "source": "作者名",
+            "target": "作者名",
+            "category": "person",
+            "confidence": 1.0,
+            "evidence_ids": ["a1"],
+            "source_scope": "author",
+        },
+        evidence_texts={"a1": "作者名"},
+    )
+    assert not result.valid and result.reason == "metadata_source"
+
+    evidence_result = validate_term_candidate(
+        {
+            "source": "书名",
+            "target": "书名",
+            "category": "work_title",
+            "confidence": 1.0,
+            "evidence_ids": ["cover-1"],
+        },
+        evidence_texts={"cover-1": {"text": "书名", "source_scope": "cover"}},
+    )
+    assert not evidence_result.valid
+    assert "metadata_source" in evidence_result.reason
+
+
 def test_validator_keeps_valid_evidence_when_context_ids_do_not_match() -> None:
     result = validate_term_candidate(
         {

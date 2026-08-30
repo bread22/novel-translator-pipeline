@@ -50,6 +50,9 @@ Category = Literal[
     "translation_variant", "plot_fact", "ocr_uncertain", "unresolved",
 ]
 
+SOURCE_SCOPES: Final[frozenset[str]] = frozenset({"body", "title", "author", "cover", "front_matter"})
+BODY_SOURCE_SCOPE: Final[str] = "body"
+
 # Legacy values are accepted only at the compatibility boundary and are immediately
 # rewritten.  They are not part of the v3 category set.
 LEGACY_CATEGORY_ALIASES: Final[dict[str, str]] = {
@@ -89,3 +92,13 @@ def category_tier(category: object) -> CategoryTier | None:
 
 def is_known_category(category: object) -> bool:
     return category_tier(category) is not None
+
+
+def has_independent_support(term: object) -> bool:
+    """Require recurrence across paragraphs or chapters before activation."""
+    if not isinstance(term, dict):
+        return False
+    evidence = [item for item in term.get("evidence", []) if isinstance(item, dict)]
+    paragraphs = {str(item.get("paragraph_id", "")).strip() for item in evidence if item.get("paragraph_id")}
+    chapters = {str(item.get("chapter_id", "")).strip() for item in evidence if item.get("chapter_id")}
+    return len(paragraphs) >= 2 or len(chapters) >= 2

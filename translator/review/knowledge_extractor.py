@@ -49,6 +49,7 @@ class KnowledgeCandidate(_Strict):
     source: str = ""
     target: str = ""
     category: str = ""
+    source_scope: Literal["body", "title", "author", "cover", "front_matter"] = "body"
     key: str = ""
     value: str = ""
     note: str = ""
@@ -483,12 +484,12 @@ def apply_knowledge_delta(
                         and category_tier(category) in {CategoryTier.DIRECT_ALLOWED, CategoryTier.GATED_ALLOWED}
                     ):
                         validation = validate_term_candidate(
-                            {key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note") if key in candidate},
+                            {key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope") if key in candidate},
                             evidence_texts=evidence,
                         )
                         if validation.valid and validation.candidate is not None:
                             candidate.update(validation.candidate.model_dump())
-                            active_glossary.append({key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note") if key in candidate})
+                            active_glossary.append({key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope") if key in candidate})
                         else:
                             action = "candidate"
                     else:

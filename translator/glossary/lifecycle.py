@@ -9,11 +9,11 @@ from typing import Any, Iterable, Mapping, Sequence
 from translator.glossary.models import GlossaryCandidate
 from translator.glossary.name_validation import append_name_mapping_review
 from translator.glossary.resolution import resolve_term_conflict
-from translator.glossary.taxonomy import CategoryTier, canonical_category, category_tier
+from translator.glossary.taxonomy import BODY_SOURCE_SCOPE, CategoryTier, canonical_category, category_tier, has_independent_support
 from translator.glossary.validation import ValidationResult, validate_term_candidate
 
 
-CANDIDATE_FIELDS = frozenset({"source", "target", "category", "confidence", "evidence_ids", "note"})
+CANDIDATE_FIELDS = frozenset({"source", "target", "category", "confidence", "evidence_ids", "note", "source_scope"})
 
 
 def _candidate_reporters(raw: Mapping[str, Any], fallback: str) -> tuple[str, ...]:
@@ -53,6 +53,7 @@ def _normalize_existing(raw: Mapping[str, Any], *, book: str = "") -> dict[str, 
     term["source_normalized"] = source_normalized
     term["term_id"] = str(term.get("term_id") or stable_term_id(source_normalized))
     term["category"] = canonical_category(term.get("category", "unresolved"))
+    term["source_scope"] = str(term.get("source_scope", BODY_SOURCE_SCOPE)).strip().casefold() or BODY_SOURCE_SCOPE
     term["status"] = str(term.get("status", "candidate"))
     term["evidence"] = [dict(item) for item in term.get("evidence", []) if isinstance(item, Mapping)]
     term["provenance"] = list(dict.fromkeys(str(item) for item in term.get("provenance", []) if str(item)))
@@ -89,14 +90,9 @@ def _gate_met(term: Mapping[str, Any], tier: CategoryTier | None) -> bool:
     evidence = [item for item in term.get("evidence", []) if isinstance(item, Mapping)]
     if not evidence or tier is None:
         return False
-    if tier is CategoryTier.DIRECT_ALLOWED:
-        return float(term.get("confidence", 0) or 0) >= 0.92
-    if tier is CategoryTier.GATED_ALLOWED:
-        paragraph_count = len({str(item.get("paragraph_id", "")) for item in evidence if item.get("paragraph_id")})
-        chapter_count = len({str(item.get("chapter_id", "")) for item in evidence if item.get("chapter_id")})
-        reporters = len({str(item.get("reporter", "")) for item in evidence if item.get("reporter")})
-        return paragraph_count >= 2 or chapter_count >= 2 or reporters >= 2
-    return False
+    if tier not in {CategoryTier.DIRECT_ALLOWED, CategoryTier.GATED_ALLOWED}:
+        return False
+    return has_independent_support(dict(term)) and float(term.get("confidence", 0) or 0) >= 0.92
 
 
 def _add_evidence(term: dict[str, Any], evidence: Sequence[Mapping[str, Any]]) -> int:
@@ -156,6 +152,7 @@ def merge_term_candidates(
         "evidence_total": 0, "evidence_valid": 0, "evidence_discarded": 0,
         "conflicted": 0, "disputed": 0, "revised": 0, "retired": 0,
         "name_normalized": 0, "blocked_by_name": 0, "name_review_queued": 0,
+        "blocked_by_recurrence": 0,
     }
     for raw in candidates:
         summary["reported"] += 1
@@ -194,6 +191,8 @@ def merge_term_candidates(
                         summary["name_review_queued"] += 1
             elif validation.reason == "blocked_category":
                 summary["blocked_by_category"] += 1
+            elif validation.reason == "metadata_source":
+                summary["blocked_by_shape"] += 1
             elif "evidence" in validation.reason:
                 summary["blocked_by_evidence"] += 1
             else:
@@ -217,6 +216,7 @@ def merge_term_candidates(
                 "source_normalized": source_normalized,
                 "target": candidate.target,
                 "category": candidate.category,
+                "source_scope": getattr(candidate, "source_scope", BODY_SOURCE_SCOPE),
                 "status": "candidate",
                 "confidence": candidate.confidence,
                 "canonical_term_id": None,
@@ -267,6 +267,10 @@ def merge_term_candidates(
             if not duplicate_conflict:
                 conflicts.append(conflict)
             if resolution.status == "revised":
+                # Conflict support is real evidence for the revised target. Keep it
+                # in the durable evidence set so recurrence gating is evaluated on
+                # the same records that explain the revision.
+                _add_evidence(existing, conflict_support)
                 revision = dict(resolution.revision or {})
                 revision.update({
                     "term_id": existing.get("term_id"),
@@ -302,6 +306,8 @@ def merge_term_candidates(
             existing["status"] = "candidate"
         if added_evidence:
             summary["confirmed"] += 1
+            if existing.get("status") == "candidate" and not _gate_met(existing, tier):
+                summary["blocked_by_recurrence"] += 1
         if not was_active and existing.get("status") == "active":
             summary["activated"] += 1
         existing["updated_at"] = _now()
@@ -312,6 +318,8 @@ def merge_term_candidates(
         term["evidence"] = sorted(term.get("evidence", []), key=lambda item: (_evidence_key(item), str(item.get("confidence", ""))))
         term["occurrences"] = len({_evidence_key(item) for item in term.get("evidence", [])})
         term["chapter_count"] = len({str(item.get("chapter_id", "")) for item in term.get("evidence", []) if item.get("chapter_id")})
+        if term.get("status") == "active" and not _gate_met(term, category_tier(term.get("category"))):
+            term["status"] = "candidate"
     current.update({
         "schema_version": "3.0",
         "terms": sorted(terms, key=lambda item: str(item.get("source_normalized", ""))),

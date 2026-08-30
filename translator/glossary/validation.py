@@ -7,12 +7,13 @@ from typing import Any, Mapping
 
 from translator.glossary.models import GlossaryCandidate
 from translator.glossary.name_validation import NameCheckResult, check_person_name
-from translator.glossary.taxonomy import CategoryTier, canonical_category, category_tier
+from translator.glossary.taxonomy import BODY_SOURCE_SCOPE, CategoryTier, SOURCE_SCOPES, canonical_category, category_tier
 
 
 KANA_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
 TARGET_FORBIDDEN_RE = re.compile(r"[/|\\\n\r（）()【】\[\]]")
 SOURCE_SENTENCE_RE = re.compile(r"[。！？!?\n\r]")
+METADATA_SOURCE_SCOPES = frozenset(SOURCE_SCOPES - {BODY_SOURCE_SCOPE})
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,17 @@ def _evidence_text(value: Any) -> str:
     return ""
 
 
+def _evidence_scope(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return BODY_SOURCE_SCOPE
+    return str(
+        value.get("source_scope")
+        or value.get("section_type")
+        or value.get("scope")
+        or BODY_SOURCE_SCOPE
+    ).strip().casefold()
+
+
 def validate_term_candidate(
     candidate: GlossaryCandidate | Mapping[str, Any],
     *,
@@ -49,7 +61,7 @@ def validate_term_candidate(
     if "confidence" not in raw:
         return ValidationResult(False, "missing_confidence")
     # Review compatibility metadata is not part of the candidate contract.
-    raw = {key: value for key, value in raw.items() if key in {"source", "target", "category", "confidence", "evidence_ids", "note"}}
+    raw = {key: value for key, value in raw.items() if key in {"source", "target", "category", "confidence", "evidence_ids", "note", "source_scope"}}
     try:
         model = GlossaryCandidate.model_validate(raw)
     except Exception as exc:
@@ -63,6 +75,8 @@ def validate_term_candidate(
         return ValidationResult(False, "unknown_category")
     if tier is CategoryTier.BLOCKED:
         return ValidationResult(False, "blocked_category", tier, model)
+    if str(model.source_scope).strip().casefold() in METADATA_SOURCE_SCOPES:
+        return ValidationResult(False, "metadata_source", tier, model)
     if not source or not target:
         return ValidationResult(False, "empty_source_or_target", tier, model)
 
@@ -110,6 +124,9 @@ def validate_term_candidate(
             discarded_evidence.append((evidence_id, "unknown_evidence_id"))
             continue
         text = unicodedata.normalize("NFKC", _evidence_text(evidence_texts.get(evidence_id, source)))
+        if _evidence_scope(evidence_texts.get(evidence_id)) in METADATA_SOURCE_SCOPES:
+            discarded_evidence.append((evidence_id, "metadata_source"))
+            continue
         if source not in text:
             discarded_evidence.append((evidence_id, "source_not_in_evidence"))
             continue
@@ -159,6 +176,8 @@ def validate_glossary_document(document: Mapping[str, Any]) -> list[str]:
             errors.append(f"term[{index}]:active_without_evidence")
         if status == "active" and term_tier is CategoryTier.BLOCKED:
             errors.append(f"term[{index}]:active_blocked_category")
+        if status == "active" and str(raw.get("source_scope", BODY_SOURCE_SCOPE)).strip().casefold() in METADATA_SOURCE_SCOPES:
+            errors.append(f"term[{index}]:active_metadata_source")
         if normalized in seen and status == "active" and seen[normalized] != str(raw.get("target", "")):
             errors.append(f"term[{index}]:duplicate_active_source")
         if status == "active":

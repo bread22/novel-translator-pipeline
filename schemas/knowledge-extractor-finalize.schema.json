@@ -1,6 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "FinalKnowledgeOutput",
   "$defs": {
     "KnowledgeDecision": {
       "additionalProperties": false,
@@ -55,5 +53,6 @@
       "type": "array"
     }
   },
+  "title": "FinalKnowledgeOutput",
   "type": "object"
 }

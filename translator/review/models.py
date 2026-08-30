@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from translator.glossary.taxonomy import BLOCKED, Category, canonical_category
+from translator.glossary.taxonomy import BLOCKED, Category, SOURCE_SCOPES, canonical_category
 
 
 class StrictModel(BaseModel):
@@ -19,6 +19,14 @@ class GlossaryEntry(StrictModel):
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str]
     reporters: list[str] = Field(default_factory=list)
+    source_scope: str = "body"
+
+    @field_validator("source_scope")
+    @classmethod
+    def validate_source_scope(cls, value: str) -> str:
+        if value not in SOURCE_SCOPES:
+            raise ValueError("unknown glossary source scope")
+        return value
 
     @field_validator("category")
     @classmethod

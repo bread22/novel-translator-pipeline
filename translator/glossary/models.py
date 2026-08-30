@@ -18,6 +18,7 @@ class GlossaryCandidate(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_ids: list[str]
     note: str = ""
+    source_scope: Literal["body", "title", "author", "cover", "front_matter"] = "body"
 
 
 class TermEvidence(BaseModel):
@@ -39,6 +40,7 @@ class GlossaryTerm(BaseModel):
     source_normalized: str
     target: str
     category: Category
+    source_scope: Literal["body", "title", "author", "cover", "front_matter"] = "body"
     status: str
     confidence: float = Field(ge=0.0, le=1.0)
     canonical_term_id: str | None = None

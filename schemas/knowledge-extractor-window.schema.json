@@ -1,6 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "WindowKnowledgeOutput",
   "$defs": {
     "KnowledgeCandidate": {
       "additionalProperties": false,
@@ -31,6 +29,18 @@
         "category": {
           "default": "",
           "title": "Category",
+          "type": "string"
+        },
+        "source_scope": {
+          "default": "body",
+          "enum": [
+            "body",
+            "title",
+            "author",
+            "cover",
+            "front_matter"
+          ],
+          "title": "Source Scope",
           "type": "string"
         },
         "key": {
@@ -264,5 +274,6 @@
       "type": "array"
     }
   },
+  "title": "WindowKnowledgeOutput",
   "type": "object"
 }

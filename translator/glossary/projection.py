@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from translator.glossary.taxonomy import category_tier
+from translator.glossary.taxonomy import BODY_SOURCE_SCOPE, category_tier, has_independent_support
 from translator.glossary.validation import TARGET_FORBIDDEN_RE, KANA_RE
 
 
@@ -14,12 +14,16 @@ def _active_terms(glossary: Mapping[str, Any] | Iterable[Mapping[str, Any]]) -> 
             continue
         if str(item.get("status", "")) != "active":
             continue
+        if str(item.get("source_scope", BODY_SOURCE_SCOPE)).strip().casefold() != BODY_SOURCE_SCOPE:
+            continue
         source = str(item.get("source", "")).strip()
         target = str(item.get("target", "")).strip()
         tier = category_tier(item.get("category"))
         if not source or not target or tier is None or tier.value == "blocked":
             continue
         if not item.get("evidence"):
+            continue
+        if not has_independent_support(dict(item)) and not bool(item.get("manual") or item.get("locked")):
             continue
         if TARGET_FORBIDDEN_RE.search(target) or KANA_RE.search(target):
             continue

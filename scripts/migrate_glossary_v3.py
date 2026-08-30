@@ -13,7 +13,7 @@ import unicodedata
 
 from translator.core.workspace import utc_now, write_json
 from translator.glossary.lifecycle import stable_term_id
-from translator.glossary.taxonomy import BLOCKED, DIRECT_ALLOWED, GATED_ALLOWED, canonical_category, category_tier
+from translator.glossary.taxonomy import BODY_SOURCE_SCOPE, BLOCKED, DIRECT_ALLOWED, GATED_ALLOWED, canonical_category, category_tier
 from translator.glossary.validation import TARGET_FORBIDDEN_RE, KANA_RE, validate_glossary_document
 
 
@@ -22,6 +22,7 @@ KNOWN_TERM_FIELDS = {
     "term_id", "source", "source_normalized", "target", "category", "status", "confidence",
     "canonical_term_id", "note", "first_seen_chunk", "last_seen_chunk", "occurrences", "chapter_count",
     "sample_ids", "evidence", "provenance", "created_at", "updated_at", "retired_reason", "legacy",
+    "source_scope",
 }
 
 
@@ -50,6 +51,7 @@ def migrate_term(raw: dict[str, Any], index: int) -> tuple[dict[str, Any], dict[
         } for paragraph_id in sample_ids]
     status = "candidate"
     retired_reason: str | None = None
+    source_scope = str(raw.get("source_scope", BODY_SOURCE_SCOPE)).strip().casefold() or BODY_SOURCE_SCOPE
     if tier is None:
         category = "unresolved"
         status = "retired"
@@ -62,6 +64,8 @@ def migrate_term(raw: dict[str, Any], index: int) -> tuple[dict[str, Any], dict[
         retired_reason = "legacy_invalid_shape"
     elif str(raw.get("status")) in STATUSES and evidence:
         status = str(raw.get("status"))
+    if source_scope != BODY_SOURCE_SCOPE and status == "active":
+        status = "candidate"
     # A v2 item has no verifiable source/evidence link, so it stays a candidate.
     now = utc_now()
     term: dict[str, Any] = {
@@ -70,6 +74,7 @@ def migrate_term(raw: dict[str, Any], index: int) -> tuple[dict[str, Any], dict[
         "source_normalized": normalized,
         "target": target,
         "category": category,
+        "source_scope": source_scope,
         "status": status,
         "confidence": max(0.0, min(1.0, float(raw.get("confidence", 0) or 0))),
         "canonical_term_id": raw.get("canonical_term_id"),

@@ -1,6 +1,6 @@
-# Novel Translator Pipeline v0.3.1 架构
+# Novel Translator Pipeline v0.4.0 架构
 
-> 当前实现说明。历史提案保存在 [`docs/intermediate/`](intermediate/README.md)，不得将历史文件中的拟议类名或状态当作运行时事实。
+> 当前实现说明。发行包只包含现行架构文档，不包含内部阶段提案。
 
 ## 1. 系统边界
 

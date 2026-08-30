@@ -52,7 +52,18 @@ class JobManager:
     """Thread-safe Queue Management and Execution Engine for multi-book batch translation."""
 
     def __init__(self, output_root: Path | None = None) -> None:
-        self.output_root = output_root or PathResolver.for_config().output_root(load_config())
+        try:
+            config = load_config()
+        except FileNotFoundError:
+            # Importing the wheel (including creating the FastAPI app for a
+            # health/version probe) must not require a deployment-local config.
+            # Operational commands still validate config.toml when they use it.
+            config = {}
+        self.output_root = output_root or (
+            PathResolver.for_config().output_root(config)
+            if config
+            else (Path.cwd() / "output").resolve()
+        )
         self._items: dict[str, QueueItem] = {}
         self._pending_order: list[str] = []
         self._running_threads: dict[str, threading.Thread] = {}
@@ -63,7 +74,6 @@ class JobManager:
         self.history_limit = 200
 
         # Config state
-        config = load_config()
         queue_cfg = config.get("queue", {})
         self.concurrency: int = max(1, min(4, int(queue_cfg.get("concurrency", 1))))
         self.stop_on_error: bool = bool(queue_cfg.get("stop_on_error", False))

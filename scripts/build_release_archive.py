@@ -14,7 +14,7 @@ from translator.version import __version__
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_ENTRIES = [
     "translator", "scripts", "schemas", "docs",
-    "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml", "config.toml", ".env.example",
+    "README.md", "CHANGELOG.md", "LICENSE", "pyproject.toml", "config.toml.example", ".env.example",
 ]
 
 

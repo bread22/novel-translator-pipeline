@@ -61,6 +61,15 @@ class JobManagerTests(unittest.TestCase):
         self.assertEqual(self.qm.get_task(item.id).reviewer_states, {})
         self.assertEqual(self.qm.get_task(item.id).reviewer_details, {})
 
+    def test_initializes_for_health_probe_without_local_config(self) -> None:
+        with (
+            patch("translator.core.job_manager.load_config", side_effect=FileNotFoundError),
+            patch("translator.core.job_manager.Path.cwd", return_value=self.root),
+        ):
+            manager = JobManager()
+        self.assertEqual(manager.output_root, (self.root / "output").resolve())
+        self.assertTrue(manager.is_paused)
+
     def test_enqueue_duplicate(self) -> None:
         item1 = self.qm.enqueue("book-1")
         item2 = self.qm.enqueue("book-1")

@@ -19,6 +19,7 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
+      - run: cp config.toml.example config.toml
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -39,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: cp config.toml.example config.toml
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -95,6 +97,7 @@ jobs:
       NOVEL_TRANSLATOR_ROOT: ${{ github.workspace }}/tests/fixtures/novel-translator
     steps:
       - uses: actions/checkout@v4
+      - run: cp config.toml.example config.toml
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -130,4 +133,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-evidence
-          path: artifacts/release/0.3.1/*
+          path: artifacts/release/0.4.0/*

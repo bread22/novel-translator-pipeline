@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 coverage.json
+coverage.xml
 frontend/test-results/
 frontend/playwright-report/
 .env

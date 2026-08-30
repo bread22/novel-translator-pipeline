@@ -10,10 +10,18 @@ import pytest
 from translator.providers import antigravity, codex, opencode, registry
 from translator.providers.antigravity import AntigravityProvider
 from translator.providers.codex import CodexProvider
+from translator.providers.errors import ProviderConnectionError, ProviderResponseError
 
 
 PAYLOAD = {"items": [{"id": "p1", "source": "hello"}]}
 TRANSLATION = json.dumps({"items": [{"id": "p1", "text": "你好"}]})
+
+
+def test_provider_error_metadata() -> None:
+    connection = ProviderConnectionError("offline", provider="local-cli")
+    assert connection.provider == "local-cli" and connection.retryable
+    response = ProviderResponseError("bad payload", provider="reviewer")
+    assert response.provider == "reviewer" and str(response) == "bad payload"
 
 
 def test_antigravity_prompt_process_health_translate_and_review(tmp_path: Path, monkeypatch) -> None:

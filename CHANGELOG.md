@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-08-29
+
+### Added
+- 引入按字符预算选择的滚动审阅上下文、Window/Finalize Knowledge Extractor，以及人物、关系和世界设定到 Knowledge Hub 的持久化投影。
+- 为 Reviewer 加入结构化故障分类、HTTP/连接/超时重试、退让可观测状态、自适应拆分和校准基线。
+- Settings 为 Antigravity、Codex 与 OpenCode 增加必填的 CLI 绝对路径配置和回归测试。
+
+### Changed
+- 审阅写回改为语义门控的 hard-fix 流程：拒绝源文复制、限制主观润色，并支持标题感知、亲属语义和专名保留审阅。
+- 翻译流水线保留标点段、独立遮罩标记和中点等目标标点，减少格式段落在翻译与审阅阶段丢失。
+- `config.toml` 改为部署主机本地文件；仓库和发行包提供不含密钥与机器路径的 `config.toml.example`。
+- 公共架构、Provider/Fallback、Review、Glossary 和安装发布文档同步到 0.4.0。
+
+### Quality
+- 扩充 Review、Provider retry、Knowledge projection、Context budget、Schema 和 pipeline 回归覆盖。
+- 发布归档、版本一致性、CI 配置初始化和 release evidence 流程适配本地配置模板。
+
 ## [0.3.1] - 2026-08-27
 
 ### Added

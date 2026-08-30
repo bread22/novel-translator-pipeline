@@ -136,7 +136,7 @@ def generate(output_dir: Path) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate non-mutating v0.3 release evidence")
+    parser = argparse.ArgumentParser(description="Generate non-mutating release evidence")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts" / "release" / __version__)
     args = parser.parse_args()
     report = generate(args.output_dir)

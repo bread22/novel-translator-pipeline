@@ -10,6 +10,7 @@ frontend/playwright-report/
 .env
 .env.*
 !.env.example
+/config.toml
 source/*
 chapter-*.txt
 artifacts/

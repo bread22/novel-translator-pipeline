@@ -869,12 +869,14 @@ class IterativePipeline:
         try:
             glossary = read_json(self.workspace.glossary_path, {"terms": []})
             memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
+            candidate_store = read_json(self.workspace.knowledge_candidates_path, {"items": []})
             hard_limit = int(config.get("input_hard_limit_chars", 30_000) or 30_000)
             payload_limit = hard_limit
             final_input: dict[str, Any] = {}
             for _attempt in range(10):
                 final_input = build_finalization_payload(
                     candidates, conflicts, glossary, memory,
+                    candidate_store=candidate_store,
                     max_chars=payload_limit,
                 )
                 final_input.update({

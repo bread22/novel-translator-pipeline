@@ -130,3 +130,99 @@ def test_knowledge_extractor_window_and_persistence(tmp_path: Path) -> None:
     assert len(glossary["terms"]) == 1
     assert glossary["terms"][0]["source"] == "東都銀行"
     assert glossary["terms"][0]["target"] == "东都银行"
+
+
+def test_cross_window_candidate_aggregation_and_chinese_categories(tmp_path: Path) -> None:
+    from translator.glossary.taxonomy import canonical_category, category_tier, CategoryTier
+    from translator.review.knowledge_extractor import aggregate_candidates, build_finalization_payload
+
+    # 1. Test Chinese category aliases
+    assert canonical_category("人物") == "person"
+    assert category_tier("人物") == CategoryTier.DIRECT_ALLOWED
+    assert canonical_category("地点") == "location"
+    assert category_tier("地点") == CategoryTier.DIRECT_ALLOWED
+    assert canonical_category("医疗器具") == "medical_device"
+    assert category_tier("医疗器具") == CategoryTier.GATED_ALLOWED
+
+    # 2. Test multi-window candidates aggregation
+    candidates = [
+        {
+            "candidate_id": "c0003:window:0001:cand-01",
+            "kind": "glossary",
+            "source": "小泉宏美",
+            "target": "小泉宏美",
+            "category": "人物",
+            "confidence": 0.95,
+            "source_window": "c0003:window:0001",
+            "source_paragraph_ids": ["c0003-p00002"],
+            "evidence_ids": ["c0003-p00002"],
+            "source_fragment": "新人看護婦の小泉宏美は",
+            "target_fragment": "新护士小泉宏美",
+        },
+        {
+            "candidate_id": "c0003:window:0004:cand-03",
+            "kind": "glossary",
+            "source": "小泉宏美",
+            "target": "小泉宏美",
+            "category": "person",
+            "confidence": 0.90,
+            "source_window": "c0003:window:0004",
+            "source_paragraph_ids": ["c0003-p00108"],
+            "evidence_ids": ["c0003-p00108"],
+            "source_fragment": "小泉宏美は息を呑んだ",
+            "target_fragment": "小泉宏美倒吸了一口凉气",
+        },
+        {
+            "candidate_id": "c0003:window:0002:cand-02",
+            "kind": "glossary",
+            "source": "辻裕子",
+            "target": "辻裕子",
+            "category": "人物",
+            "confidence": 0.95,
+            "source_window": "c0003:window:0002",
+            "source_paragraph_ids": ["c0003-p00068"],
+            "evidence_ids": ["c0003-p00068"],
+            "source_fragment": "先輩看護婦辻裕子",
+            "target_fragment": "前辈护士辻裕子",
+        },
+    ]
+
+    aggregated = aggregate_candidates(candidates)
+    assert len(aggregated) == 2
+    hiromi = next(c for c in aggregated if c["source"] == "小泉宏美")
+    assert set(hiromi["source_paragraph_ids"]) == {"c0003-p00002", "c0003-p00108"}
+    assert set(hiromi["evidence_ids"]) == {"c0003-p00002", "c0003-p00108"}
+    assert len(hiromi["source_paragraph_ids"]) == 2
+    assert "c0003:window:0001:cand-01" in hiromi["alias_candidate_ids"]
+    assert "c0003:window:0004:cand-03" in hiromi["alias_candidate_ids"]
+    assert hiromi["category"] == "person"
+
+    # 3. Test build_finalization_payload uses aggregated candidates
+    payload = build_finalization_payload(
+        candidates, conflicts=[], glossary={"terms": []}, memory={"entries": []}
+    )
+    assert len(payload["candidates"]) == 2
+    final_hiromi = next(c for c in payload["candidates"] if c["source"] == "小泉宏美")
+    assert len(final_hiromi["source_paragraph_ids"]) == 2
+
+    # 4. Test apply_knowledge_delta with decisions on aggregated candidates
+    workspace = BookWorkspace.at(tmp_path / "output", "test-book-2")
+    evidence_texts = {
+        "c0003-p00002": "新人看護婦の小泉宏美は",
+        "c0003-p00108": "小泉宏美は息を呑んだ",
+        "c0003-p00068": "先輩看護婦辻裕子",
+    }
+    decisions = [
+        {"candidate_id": hiromi["candidate_id"], "action": "active", "reason": "多段落复现主角名"},
+        {"candidate_id": aggregated[1]["candidate_id"], "action": "candidate", "reason": "单次出现"},
+    ]
+    summary = apply_knowledge_delta(
+        workspace, "c0003", candidates, decisions, evidence_texts=evidence_texts
+    )
+    assert summary["active"] == 1
+    glossary_data = json.loads(workspace.glossary_path.read_text(encoding="utf-8"))
+    assert len(glossary_data["terms"]) == 1
+    assert glossary_data["terms"][0]["source"] == "小泉宏美"
+    assert glossary_data["terms"][0]["category"] == "person"
+    evidence_pids = {item["paragraph_id"] for item in glossary_data["terms"][0]["evidence"]}
+    assert evidence_pids == {"c0003-p00002", "c0003-p00108"}

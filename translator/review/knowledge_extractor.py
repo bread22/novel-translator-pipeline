@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import time
 from typing import Any, Callable, Literal, Mapping, Sequence
+import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,6 +62,7 @@ class KnowledgeCandidate(_Strict):
     target_fragment: str = Field(min_length=1)
     referenced_glossary_ids: list[str] = Field(default_factory=list)
     referenced_memory_keys: list[str] = Field(default_factory=list)
+    alias_candidate_ids: list[str] = Field(default_factory=list)
 
 
 class KnowledgeConflict(_Strict):
@@ -103,6 +105,10 @@ def empty_window_output() -> dict[str, Any]:
 def _candidate_id(raw: Mapping[str, Any], window_id: str, index: int) -> str:
     supplied = str(raw.get("candidate_id", "")).strip()
     if supplied:
+        if window_id and window_id not in supplied:
+            window_tag = window_id.split(":")[-1] if ":" in window_id else window_id
+            if window_tag not in supplied:
+                return f"{window_id}:{supplied}"
         return supplied
     material = json.dumps({"window": window_id, "index": index, "candidate": dict(raw)}, ensure_ascii=False, sort_keys=True)
     return "candidate:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
@@ -126,7 +132,10 @@ def normalize_window_output(
         if not isinstance(item, Mapping):
             continue
         candidate = dict(item)
+        supplied_id = str(candidate.get("candidate_id", "")).strip()
         candidate["candidate_id"] = _candidate_id(candidate, window_id, index)
+        if supplied_id and supplied_id != candidate["candidate_id"]:
+            candidate["alias_candidate_ids"] = [supplied_id]
         candidate["source_window"] = window_id
         if candidate.get("kind") == "glossary" and candidate.get("category"):
             candidate["category"] = canonical_category(candidate["category"])
@@ -256,12 +265,103 @@ def run_knowledge_extractor_window(
     return normalized
 
 
+def aggregate_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    historical_candidates: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Merge candidates sharing entity identities across windows/chapters into consolidated evidence."""
+    grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for raw in candidates:
+        if not isinstance(raw, Mapping):
+            continue
+        c = dict(raw)
+        kind = str(c.get("kind", "glossary")).strip().lower()
+        if kind == "glossary":
+            src = unicodedata.normalize("NFKC", str(c.get("source", "")).strip())
+            tgt = unicodedata.normalize("NFKC", str(c.get("target", "")).strip())
+            cat = canonical_category(c.get("category", ""))
+            key = ("glossary", cat, src.casefold(), tgt.casefold())
+        else:
+            k = unicodedata.normalize("NFKC", str(c.get("key", "")).strip())
+            val = unicodedata.normalize("NFKC", str(c.get("value", "")).strip())
+            cat = canonical_category(c.get("category", ""))
+            key = ("memory", cat, k.casefold(), val.casefold())
+
+        cid = str(c.get("candidate_id", "")).strip()
+        pids = [str(p).strip() for p in c.get("source_paragraph_ids", []) if str(p).strip()]
+        eids = [str(e).strip() for e in c.get("evidence_ids", []) if str(e).strip()]
+
+        if key not in grouped:
+            item = dict(c)
+            if kind == "glossary":
+                item["category"] = cat
+                if src:
+                    item["source"] = src
+                if tgt:
+                    item["target"] = tgt
+            item["source_paragraph_ids"] = list(dict.fromkeys(pids or eids))
+            item["evidence_ids"] = list(dict.fromkeys(eids or pids))
+            item["alias_candidate_ids"] = [cid] if cid else []
+            grouped[key] = item
+        else:
+            existing = grouped[key]
+            existing["source_paragraph_ids"] = list(dict.fromkeys(existing.get("source_paragraph_ids", []) + (pids or eids)))
+            existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + (eids or pids)))
+            if cid and cid not in existing.get("alias_candidate_ids", []):
+                existing.setdefault("alias_candidate_ids", []).append(cid)
+            try:
+                if float(c.get("confidence", 0) or 0) > float(existing.get("confidence", 0) or 0):
+                    existing["confidence"] = float(c.get("confidence", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+            c_note = str(c.get("note", "")).strip()
+            ex_note = str(existing.get("note", "")).strip()
+            if c_note and c_note not in ex_note:
+                existing["note"] = f"{ex_note}; {c_note}".strip("; ")
+            cur_windows = [w.strip() for w in existing.get("source_window", "").split(",") if w.strip()]
+            new_window = str(c.get("source_window", "")).strip()
+            if new_window and new_window not in cur_windows:
+                cur_windows.append(new_window)
+            existing["source_window"] = ", ".join(cur_windows)
+            if not existing.get("source_fragment") and c.get("source_fragment"):
+                existing["source_fragment"] = c.get("source_fragment")
+            if not existing.get("target_fragment") and c.get("target_fragment"):
+                existing["target_fragment"] = c.get("target_fragment")
+
+    if historical_candidates:
+        for raw in historical_candidates:
+            if not isinstance(raw, Mapping):
+                continue
+            h = dict(raw)
+            h_kind = str(h.get("kind", "glossary")).strip().lower()
+            if h_kind == "glossary":
+                h_src = unicodedata.normalize("NFKC", str(h.get("source", "")).strip())
+                h_tgt = unicodedata.normalize("NFKC", str(h.get("target", "")).strip())
+                h_cat = canonical_category(h.get("category", ""))
+                h_key = ("glossary", h_cat, h_src.casefold(), h_tgt.casefold())
+            else:
+                h_k = unicodedata.normalize("NFKC", str(h.get("key", "")).strip())
+                h_val = unicodedata.normalize("NFKC", str(h.get("value", "")).strip())
+                h_cat = canonical_category(h.get("category", ""))
+                h_key = ("memory", h_cat, h_k.casefold(), h_val.casefold())
+
+            if h_key in grouped:
+                existing = grouped[h_key]
+                h_pids = [str(p).strip() for p in h.get("source_paragraph_ids", []) if str(p).strip()]
+                h_eids = [str(e).strip() for e in h.get("evidence_ids", []) if str(e).strip()]
+                existing["source_paragraph_ids"] = list(dict.fromkeys(existing.get("source_paragraph_ids", []) + (h_pids or h_eids)))
+                existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + (h_eids or h_pids)))
+
+    return list(grouped.values())
+
+
 def build_finalization_payload(
     candidates: Sequence[Mapping[str, Any]],
     conflicts: Sequence[Mapping[str, Any]],
     glossary: Mapping[str, Any],
     memory: Mapping[str, Any],
     *,
+    candidate_store: Mapping[str, Any] | None = None,
     max_chars: int = 30_000,
 ) -> dict[str, Any]:
     """Build a bounded finalization request without chapter source/translation."""
@@ -290,6 +390,9 @@ def build_finalization_payload(
             return True
         haystack = serialized(record).casefold()
         return any(len(ref) >= 2 and ref in haystack for ref in refs)
+
+    historical_items = candidate_store.get("items", []) if isinstance(candidate_store, Mapping) else []
+    aggregated_candidates = aggregate_candidates(candidates, historical_candidates=historical_items)
 
     active_terms_all = [
         dict(item) for item in glossary.get("terms", []) if isinstance(item, Mapping)
@@ -328,7 +431,7 @@ def build_finalization_payload(
     ]
     # Finalization sees only state that can explain one of this chapter's
     # candidates.  It does not receive the full book stores.
-    candidate_refs = [references(item) for item in candidates if isinstance(item, Mapping)]
+    candidate_refs = [references(item) for item in aggregated_candidates if isinstance(item, Mapping)]
     active_terms = [item for item in active_terms_all if any(is_relevant(item, refs) for refs in candidate_refs)]
     memory_entries = [item for item in memory_entries_all if any(is_relevant(item, refs, memory_record=True) for refs in candidate_refs)]
 
@@ -340,7 +443,7 @@ def build_finalization_payload(
                 "source_fragment", "target_fragment", "referenced_glossary_ids", "referenced_memory_keys",
             ) if key in candidate
         }
-        for candidate in candidates if isinstance(candidate, Mapping)
+        for candidate in aggregated_candidates if isinstance(candidate, Mapping)
     ]
     compact_conflicts = [dict(item) for item in conflicts if isinstance(item, Mapping)]
 
@@ -380,7 +483,7 @@ def build_finalization_payload(
     selected_ids = {str(item.get("candidate_id", "")) for item in selected_candidates}
     result = document(selected_candidates, selected_conflicts, selected_terms, selected_memory)
     result["omitted_candidate_ids"] = [
-        str(item.get("candidate_id", "")) for item in candidates
+        str(item.get("candidate_id", "")) for item in aggregated_candidates
         if str(item.get("candidate_id", "")) not in selected_ids
     ]
     # The omission audit is useful but must not break the same hard limit.
@@ -446,9 +549,32 @@ def apply_knowledge_delta(
 ) -> dict[str, Any]:
     """Persist final knowledge actions while preserving old active values."""
     if isinstance(decisions, list):
-        decision_map = {str(item.get("candidate_id", "")): dict(item) for item in decisions if isinstance(item, Mapping)}
+        decision_by_id = {str(item.get("candidate_id", "")): dict(item) for item in decisions if isinstance(item, Mapping)}
     else:
-        decision_map = {str(key): dict(value) for key, value in (decisions or {}).items() if isinstance(value, Mapping)}
+        decision_by_id = {str(key): dict(value) for key, value in (decisions or {}).items() if isinstance(value, Mapping)}
+
+    aggregated_candidates = aggregate_candidates(candidates)
+
+    decision_by_term: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for d_cid, d_item in decision_by_id.items():
+        for raw in aggregated_candidates:
+            if not isinstance(raw, Mapping):
+                continue
+            c_cid = str(raw.get("candidate_id", "")).strip()
+            aliases = [str(a).strip() for a in raw.get("alias_candidate_ids", []) if str(a).strip()]
+            if d_cid == c_cid or d_cid in aliases or c_cid.endswith(f":{d_cid}") or c_cid.endswith(f"-{d_cid}"):
+                kind = str(raw.get("kind", "glossary")).strip().lower()
+                if kind == "glossary":
+                    src = unicodedata.normalize("NFKC", str(raw.get("source", "")).strip())
+                    tgt = unicodedata.normalize("NFKC", str(raw.get("target", "")).strip())
+                    cat = canonical_category(raw.get("category", ""))
+                    decision_by_term[(kind, cat, src.casefold(), tgt.casefold())] = d_item
+                else:
+                    k = unicodedata.normalize("NFKC", str(raw.get("key", "")).strip())
+                    val = unicodedata.normalize("NFKC", str(raw.get("value", "")).strip())
+                    cat = canonical_category(raw.get("category", ""))
+                    decision_by_term[(kind, cat, k.casefold(), val.casefold())] = d_item
+
     candidate_store_path = workspace.knowledge_candidates_path
     conflict_store_path = workspace.knowledge_conflicts_path
     glossary_path = workspace.glossary_path
@@ -456,7 +582,7 @@ def apply_knowledge_delta(
     paths = [candidate_store_path, conflict_store_path, glossary_path, memory_path, workspace.novel_translator_terms_path]
     originals = {path: path.read_bytes() if path.exists() else None for path in paths}
     evidence = dict(evidence_texts or {})
-    active_glossary: list[dict[str, Any]] = []
+    active_glossary_raw: list[dict[str, Any]] = []
     active_memory: list[dict[str, Any]] = []
     stored_candidates: list[dict[str, Any]] = []
     stored_conflicts = [
@@ -464,15 +590,37 @@ def apply_knowledge_delta(
         for item in (conflicts or []) if isinstance(item, Mapping)
     ]
     summary = {"active": 0, "candidate": 0, "conflict": len(stored_conflicts), "discard": 0, "omitted": 0}
+
+    def _get_decision(candidate: dict[str, Any]) -> dict[str, Any] | None:
+        cid = str(candidate.get("candidate_id", "")).strip()
+        if cid in decision_by_id:
+            return decision_by_id[cid]
+        for alias in candidate.get("alias_candidate_ids", []):
+            if str(alias) in decision_by_id:
+                return decision_by_id[str(alias)]
+        for d_k, d_v in decision_by_id.items():
+            if cid.endswith(f":{d_k}") or cid.endswith(f"-{d_k}"):
+                return d_v
+        kind = str(candidate.get("kind", "glossary")).strip().lower()
+        if kind == "glossary":
+            src = unicodedata.normalize("NFKC", str(candidate.get("source", "")).strip())
+            tgt = unicodedata.normalize("NFKC", str(candidate.get("target", "")).strip())
+            cat = canonical_category(candidate.get("category", ""))
+            return decision_by_term.get((kind, cat, src.casefold(), tgt.casefold()))
+        else:
+            k = unicodedata.normalize("NFKC", str(candidate.get("key", "")).strip())
+            val = unicodedata.normalize("NFKC", str(candidate.get("value", "")).strip())
+            cat = canonical_category(candidate.get("category", ""))
+            return decision_by_term.get((kind, cat, k.casefold(), val.casefold()))
+
     try:
-        for raw in candidates:
+        for raw in aggregated_candidates:
             candidate = dict(raw)
-            cid = str(candidate.get("candidate_id", "")).strip()
-            decision = decision_map.get(cid)
+            decision = _get_decision(candidate)
             action = str((decision or {}).get("action", "candidate"))
             if action not in {"active", "candidate", "conflict", "discard"}:
                 action = "candidate"
-            if cid not in decision_map:
+            if decision is None:
                 summary["omitted"] += 1
             if action == "active":
                 if candidate.get("kind") == "glossary":
@@ -489,7 +637,7 @@ def apply_knowledge_delta(
                         )
                         if validation.valid and validation.candidate is not None:
                             candidate.update(validation.candidate.model_dump())
-                            active_glossary.append({key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope") if key in candidate})
+                            active_glossary_raw.append({key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope") if key in candidate})
                         else:
                             action = "candidate"
                     else:
@@ -507,6 +655,18 @@ def apply_knowledge_delta(
             elif action == "conflict":
                 stored_conflicts.append({**record, "conflict_id": str((decision or {}).get("conflict_id", ""))})
             summary[action] = int(summary.get(action, 0)) + 1
+
+        active_glossary_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for term in active_glossary_raw:
+            g_key = (term["source"], term["target"], term["category"])
+            if g_key not in active_glossary_map:
+                active_glossary_map[g_key] = dict(term)
+            else:
+                existing = active_glossary_map[g_key]
+                existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + term.get("evidence_ids", [])))
+                if float(term.get("confidence", 0) or 0) > float(existing.get("confidence", 0) or 0):
+                    existing["confidence"] = term.get("confidence", 0)
+        active_glossary = list(active_glossary_map.values())
 
         glossary = read_json(glossary_path, {"schema_version": "3.0", "terms": [], "conflicts": [], "revisions": []})
         if active_glossary:
@@ -539,8 +699,8 @@ def apply_knowledge_delta(
 
 
 __all__ = [
-    "WindowKnowledgeOutput", "FinalKnowledgeOutput", "build_finalization_payload",
-    "finalization_prompt_chars",
+    "WindowKnowledgeOutput", "FinalKnowledgeOutput", "aggregate_candidates",
+    "build_finalization_payload", "finalization_prompt_chars",
     "run_knowledge_extractor_window", "run_knowledge_finalization",
     "knowledge_extractor_enabled", "knowledge_extractor_connection_test", "apply_knowledge_delta",
     "normalize_window_output", "normalize_finalize_output",

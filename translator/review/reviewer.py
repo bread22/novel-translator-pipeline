@@ -358,13 +358,17 @@ def _normalize_quality_contract(item: dict[str, Any], category: str) -> str:
 
 def evaluate_apply_gate(
     items: list[dict[str, Any]],
-    threshold: float = 0.9,
+    threshold: float | None = None,
     *,
     autonomous: bool = False,
     current_translations: dict[str, str] | None = None,
     source_texts: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Evaluate every proposal and retain its final report-facing gate state."""
+    """Evaluate proposals using evidence and writeback-policy gates.
+
+    ``threshold`` remains as a compatibility argument for older callers, but
+    confidence is recorded for audit and no longer controls writeback.
+    """
     evaluated: list[dict[str, Any]] = []
     for ordinal, raw in enumerate(items, start=1):
         item = dict(raw)
@@ -471,11 +475,6 @@ def evaluate_apply_gate(
                 item["auto_apply"] = False
                 evaluated.append(item)
                 continue
-        conf = float(item.get("confidence", 0) or 0)
-        if not (mandatory_script_cleanup or mandatory_masking_cleanup) and conf < threshold:
-            item["apply_reason"] = "below_threshold"
-            evaluated.append(item)
-            continue
         if item.get("consensus") is False and len(item.get("reporters", [])) > 1:
             item["decision"] = "REPORT_ONLY"
             item["apply_reason"] = "replacement_disagreement"
@@ -500,14 +499,14 @@ def evaluate_apply_gate(
 
 
 def approved_fixes(
-    items: list[dict[str, Any]], threshold: float = 0.9, *, autonomous: bool = False,
+    items: list[dict[str, Any]], threshold: float | None = None, *, autonomous: bool = False,
     current_translations: dict[str, str] | None = None,
     source_texts: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     return [
         item for item in evaluate_apply_gate(
             items,
-            threshold,
+            threshold=threshold,
             autonomous=autonomous,
             current_translations=current_translations,
             source_texts=source_texts,
@@ -1904,7 +1903,6 @@ def review_book(
 ) -> dict[str, Any]:
     review_apply_cfg = dict(load_config().get("pipeline", {}).get("review_apply", {}) or {})
     apply = bool(apply and review_apply_cfg.get("mode", "report_only") == "hard_fix")
-    gate_threshold = max(0.9, float(review_apply_cfg.get("minimum_confidence", 0.9)))
     workspace = BookWorkspace.at(output_root, name)
     workspace.initialize(book_id=book)
     manifest = read_json(manifest_path(book))
@@ -1969,7 +1967,6 @@ def review_book(
         source_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
         gate_results = evaluate_apply_gate(
             review["fixes"],
-            threshold=gate_threshold,
             autonomous=autonomous,
             current_translations=current_translations,
             source_texts=source_texts,
@@ -1985,7 +1982,6 @@ def review_book(
         }
         gate_results = evaluate_apply_gate(
             gate_results,
-            threshold=gate_threshold,
             autonomous=autonomous,
             current_translations=fresh_translations,
             source_texts=fresh_sources,
@@ -2113,8 +2109,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chapter", default=None, help="只审阅特定章节 ID")
     parser.add_argument("--global-consistency", action="store_true", help="整书全部章节审阅完成后执行全书一致性检查")
     parser.add_argument("--translation-policy", type=Path, default=None)
-    parser.add_argument("--apply", action="store_true", help="应用高置信度客观修复")
-    parser.add_argument("--autonomous", action="store_true", help="全自动模式，仅对客观高置信度修复置 auto_apply=true")
+    parser.add_argument("--apply", action="store_true", help="应用通过证据与写回策略校验的客观修复")
+    parser.add_argument("--autonomous", action="store_true", help="全自动模式，仅对通过证据校验的客观修复置 auto_apply=true")
     parser.add_argument("--export", action="store_true", help="审阅完成后导出 EPUB")
     parser.add_argument("--reviewer", default=None, help="审阅 backend 名称")
     return parser.parse_args()

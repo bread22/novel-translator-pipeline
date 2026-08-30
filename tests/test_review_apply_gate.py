@@ -23,7 +23,7 @@ def test_style_low_confidence_clear_and_consensus_do_not_bypass_gate():
         proposal(id="clear", operation="clear", replacement="", confidence=1, consensus=True),
     ], autonomous=True)
     assert [r["apply_reason"] for r in records] == [
-        "style_not_auto_applied", "below_threshold", "clear_disabled"
+        "style_not_auto_applied", "gate_passed", "clear_disabled"
     ]
 
 

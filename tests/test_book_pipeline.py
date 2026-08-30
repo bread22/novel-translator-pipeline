@@ -72,14 +72,14 @@ class PipelineFunctionTests(unittest.TestCase):
         ]}
         self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same_kana", "kana"})
 
-    def test_approved_fixes_requires_all_guards(self) -> None:
+    def test_approved_fixes_requires_policy_and_apply_guards(self) -> None:
         items = [
             {"id": "a", "auto_apply": True, "confidence": 0.9, "approved_translation": "修复"},
             {"id": "b", "auto_apply": True, "confidence": 0.89, "approved_translation": "修复"},
             {"id": "c", "auto_apply": False, "confidence": 1, "approved_translation": "修复"},
         ]
-        self.assertEqual([item["id"] for item in approved_fixes(items)], ["a"])
-        self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a", "c"])
+        self.assertEqual([item["id"] for item in approved_fixes(items)], ["a", "b"])
+        self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a", "b", "c"])
 
     def test_approved_fixes_rejects_non_objective_chapter_fixes(self) -> None:
         items = [
@@ -97,14 +97,14 @@ class PipelineFunctionTests(unittest.TestCase):
         approved = approved_fixes([item], autonomous=True)
         self.assertEqual(approved, [])
 
-    def test_approved_fixes_rejects_objective_fixes_below_point_nine(self) -> None:
+    def test_approved_fixes_keeps_evidence_gate_without_confidence_gate(self) -> None:
         items = [
             {"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.85, "replacement": "修复1", "auto_apply": True},
-            {"id": "p2", "category": "terminology", "severity": "minor", "confidence": 0.80, "replacement": "修复2", "auto_apply": True},
+            {"id": "p2", "category": "terminology", "severity": "minor", "confidence": 0.80, "reason": "称谓不统一", "replacement": "修复2", "auto_apply": True},
             {"id": "p3", "category": "mistranslation", "severity": "minor", "confidence": 0.79, "replacement": "修复3", "auto_apply": True},
         ]
         approved = approved_fixes(items, autonomous=True)
-        self.assertEqual(approved, [])
+        self.assertEqual([item["id"] for item in approved], ["p1", "p3"])
 
     def test_approved_fixes_rejects_japanese_kana_hallucinations(self) -> None:
         items = [

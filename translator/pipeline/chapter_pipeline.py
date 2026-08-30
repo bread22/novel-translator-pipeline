@@ -108,8 +108,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--split-on-content-filter", action=argparse.BooleanOptionalAction, default=pipeline.get("split_on_content_filter", False), help="遇到审查/模型内部拒答时是否二分；默认 False（立即 fallback）")
     parser.add_argument("--translation-max-tokens", type=int, default=pipeline.get("translation_max_tokens", 8192), help="单个翻译窗口的最大输出 token")
-    parser.add_argument("--apply", action="store_true", help="应用高置信度译文修复")
-    parser.add_argument("--autonomous", action="store_true", help="全自动应用置信度 >= 0.9 的有效修复")
+    parser.add_argument("--apply", action="store_true", help="应用通过证据与写回策略校验的译文修复")
+    parser.add_argument("--autonomous", action="store_true", help="全自动应用通过证据校验的有效修复")
     parser.add_argument("--finalize", action="store_true", help="全部翻译完成后导出并校验中文 EPUB")
     parser.add_argument("--layout", choices=["preserve", "horizontal"], default=pipeline.get("layout", "preserve"), help="导出 EPUB 的版式")
     parser.add_argument("--health-check-timeout", type=int, default=pipeline.get("health_check_timeout", 60), help="启动前健康检查超时秒数")
@@ -289,12 +289,8 @@ class IterativePipeline:
         self.apply = apply
         review_apply_cfg = dict(pipeline_cfg.get("review_apply", {}) or {})
         self.review_apply_mode = str(review_apply_mode or review_apply_cfg.get("mode", "report_only"))
-        configured_threshold = (
-            review_apply_minimum_confidence
-            if review_apply_minimum_confidence is not None
-            else float(review_apply_cfg.get("minimum_confidence", 0.9))
-        )
-        self.review_apply_threshold = max(0.9, configured_threshold)
+        # Retain the constructor keyword for callers that still pass it; the
+        # value is intentionally ignored because confidence is not a writeback gate.
         self.review_apply_enabled = bool(apply and self.review_apply_mode == "hard_fix")
         self.autonomous = autonomous
         self.reviewer = reviewer or reviewer_name(config)
@@ -1161,7 +1157,6 @@ class IterativePipeline:
         source_texts = {str(item["id"]): str(item.get("source", "")) for item in items}
         gate_results = evaluate_apply_gate(
             review["fixes"],
-            threshold=self.review_apply_threshold,
             autonomous=self.autonomous,
             current_translations=current_translations,
             source_texts=source_texts,
@@ -1179,7 +1174,6 @@ class IterativePipeline:
         }
         gate_results = evaluate_apply_gate(
             gate_results,
-            threshold=self.review_apply_threshold,
             autonomous=self.autonomous,
             current_translations=fresh_translations,
             source_texts=fresh_sources,

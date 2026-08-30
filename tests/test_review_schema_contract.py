@@ -64,6 +64,41 @@ class ReviewSchemaContractTests(unittest.TestCase):
         self.assertEqual(merged["checked_ids"], ["p-a", "p-b", "p-c"])
         self.assertEqual(len(merged["fixes"]), 3)
 
+    def test_dual_review_preserves_multiple_atomic_fixes_in_one_paragraph(self) -> None:
+        primary = {
+            "checked_ids": ["p1"],
+            "fixes": [
+                {
+                    "id": "p1", "category": "mistranslation", "severity": "minor",
+                    "source_fragment": "A", "current_fragment": "甲", "proposed_fragment": "乙",
+                    "replacement": "乙 B", "confidence": 0.95,
+                },
+                {
+                    "id": "p1", "category": "mistranslation", "severity": "minor",
+                    "source_fragment": "B", "current_fragment": "B", "proposed_fragment": "丙",
+                    "replacement": "A 丙", "confidence": 0.95,
+                },
+            ],
+        }
+        secondary = {
+            "checked_ids": ["p1"],
+            "fixes": [
+                {
+                    "id": "p1", "category": "mistranslation", "severity": "minor",
+                    "source_fragment": "A", "current_fragment": "甲", "proposed_fragment": "乙",
+                    "replacement": "乙 B", "confidence": 0.93,
+                },
+                {
+                    "id": "p1", "category": "mistranslation", "severity": "minor",
+                    "source_fragment": "B", "current_fragment": "B", "proposed_fragment": "丙",
+                    "replacement": "A 丙", "confidence": 0.93,
+                },
+            ],
+        }
+        merged = merge_chapter_reviews(primary, secondary)
+        self.assertEqual(len(merged["fixes"]), 2)
+        self.assertTrue(all(item["consensus"] for item in merged["fixes"]))
+
     def test_rolling_context_applies_memory_add_and_update(self) -> None:
         base = {"current_chapter_review_context": {"active_entities": ["旧人物"]}}
         delta = {"rolling_context_delta": {"active_entities": ["新人物"], "locations": ["新宿"]}}
@@ -165,4 +200,3 @@ class ReviewSchemaContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

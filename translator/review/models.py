@@ -76,11 +76,16 @@ class ChapterState(StrictModel):
 
 class ChapterFix(StrictModel):
     id: str = Field(min_length=1)
+    fix_id: str = ""
     decision: Literal["PASS", "REPORT_ONLY", "FIX_REQUIRED"] = "FIX_REQUIRED"
     category: str = "context_conflict"
     severity: str = "major"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str = ""
+    source_fragment: str = ""
+    current_fragment: str = ""
+    proposed_fragment: str = ""
+    composed_fix_ids: list[str] = Field(default_factory=list)
     replacement: str = ""
     operation: Literal["replace", "clear"] = "replace"
     auto_apply: bool = False

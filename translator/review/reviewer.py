@@ -124,6 +124,162 @@ def translation_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _normalized_fragment(text: str) -> str:
+    """Normalize only harmless formatting before comparing reviewer fragments."""
+    return normalize_target_punctuation(re.sub(r"\s+", "", str(text).strip()))
+
+
+def _fragment_present(fragment: str, text: str) -> bool:
+    fragment = str(fragment).strip()
+    text = str(text)
+    return bool(fragment) and (fragment in text or _normalized_fragment(fragment) in _normalized_fragment(text))
+
+
+def _fix_identity(item: Mapping[str, Any], ordinal: int) -> str:
+    explicit = str(item.get("fix_id", "") or "").strip()
+    if explicit:
+        return explicit
+    fragments = tuple(
+        str(item.get(key, "") or "").strip()
+        for key in ("source_fragment", "current_fragment", "proposed_fragment")
+    )
+    if any(fragments):
+        payload = json.dumps(
+            [str(item.get("id", "")), str(item.get("category", "")), *fragments],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        return f"{str(item.get('id', 'fix'))}:fix-{digest}"
+    return f"{str(item.get('id', 'fix'))}:fix-{ordinal:04d}"
+
+
+def fix_evidence_validation_errors(
+    item: Mapping[str, Any],
+    *,
+    source: str | None,
+    current: str,
+    replacement: str,
+) -> list[str]:
+    """Check that the claimed local change is present in the supplied texts."""
+    if str(item.get("operation", "replace") or "replace") == "clear":
+        return []
+    category = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
+    if category not in OBJECTIVE_CATEGORIES:
+        return []
+
+    source_fragment = str(item.get("source_fragment", "") or "").strip()
+    current_fragment = str(item.get("current_fragment", "") or "").strip()
+    proposed_fragment = str(item.get("proposed_fragment", "") or "").strip()
+    errors: list[str] = []
+
+    if source is not None and not source_fragment:
+        errors.append("missing_source_fragment")
+    if not current_fragment:
+        errors.append("missing_local_evidence")
+    if category not in {"addition", "omission"} and not proposed_fragment:
+        errors.append("missing_local_evidence")
+    if source is not None and source_fragment and not _fragment_present(source_fragment, source):
+        errors.append("source_fragment_not_found")
+    if current_fragment and not _fragment_present(current_fragment, current):
+        errors.append("current_fragment_not_found")
+    if proposed_fragment and not _fragment_present(proposed_fragment, replacement):
+        errors.append("proposed_fragment_not_found")
+    if current_fragment and proposed_fragment and _normalized_fragment(current_fragment) == _normalized_fragment(proposed_fragment):
+        errors.append("no_op_span")
+    return list(dict.fromkeys(errors))
+
+
+def compose_approved_fixes(
+    fixes: list[dict[str, Any]],
+    current_translations: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Compose independent approved edits sharing one paragraph baseline.
+
+    The review format keeps a complete paragraph replacement for auditability,
+    while this function uses the local fragments to prevent one same-paragraph
+    fix from overwriting another.
+    """
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in fixes:
+        if item.get("apply_reason") == "gate_passed":
+            grouped.setdefault(str(item.get("id", "")), []).append(item)
+
+    composed_by_identity: dict[int, dict[str, Any]] = {}
+    for item_id, group in grouped.items():
+        if len(group) < 2:
+            continue
+        baseline = str(current_translations.get(item_id, ""))
+        edits: list[tuple[int, int, str, dict[str, Any]]] = []
+        errors: list[str] = []
+        for item in group:
+            current_fragment = str(item.get("current_fragment", "") or "")
+            proposed_fragment = str(item.get("proposed_fragment", "") or "")
+            if not current_fragment:
+                errors.append("composition_requires_local_evidence")
+                continue
+            occurrences = [
+                index for index in range(len(baseline))
+                if baseline.startswith(current_fragment, index)
+            ]
+            if not occurrences:
+                errors.append("current_fragment_not_exact")
+                continue
+            if len(occurrences) > 1:
+                errors.append("current_fragment_ambiguous")
+                continue
+            start = occurrences[0]
+            edits.append((start, start + len(current_fragment), proposed_fragment, item))
+
+        edits.sort(key=lambda edit: edit[0])
+        for previous, current_edit in zip(edits, edits[1:]):
+            if current_edit[0] < previous[1]:
+                errors.append("overlapping_fixes")
+                break
+
+        if errors or len(edits) != len(group):
+            for item in group:
+                copy = dict(item)
+                copy["apply_state"] = "blocked"
+                copy["apply_reason"] = "fix_composition_failed"
+                copy["auto_apply"] = False
+                copy["validation_errors"] = list(dict.fromkeys(
+                    list(copy.get("validation_errors", [])) + errors
+                )) or ["fix_composition_failed"]
+                copy["invalid_reason"] = ", ".join(copy["validation_errors"])
+                composed_by_identity[id(item)] = copy
+            continue
+
+        final_text = baseline
+        for start, end, proposed_fragment, _item in reversed(edits):
+            final_text = final_text[:start] + proposed_fragment + final_text[end:]
+        fix_ids = [str(item.get("fix_id", "") or item.get("id", "")) for item in group]
+        for item in group:
+            copy = dict(item)
+            copy["replacement"] = final_text
+            copy["approved_translation"] = final_text
+            copy["composed_fix_ids"] = fix_ids
+            composed_by_identity[id(item)] = copy
+
+    result: list[dict[str, Any]] = []
+    for item in fixes:
+        result.append(composed_by_identity.get(id(item), dict(item)))
+    return result
+
+
+def unique_writeback_fixes(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Emit one final paragraph replacement per target while retaining all findings."""
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for item in fixes:
+        item_id = str(item.get("id", ""))
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        result.append(item)
+    return result
+
+
 def replacement_validation_errors(replacement: str, *, source: str | None = None) -> list[str]:
     """Return deterministic format/script errors; semantic quality stays with reviewers."""
     errors: list[str] = []
@@ -210,9 +366,10 @@ def evaluate_apply_gate(
 ) -> list[dict[str, Any]]:
     """Evaluate every proposal and retain its final report-facing gate state."""
     evaluated: list[dict[str, Any]] = []
-    for raw in items:
+    for ordinal, raw in enumerate(items, start=1):
         item = dict(raw)
         item_id = str(item.get("id", ""))
+        item["fix_id"] = _fix_identity(item, ordinal)
         operation = str(item.get("operation", "replace") or "replace")
         is_clear = operation == "clear"
         replacement = normalize_target_punctuation(
@@ -294,6 +451,26 @@ def evaluate_apply_gate(
             item["invalid_reason"] = ", ".join(errors)
             evaluated.append(item)
             continue
+        if (
+            current_translations is not None
+            and source_texts is not None
+            and not mandatory_script_cleanup
+            and not mandatory_masking_cleanup
+        ):
+            evidence_errors = fix_evidence_validation_errors(
+                item,
+                source=source_text,
+                current=current_text,
+                replacement=replacement,
+            )
+            if evidence_errors:
+                item["apply_state"] = "blocked"
+                item["apply_reason"] = "fix_evidence_validation_failed"
+                item["validation_errors"] = evidence_errors
+                item["invalid_reason"] = ", ".join(evidence_errors)
+                item["auto_apply"] = False
+                evaluated.append(item)
+                continue
         conf = float(item.get("confidence", 0) or 0)
         if not (mandatory_script_cleanup or mandatory_masking_cleanup) and conf < threshold:
             item["apply_reason"] = "below_threshold"
@@ -367,9 +544,10 @@ def validate_chapter_review_payload(
     
     # Filter fixes to only valid expected IDs and sanitize Japanese kana hallucinations
     sanitized_fixes = []
-    for item in normalized["fixes"]:
+    for ordinal, item in enumerate(normalized["fixes"], start=1):
         if not isinstance(item, dict) or str(item.get("id", "")) not in expected_ids:
             continue
+        item["fix_id"] = _fix_identity(item, ordinal)
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         item["category"] = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
         decision = _normalize_decision_contract(
@@ -573,8 +751,17 @@ def merge_chapter_reviews(
 
     fixes_a = primary_review.get("fixes", []) or []
     fixes_b = secondary_review.get("fixes", []) or []
-    by_id_a = {str(item.get("id", "")): item for item in fixes_a if isinstance(item, dict) and item.get("id")}
-    by_id_b = {str(item.get("id", "")): item for item in fixes_b if isinstance(item, dict) and item.get("id")}
+    def index_fixes(fixes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        indexed: dict[str, dict[str, Any]] = {}
+        for ordinal, item in enumerate(fixes, start=1):
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            key = _fix_identity(item, ordinal)
+            indexed[key] = item
+        return indexed
+
+    by_id_a = index_fixes(fixes_a)
+    by_id_b = index_fixes(fixes_b)
 
     all_fix_ids = sorted(set(by_id_a) | set(by_id_b))
     merged_fixes = []
@@ -1792,16 +1979,19 @@ def review_book(
             item_id: str(fresh_paragraphs.get(item_id, {}).get("source", ""))
             for item_id in expected
         }
+        fresh_translations = {
+            item_id: str(fresh_paragraphs.get(item_id, {}).get("translated", ""))
+            for item_id in expected
+        }
         gate_results = evaluate_apply_gate(
             gate_results,
             threshold=gate_threshold,
             autonomous=autonomous,
-            current_translations={
-                item_id: str(fresh_paragraphs.get(item_id, {}).get("translated", ""))
-                for item_id in expected
-            },
+            current_translations=fresh_translations,
             source_texts=fresh_sources,
         )
+        if apply:
+            gate_results = compose_approved_fixes(gate_results, fresh_translations)
         if not apply:
             for item in gate_results:
                 if item.get("apply_reason") == "gate_passed":
@@ -1816,7 +2006,7 @@ def review_book(
         review["fixes"] = gate_results
         fixes = [item for item in gate_results if item.get("apply_reason") == "gate_passed"]
         fixes_path = workspace.reviews_dir / f"{c_id}-consistency-fixes.json"
-        write_json(fixes_path, {"book": book, "items": fixes})
+        write_json(fixes_path, {"book": book, "items": unique_writeback_fixes(fixes)})
         applied_fixes: Any = False
         if apply:
             write_error: Exception | None = None

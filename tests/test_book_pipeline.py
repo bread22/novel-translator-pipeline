@@ -372,7 +372,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 self.assertEqual([item["id"] for item in payload["items"]], ["p1", "p2"])
                 output_path.write_text(json.dumps({
                     "checked_ids": ["p1", "p2"],
-                    "fixes": [{"id": "p2", "category": "mistranslation", "severity": "major", "confidence": 0.99, "reason": "动作错误", "replacement": "修正译文", "auto_apply": True}],
+                    "fixes": [{"id": "p2", "category": "mistranslation", "severity": "major", "confidence": 0.99, "reason": "动作错误", "source_fragment": "第二段", "current_fragment": "译文2", "proposed_fragment": "修正译文", "replacement": "修正译文", "auto_apply": True}],
                 }, ensure_ascii=False), encoding="utf-8")
 
             def mock_knowledge_extractor(kind, payload):
@@ -459,6 +459,9 @@ class PipelineFunctionTests(unittest.TestCase):
                         "category": "mistranslation",
                         "severity": "major",
                         "confidence": 0.99,
+                        "source_fragment": "くじり",
+                        "current_fragment": "旧译",
+                        "proposed_fragment": replacement,
                         "replacement": replacement,
                         "auto_apply": True,
                     }],

@@ -283,6 +283,9 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - {kana_warning}
 - 证据边界：只依据输入中的 source、translated、context、translation_policy 和 glossary 判断。不得把模型记忆、未经提供的出版社惯例、年代惯例、文库惯例或所谓中文出版惯例当作规则；除非该规则明确写在 translation_policy 或 glossary 中，否则不得据此要求修改。
 - 检查错译、漏译、增译、主客体、指代、否定、条件、因果、时间、关系、专名和 replacement 完整性。
+- 每条 fix 只描述一个可独立验证的具体问题；同一段落存在多个问题时，输出多条 fix，并为每条填写独立的 fix_id。
+- 每条 FIX_REQUIRED 都必须提供 source_fragment、current_fragment、proposed_fragment。三个片段必须分别能在 source、当前译文和 replacement 中定位；current_fragment 与 proposed_fragment 相同表示没有发生修复，不得作为错误依据。
+- replacement 是完整段落，但只能反映该条 fix 的局部修改；不要把多个问题合并进一条 fix，也不要为了修正一个词重写无关内容。
 - 必须检查 items 中每条译文并把全部 ID 且不重复地写入 checked_ids。
 - 每个目标先决定 PASS、REPORT_ONLY 或 FIX_REQUIRED。语义正确且中文自然时必须 PASS；只是同义词、文学质感或个人措辞偏好也必须 PASS，且不得输出 finding 或 replacement。
 - 在开始润色前必须先回答：译文中是否存在“字面看似中文、实际是日语词法直搬”的表达？重点检查亲属称谓、职务、学校制度、日语汉字词，以及汉字相同但中文不自然的词。此类问题优先于标题修辞和局部措辞优化。
@@ -293,6 +296,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - 术语问题必须有可复核的客观依据：source 与 translated 不一致，或 glossary/translation_policy 明确规定了唯一译法。`嫂子/大嫂/兄嫂`、`太太/少奶奶`、`那话儿/肉棒` 等同义称谓和语体选择不是 terminology，也不是 major；没有明确依据时使用 PASS 或 REPORT_ONLY。
 - 先判断“是否真的需要改变含义”，再判断“是否可以表达得更好”。语序润色、更自然、更流畅、文学质感、个人措辞偏好不得归入 mistranslation、terminology 或 major。
 - 置信度是基于证据的记录，不是校准后的正确率，也不是自动写回许可。不得仅凭 confidence=0.8、0.9 或更高创建或升级 finding；客观错误必须指出 source 与 translated 的具体语义矛盾，style 润色必须指出具体的中文表达问题及其 translation_policy 依据。
+- 如果某个词在 current_fragment 与 proposed_fragment 中保持相同，即使 replacement 的其他位置发生变化，也只能把其他位置作为独立 finding；该词本身按 PASS 处理。
 - **透明的外来语不得默认音译。** 对标题和片假名按意义优先：`レイプ` → 强暴/强奸，`ホテル` → 酒店，`ナイフ` → 刀，`セックス` → 性爱；不要机械写成“雷普”“厚泰鲁”“奈夫”“塞库斯”。只有人名、品牌、虚构专名、无法自然意译的名称，或 Glossary 已明确指定音译时，才考虑音译。书名也一样；片假名书名若是有明确意义的普通英语词组合，默认优先传达标题意义，而不是机械保留声音。
 - `terminology` 只能用于 source、translation_policy 或 glossary 能直接证明的术语错误，不能用来包装润色；译文中确实残留未翻译的日文/韩文字符仍按 policy_violation 处理，但 source 中的片假名本身不是译文错误。
 - fixes.category 只能使用 style、mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation。

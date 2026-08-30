@@ -1,4 +1,10 @@
-from translator.review.reviewer import approved_fixes, evaluate_apply_gate, merge_chapter_reviews
+from translator.review.reviewer import (
+    approved_fixes,
+    compose_approved_fixes,
+    evaluate_apply_gate,
+    merge_chapter_reviews,
+    unique_writeback_fixes,
+)
 
 
 def proposal(**overrides):
@@ -33,6 +39,45 @@ def test_identical_replacement_becomes_pass_and_stale_hash_is_not_applied():
     stale = evaluate_apply_gate([proposal(base_translation_hash="bad")], current_translations={"p1": "当前译文"})[0]
     assert (same["decision"], same["apply_reason"]) == ("PASS", "no_op")
     assert stale["apply_reason"] == "stale_base_translation"
+
+
+def test_unchanged_claimed_fragment_is_blocked_even_when_another_fragment_changes():
+    result = evaluate_apply_gate(
+        [proposal(
+            source_fragment="ドジョウ",
+            current_fragment="泥鳅",
+            proposed_fragment="泥鳅",
+            replacement="密室的泥鳅淫狱",
+            reason="泥鳅翻译错误",
+        )],
+        autonomous=True,
+        current_translations={"p1": "密室的泥鳅痴狱"},
+        source_texts={"p1": "密室のドジョウ痴獄"},
+    )[0]
+    assert result["apply_reason"] == "fix_evidence_validation_failed"
+    assert result["validation_errors"] == ["no_op_span"]
+    assert result["decision"] == "FIX_REQUIRED"
+
+
+def test_same_paragraph_fixes_are_composed_once_for_writeback():
+    fixes = [
+        proposal(id="p1", fix_id="p1-f01", current_fragment="A", proposed_fragment="甲", replacement="甲 B C", apply_reason="gate_passed"),
+        proposal(id="p1", fix_id="p1-f02", current_fragment="B", proposed_fragment="乙", replacement="A 乙 C", apply_reason="gate_passed"),
+    ]
+    composed = compose_approved_fixes(fixes, {"p1": "A B C"})
+    assert [item["replacement"] for item in composed] == ["甲 乙 C", "甲 乙 C"]
+    assert [item["composed_fix_ids"] for item in composed] == [["p1-f01", "p1-f02"]] * 2
+    assert [item["id"] for item in unique_writeback_fixes(composed)] == ["p1"]
+
+
+def test_overlapping_same_paragraph_fixes_are_blocked_as_a_group():
+    fixes = [
+        proposal(id="p1", fix_id="p1-f01", current_fragment="AB", proposed_fragment="甲", replacement="甲 C", apply_reason="gate_passed"),
+        proposal(id="p1", fix_id="p1-f02", current_fragment="B", proposed_fragment="乙", replacement="A 乙 C", apply_reason="gate_passed"),
+    ]
+    composed = compose_approved_fixes(fixes, {"p1": "AB C"})
+    assert [item["apply_reason"] for item in composed] == ["fix_composition_failed", "fix_composition_failed"]
+    assert all("overlapping_fixes" in item["validation_errors"] for item in composed)
 
 
 def test_inconsistent_fix_reason_is_normalized_to_pass():

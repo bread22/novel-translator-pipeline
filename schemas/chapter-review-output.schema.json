@@ -8,6 +8,11 @@
           "title": "Id",
           "type": "string"
         },
+        "fix_id": {
+          "default": "",
+          "title": "Fix Id",
+          "type": "string"
+        },
         "decision": {
           "default": "FIX_REQUIRED",
           "enum": [
@@ -39,6 +44,28 @@
           "default": "",
           "title": "Reason",
           "type": "string"
+        },
+        "source_fragment": {
+          "default": "",
+          "title": "Source Fragment",
+          "type": "string"
+        },
+        "current_fragment": {
+          "default": "",
+          "title": "Current Fragment",
+          "type": "string"
+        },
+        "proposed_fragment": {
+          "default": "",
+          "title": "Proposed Fragment",
+          "type": "string"
+        },
+        "composed_fix_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Composed Fix Ids",
+          "type": "array"
         },
         "replacement": {
           "default": "",

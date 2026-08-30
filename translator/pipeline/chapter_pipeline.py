@@ -59,8 +59,10 @@ from translator.review.reviewer import (
     has_hangul,
     has_japanese_kana,
     has_target_script_residue,
+    compose_approved_fixes,
     missing_checked_ids,
     run_chapter_review,
+    unique_writeback_fixes,
     validate_chapter_review_payload,
     review_report_counts,
 )
@@ -1077,6 +1079,8 @@ class IterativePipeline:
             current_translations=fresh_translations,
             source_texts=fresh_sources,
         )
+        if self.review_apply_enabled:
+            gate_results = compose_approved_fixes(gate_results, fresh_translations)
         if not self.review_apply_enabled:
             for item in gate_results:
                 if item.get("apply_reason") == "gate_passed":
@@ -1091,13 +1095,13 @@ class IterativePipeline:
         review["fixes"] = gate_results
         fixes = [item for item in gate_results if item.get("apply_reason") == "gate_passed"]
         fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
-        write_json(fixes_path, {"book": self.book, "items": fixes})
+        write_json(fixes_path, {"book": self.book, "items": unique_writeback_fixes(fixes)})
         applied_fixes: Any = False
         remaining_kana: list[str] = []
         if self.review_apply_enabled:
             if fixes:
                 self._checkpoint()
-                replacement_fixes = [item for item in fixes if item.get("operation", "replace") != "clear"]
+                replacement_fixes = [item for item in unique_writeback_fixes(fixes) if item.get("operation", "replace") != "clear"]
                 clear_fixes: list[dict[str, Any]] = []  # clear is disabled by the shared gate
                 write_error: Exception | None = None
                 try:

@@ -14,6 +14,11 @@ CHAPTER_SCHEMA = ROOT / "schemas" / "chapter-review-output.schema.json"
 GLOBAL_SCHEMA = ROOT / "schemas" / "global-consistency-output.schema.json"
 
 
+def normalize_target_punctuation(text: str) -> str:
+    """Normalize Japanese middle-dot punctuation to the Chinese target glyph."""
+    return text.replace("・", "·")
+
+
 def provider_block_reason(text: str) -> str:
     lowered = text.casefold()
     if any(marker in lowered for marker in (

@@ -9,6 +9,7 @@ from translator.review.reviewer import (
     has_japanese_kana,
     has_masking_symbol,
     has_target_script_residue,
+    normalize_target_punctuation,
     validate_chapter_review_payload,
     verify_applied_fixes,
 )
@@ -21,6 +22,8 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertFalse(has_japanese_kana("空姐·夕子与可奈子"))
         self.assertFalse(has_japanese_kana("空乘·夕子与可奈子"))
         self.assertFalse(has_japanese_kana("永井龙儿"))
+        self.assertFalse(has_japanese_kana("中文・标题"))
+        self.assertEqual(normalize_target_punctuation("嫂子・玲子"), "嫂子·玲子")
 
     def test_reject_hallucinated_kana_policy_violation_when_text_is_pure_chinese(self) -> None:
         current_translations = {

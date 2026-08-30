@@ -12,6 +12,7 @@ from translator.glossary.projection import build_translation_term_projection, se
 from translator.providers.base import (
     extract_json_object,
     normalize_item_ids,
+    normalize_target_punctuation,
     normalized_text,
     parse_translation_items,
     previous_context_overlap,
@@ -230,7 +231,7 @@ class ProviderTranslator:
         manifest = _load_json(self.manifest, {})
         by_id = {str(item.get("id")): item for chapter in manifest.get("chapters", []) for item in chapter.get("paragraphs", [])}
         for item in items:
-            text = item["text"].strip()
+            text = normalize_target_punctuation(item["text"].strip())
             if not text:
                 return {"status": "error", "provider": provider, "reason": "empty_translation", "id": item["id"]}
             by_id[item["id"]]["translated"] = text

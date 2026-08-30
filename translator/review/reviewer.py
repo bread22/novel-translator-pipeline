@@ -27,6 +27,7 @@ from translator.providers.errors import (
     ProviderResponseError,
     ProviderTimeoutError,
 )
+from translator.providers.base import normalize_target_punctuation
 from translator.review.models import ChapterReviewOutput, GlobalReviewOutput
 from translator.review.context_budget import (
     ReviewContextBudget,
@@ -65,7 +66,9 @@ class ReviewValidationError(ValueError):
 import re
 import hashlib
 
-JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+# U+30FB (・) is punctuation, not kana. Exclude it while retaining the
+# surrounding katakana ranges so translated Chinese titles are not rejected.
+JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30fa\u30fc-\u30ff]")
 HANGUL_REGEX = re.compile(r"[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]")
 MASKING_SYMBOL_REGEX = re.compile(r"[○●×＊※□]")
 ASCII_WORD_REGEX = re.compile(r"(?<![A-Za-z])[A-Za-z]{2,}(?![A-Za-z])")
@@ -148,7 +151,9 @@ def evaluate_apply_gate(
         item_id = str(item.get("id", ""))
         operation = str(item.get("operation", "replace") or "replace")
         is_clear = operation == "clear"
-        replacement = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
+        replacement = normalize_target_punctuation(
+            str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
+        )
         is_new_contract = "category" in item or "replacement" in item
         current_text = str(current_translations.get(item_id, "")) if current_translations else ""
         item.setdefault("decision", "FIX_REQUIRED")

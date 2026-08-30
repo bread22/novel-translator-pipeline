@@ -53,6 +53,7 @@ class PipelineFunctionTests(unittest.TestCase):
             {"id": "same", "source": "第一章・兄嫁", "translated": "第一章・兄嫁"},
             {"id": "kana", "source": "本文", "translated": "本文かな"},
             {"id": "name", "source": "嶋悦史", "translated": "嶋悦史"},
+            {"id": "mask", "source": "＊ ＊\n＊ ＊", "translated": "＊ ＊\n＊ ＊"},
             {"id": "done", "source": "原文", "translated": "译文"},
         ]}
         self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same", "kana"})

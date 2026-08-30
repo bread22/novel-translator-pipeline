@@ -341,6 +341,12 @@ class IterativePipeline:
         # providers commonly preserve proper names, while the Reviewer can use
         # glossary/metadata evidence to decide whether transliteration is needed.
         copied = bool(source) and translated == source
+        # Standalone censorship marks are content, not untranslated language.
+        # Preserve them when the provider returns the same mask instead of
+        # retrying the paragraph forever.
+        masking_only = bool(re.fullmatch(r"[\s○●×＊※□]+", source))
+        if copied and masking_only:
+            return False
         name_like = bool(re.fullmatch(r"[\u3400-\u9fff]{2,8}", source))
         return copied and not name_like
 

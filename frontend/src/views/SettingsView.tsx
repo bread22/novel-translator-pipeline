@@ -246,6 +246,25 @@ export const SettingsView: React.FC = () => {
     });
   };
 
+  const currentReviewerFallbacks = config?.roles?.fallback_reviewers || [];
+
+  const handleSetReviewerFallback = (index: number, providerName: string) => {
+    if (!config) return;
+    const newFallbacks = [...currentReviewerFallbacks];
+    if (providerName) {
+      newFallbacks[index] = providerName;
+    } else if (index < newFallbacks.length) {
+      newFallbacks.splice(index, 1);
+    }
+    setConfig({
+      ...config,
+      roles: {
+        ...config.roles,
+        fallback_reviewers: newFallbacks.filter(Boolean),
+      },
+    });
+  };
+
   // Provider modification
   const handleUpdateProvider = (providerId: string, field: string, value: any) => {
     if (!config || !config.providers || !config.providers[providerId]) return;
@@ -689,6 +708,48 @@ export const SettingsView: React.FC = () => {
                     )}
                   </div>
                 </div>
+
+                {/* Reviewer Fallback Chain */}
+                <div className="pt-4 border-t border-[#E5E0D8] space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <label className="text-xs font-serif font-bold text-[#1A1A1A] block">
+                        审阅备用链 (Reviewer Fallback)
+                      </label>
+                      <p className="text-[11px] text-[#666666] font-sans">
+                        主审重试耗尽后按顺序切换；与双审阅模式独立，关闭双审阅后仍然生效
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-mono text-[#888888]">
+                      {currentReviewerFallbacks.length} 个备用端
+                    </span>
+                  </div>
+
+                  {[
+                    ...currentReviewerFallbacks,
+                    '',
+                  ].map((providerName, index) => (
+                    <div key={`reviewer-fallback-${index}`} className="flex items-center gap-2">
+                      <label htmlFor={`reviewer-fallback-${index}`} className="w-24 shrink-0 text-[11px] text-[#666666] font-serif">
+                        备用审阅 #{index + 1}
+                      </label>
+                      <select
+                        id={`reviewer-fallback-${index}`}
+                        aria-label={`备用审阅 #${index + 1}`}
+                        value={providerName}
+                        onChange={(e) => handleSetReviewerFallback(index, e.target.value)}
+                        className="w-full bg-white border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                      >
+                        <option value="">{index < currentReviewerFallbacks.length ? '-- 移除备用端 --' : '-- 添加备用端 --'}</option>
+                        {providersList.map((p) => (
+                          <option key={p} value={p}>
+                            {p} ({config.providers?.[p]?.model || config.providers?.[p]?.type})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Section 3: Chapter Knowledge Extractor */}
@@ -866,6 +927,11 @@ export const SettingsView: React.FC = () => {
                             {isReviewer && (
                               <span className="px-2 py-0.5 rounded-sm text-[10px] font-medium bg-purple-50 text-purple-800 border border-purple-200">
                                 一致性主审
+                              </span>
+                            )}
+                            {currentReviewerFallbacks.includes(pId) && (
+                              <span className="px-2 py-0.5 rounded-sm text-[10px] font-medium bg-violet-50 text-violet-800 border border-violet-200">
+                                审阅备用 #{currentReviewerFallbacks.indexOf(pId) + 1}
                               </span>
                             )}
                           </div>

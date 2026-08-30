@@ -59,6 +59,47 @@ def test_runtime_memory_write_normalizes_legacy_fields() -> None:
     assert "characters" not in memory
 
 
+def test_runtime_memory_canonicalizes_categories_names_relations_and_residue() -> None:
+    memory, first = merge_memory_delta(
+        {"entries": []},
+        {"add": [{
+            "key": "大塚仁美",
+            "value": "人物简介",
+            "category": "character_profile",
+            "confidence": 0.95,
+        }, {
+            "key": "明彦—玲子关系",
+            "value": "玲子是明彦的妻子",
+            "category": "relationship_graph",
+            "confidence": 0.95,
+        }, {
+            "key": "日文残留",
+            "value": "ビニ本",
+            "category": "character",
+            "confidence": 0.95,
+        }]},
+        "c1",
+    )
+    assert first["added"] == 2 and first["rejected"] == 1
+    assert {item["category"] for item in memory["entries"]} == {"character", "relationship"}
+    assert memory["entries"][0]["key"] == "大冢仁美"
+    assert memory["entries"][0]["aliases"] == ["大塚仁美"]
+    assert memory["entries"][1]["entity_ids"] == ["明彦", "玲子"]
+
+    memory, second = merge_memory_delta(
+        memory,
+        {"add": [{
+            "key": "玲子—明彦关系",
+            "value": "玲子是明彦的妻子",
+            "category": "relationship",
+            "confidence": 0.95,
+        }]},
+        "c2",
+    )
+    assert second["added"] == 0 and second["updated"] == 1
+    assert len(memory["entries"]) == 2
+
+
 def test_review_migration_validates_before_write_and_preserves_invalid(tmp_path: Path) -> None:
     valid = tmp_path / "c1-output.json"
     invalid = tmp_path / "c2-output.json"

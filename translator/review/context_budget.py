@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 from translator.providers.base import build_review_prompt
@@ -193,7 +194,7 @@ def _contains(haystack: str, needle: Any) -> bool:
 
 def _aliases(item: dict[str, Any]) -> list[str]:
     result: list[str] = []
-    for key in ("source", "target", "canonical_name", "name", "key", "entity_id"):
+    for key in ("source", "target", "canonical_name", "name", "key", "value", "entity_id"):
         if item.get(key):
             result.append(str(item[key]))
     for key in ("aliases", "alias", "entities", "entity_ids", "people", "locations", "organizations"):
@@ -202,7 +203,17 @@ def _aliases(item: dict[str, Any]) -> list[str]:
             result.append(raw)
         elif isinstance(raw, list):
             result.extend(str(value) for value in raw if value)
-    return list(dict.fromkeys(result))
+    expanded: list[str] = []
+    for value in result:
+        value = str(value).strip()
+        if not value:
+            continue
+        expanded.append(value)
+        for part in re.split(r"[—\-↔→/、,，:：;；]|(?:以及|与|和|及)", value):
+            part = re.sub(r"(?:的)?关系$", "", part).strip()
+            if part and part != value:
+                expanded.append(part)
+    return list(dict.fromkeys(expanded))
 
 
 def _compact_entry(item: dict[str, Any], *, memory: bool = False) -> dict[str, Any]:
@@ -423,6 +434,13 @@ def build_budgeted_review_context(
     )
     memory = [fact.value for fact in memory_index.facts]
     _entries, conflicts, timeline = _memory_collections(authoritative_memory)
+    scene_text = target_text + local_text
+    matched_memory_aliases: list[str] = []
+    for raw in memory:
+        for alias in _aliases(raw):
+            if len(alias) >= 1 and _contains(scene_text, alias):
+                matched_memory_aliases.append(alias)
+    scene_entities = list(dict.fromkeys([*scene_entities, *matched_memory_aliases]))
     direct_memory_entities: set[str] = set(scene_entities)
     for raw in memory:
         aliases = _aliases(raw)

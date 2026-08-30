@@ -138,6 +138,29 @@ def test_speaker_metadata_promotes_identity_fact_without_name_in_text() -> None:
     assert diagnostics["required_reason_counts"]["speaker_identity"] == 1
 
 
+def test_memory_retrieval_derives_scene_entities_from_current_text() -> None:
+    _snapshot, diagnostics, payload = build_budgeted_review_context(
+        {
+            "translation_policy": "政策",
+            "glossary": [],
+            "book_memory": {"entries": [{
+                "key": "明彦—玲子关系",
+                "value": "玲子是明彦的妻子",
+                "category": "relationship",
+                "confidence": 0.95,
+            }]},
+        },
+        items=[item("p1", "明彦回到家里", "明彦回到家里")],
+        budget={"enabled": True, "operational_input_hard_limit_chars": 50_000},
+        schema_path=SCHEMA,
+    )
+
+    assert diagnostics["scene_entity_signal_insufficient"] is False
+    assert "明彦" in diagnostics["scene_entities"]
+    assert payload["book_memory"]["entries"][0]["key"] == "明彦—玲子关系"
+    assert diagnostics["required_reason_counts"]["active_relationship"] == 1
+
+
 def test_required_overflow_splits_target_then_stops_at_one_paragraph() -> None:
     authoritative = {
         "translation_policy": "政策",

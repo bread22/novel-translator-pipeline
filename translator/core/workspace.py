@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 from translator.glossary.lifecycle import merge_term_candidates
 from translator.glossary.projection import build_translation_term_projection
+from translator.script_residue import JAPANESE_KANA_REGEX
 
 fcntl: ModuleType | None
 try:
@@ -373,46 +374,150 @@ def empty_book_memory(book: str = "") -> dict[str, Any]:
     }
 
 
+MEMORY_CATEGORY_ALIASES = {
+    "character": "character",
+    "character_background": "character",
+    "character_profile": "character",
+    "character_setting": "character",
+    "character_attribute": "character",
+    "person": "character",
+    "role": "character",
+    "relationship": "relationship",
+    "relationship_graph": "relationship",
+    "relation": "relationship",
+    "event": "event",
+    "timeline": "event",
+    "location": "location",
+    "place": "location",
+    "setting": "fact",
+    "world_setting": "fact",
+    "fact": "fact",
+}
+MEMORY_NAME_CHAR_MAP = str.maketrans({"塚": "冢", "塚": "冢"})
+MEMORY_RELATION_RE = re.compile(r"^\s*(.+?)\s*[—\-↔→]\s*(.+?)\s*(?:关系|的关系)?\s*$")
+MEMORY_RELATION_SUFFIX_RE = re.compile(r"(?:的)?关系$")
+
+
+def canonical_memory_category(value: Any) -> str:
+    raw = str(value or "fact").strip().casefold()
+    return MEMORY_CATEGORY_ALIASES.get(raw, raw if raw in {"character", "relationship", "event", "location", "fact"} else "fact")
+
+
+def canonical_memory_key(key: Any, category: Any) -> tuple[str, list[str]]:
+    raw = re.sub(r"\s+", " ", str(key or "").strip())
+    canonical_category_value = canonical_memory_category(category)
+    if canonical_category_value == "character":
+        canonical = raw.translate(MEMORY_NAME_CHAR_MAP)
+        return canonical, [raw] if raw and raw != canonical else []
+    if canonical_category_value == "relationship":
+        match = MEMORY_RELATION_RE.match(raw)
+        if match:
+            left = MEMORY_RELATION_SUFFIX_RE.sub("", match.group(1)).strip()
+            right = MEMORY_RELATION_SUFFIX_RE.sub("", match.group(2)).strip()
+            if left and right:
+                parts = sorted({left.translate(MEMORY_NAME_CHAR_MAP), right.translate(MEMORY_NAME_CHAR_MAP)})
+                canonical = f"{parts[0]}—{parts[1]}关系"
+                aliases = [raw] if raw != canonical else []
+                return canonical, aliases
+    return raw, []
+
+
+def _effective_memory_category(key: Any, category: Any) -> str:
+    normalized = canonical_memory_category(category)
+    if normalized == "character" and MEMORY_RELATION_RE.match(str(key or "").strip()):
+        return "relationship"
+    return normalized
+
+
+def _contains_japanese_kana(value: Any) -> bool:
+    return bool(JAPANESE_KANA_REGEX.search(str(value or "")))
+
+
+def _normalize_memory_record(raw: Any, *, default_category: str = "fact") -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    category = _effective_memory_category(raw.get("key", ""), raw.get("category", default_category))
+    key, aliases = canonical_memory_key(raw.get("key", ""), category)
+    value = re.sub(r"\s+", " ", str(raw.get("value", "")).strip())
+    if not key or not value or _contains_japanese_kana(key) or _contains_japanese_kana(value):
+        return None
+    existing_aliases = raw.get("aliases", [])
+    if isinstance(existing_aliases, str):
+        existing_aliases = [existing_aliases]
+    alias_values = [
+        str(item).strip() for item in existing_aliases
+        if str(item).strip()
+    ] if isinstance(existing_aliases, list) else []
+    all_aliases = list(dict.fromkeys([*alias_values, *aliases]))
+    result = {
+        key_name: value_data
+        for key_name, value_data in raw.items()
+        if key_name not in {"key", "value", "category", "aliases", "entity_ids"}
+    }
+    result.update({"key": key, "value": value, "category": category})
+    if all_aliases:
+        result["aliases"] = all_aliases
+    if category == "character":
+        result["entity_ids"] = list(dict.fromkeys([key, *all_aliases]))
+    elif category == "relationship":
+        match = MEMORY_RELATION_RE.match(key)
+        if match:
+            result["entity_ids"] = sorted({match.group(1).strip(), match.group(2).strip()})
+    return result
+
+
 def normalize_book_memory_v2(memory: dict[str, Any], book: str = "") -> tuple[dict[str, Any], dict[str, int]]:
     """Convert legacy character/world-setting collections to the canonical entry list."""
     current = memory if isinstance(memory, dict) else {}
-    entries = [dict(item) for item in current.get("entries", []) if isinstance(item, dict)]
+    entries: list[dict[str, Any]] = []
     conflicts = [dict(item) for item in current.get("conflicts", []) if isinstance(item, dict)]
-    by_key = {str(item.get("key", "")).strip(): item for item in entries if str(item.get("key", "")).strip()}
+    by_key: dict[str, dict[str, Any]] = {}
     added = modified = conflicted = 0
 
-    def ingest(raw: Any, *, category: str, key_field: str, value_field: str) -> None:
+    def ingest_entry(raw: Any, *, default_category: str = "fact", count_added: bool = True) -> None:
         nonlocal added, modified, conflicted
+        normalized_entry = _normalize_memory_record(raw, default_category=default_category)
+        if normalized_entry is None:
+            return
+        key = str(normalized_entry["key"])
+        existing = by_key.get(key)
+        if existing is None:
+            entries.append(normalized_entry)
+            by_key[key] = normalized_entry
+            if count_added:
+                added += 1
+        elif str(existing.get("value", "")) != str(normalized_entry.get("value", "")):
+            conflicts.append({
+                "key": key,
+                "existing_value": str(existing.get("value", "")),
+                "proposed_value": str(normalized_entry.get("value", "")),
+                "note": "memory key normalization conflict",
+            })
+            conflicted += 1
+        else:
+            existing["aliases"] = list(dict.fromkeys([
+                *(existing.get("aliases", []) if isinstance(existing.get("aliases", []), list) else []),
+                *(normalized_entry.get("aliases", []) if isinstance(normalized_entry.get("aliases", []), list) else []),
+            ]))
+            modified += 1
+
+    def ingest(raw: Any, *, category: str, key_field: str, value_field: str) -> None:
         if not isinstance(raw, dict):
             return
-        key = str(raw.get(key_field, "")).strip()
-        value = str(raw.get(value_field, "")).strip()
-        if not key or not value:
-            return
         candidate = {
-            "key": key,
-            "value": value,
-            "category": str(raw.get("category") or category),
+            **raw,
+            "key": raw.get(key_field, ""),
+            "value": raw.get(value_field, ""),
+            "category": raw.get("category") or category,
             "note": str(raw.get("note") or raw.get("role") or ""),
             "confidence": float(raw.get("confidence", 1.0)),
             "first_seen_chapter": raw.get("first_seen") or raw.get("first_seen_chapter") or "",
             "last_seen_chapter": raw.get("last_seen") or raw.get("last_seen_chapter") or "",
         }
-        existing = by_key.get(key)
-        if existing is None:
-            entries.append(candidate)
-            by_key[key] = candidate
-            added += 1
-        elif str(existing.get("value", "")) != value:
-            conflicts.append({
-                "key": key,
-                "existing_value": str(existing.get("value", "")),
-                "proposed_value": value,
-                "note": "legacy memory migration conflict",
-            })
-            conflicted += 1
-        else:
-            modified += 1
+        ingest_entry(candidate, default_category=category)
+
+    for entry in current.get("entries", []) if isinstance(current.get("entries"), list) else []:
+        ingest_entry(entry, count_added=False)
 
     for character in current.get("characters", []) if isinstance(current.get("characters"), list) else []:
         ingest(character, category="character", key_field="name", value_field="summary")
@@ -425,7 +530,7 @@ def normalize_book_memory_v2(memory: dict[str, Any], book: str = "") -> tuple[di
         "book": str(current.get("book") or book),
         "entries": sorted(entries, key=lambda item: str(item.get("key", ""))),
         "conflicts": conflicts,
-        "timeline": list(current.get("timeline", [])) if isinstance(current.get("timeline"), list) else [],
+        "timeline": [item for item in current.get("timeline", []) if not _contains_japanese_kana(item)] if isinstance(current.get("timeline"), list) else [],
         "chapter_states": list(current.get("chapter_states", [])) if isinstance(current.get("chapter_states"), list) else [],
         "updated_at": str(current.get("updated_at") or utc_now()),
     }
@@ -461,10 +566,11 @@ def merge_memory_delta(
             if not isinstance(raw, dict):
                 rejected += 1
                 continue
-            key = str(raw.get("key", "")).strip()
-            value = str(raw.get("value", "")).strip()
+            category = _effective_memory_category(raw.get("key", ""), raw.get("category", "fact"))
+            key, aliases = canonical_memory_key(raw.get("key", ""), category)
+            value = re.sub(r"\s+", " ", str(raw.get("value", "")).strip())
             confidence = float(raw.get("confidence", 0) or 0)
-            if not key or not value or confidence < threshold:
+            if not key or not value or confidence < threshold or _contains_japanese_kana(key) or _contains_japanese_kana(value):
                 rejected += 1
                 continue
             existing = by_key.get(key)
@@ -483,12 +589,20 @@ def merge_memory_delta(
                 existing = {
                     "key": key,
                     "value": value,
-                    "category": str(raw.get("category", "fact")).strip() or "fact",
+                    "category": category,
                     "note": str(raw.get("note", "")).strip(),
                     "confidence": confidence,
                     "first_seen_chapter": chapter_id,
                     "last_seen_chapter": chapter_id,
                 }
+                if aliases:
+                    existing["aliases"] = aliases
+                if category == "character":
+                    existing["entity_ids"] = list(dict.fromkeys([key, *aliases]))
+                elif category == "relationship":
+                    match = MEMORY_RELATION_RE.match(key)
+                    if match:
+                        existing["entity_ids"] = sorted({match.group(1).strip(), match.group(2).strip()})
                 entries.append(existing)
                 by_key[key] = existing
                 added += 1

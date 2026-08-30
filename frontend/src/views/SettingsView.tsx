@@ -43,6 +43,7 @@ export const SettingsView: React.FC = () => {
   const [newBaseUrl, setNewBaseUrl] = useState('https://api.deepseek.com/v1');
   const [newModel, setNewModel] = useState('deepseek-chat');
   const [newApiKey, setNewApiKey] = useState('');
+  const [newExecutablePath, setNewExecutablePath] = useState('');
   const [newTemperature, setNewTemperature] = useState(0.3);
   const [newContextTokens, setNewContextTokens] = useState(32768);
 
@@ -289,6 +290,7 @@ export const SettingsView: React.FC = () => {
   const handleAddProviderSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProviderId.trim()) return;
+    if (newProviderType !== 'openai' && !newExecutablePath.trim()) return;
 
     const id = newProviderId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
     const providerObj: any = {
@@ -303,16 +305,17 @@ export const SettingsView: React.FC = () => {
       providerObj.context_tokens = newContextTokens;
       providerObj.timeout = 600;
     } else if (newProviderType === 'antigravity') {
-      providerObj.agy = 'agy';
+      providerObj.agy = newExecutablePath.trim();
       providerObj.effort = 'low';
       providerObj.timeout = 600;
       providerObj.concurrency = 1;
       providerObj.context_tokens = 1048576;
     } else if (newProviderType === 'opencode') {
-      providerObj.binary = 'opencode';
+      providerObj.binary = newExecutablePath.trim();
       providerObj.agent = '';
       providerObj.timeout = 600;
     } else if (newProviderType === 'codex') {
+      providerObj.binary = newExecutablePath.trim();
       providerObj.timeout = 600;
     }
 
@@ -327,6 +330,7 @@ export const SettingsView: React.FC = () => {
     setShowAddProviderModal(false);
     setNewProviderId('');
     setNewApiKey('');
+    setNewExecutablePath('');
   };
 
   const selectedPrompt = prompts.find((p) => p.id === selectedPromptId);
@@ -905,6 +909,29 @@ export const SettingsView: React.FC = () => {
                             </div>
                           )}
 
+                          {/* Executable path (local CLI providers) */}
+                          {p.type !== 'openai' && ['antigravity', 'codex', 'opencode'].includes(p.type) && (
+                            <div>
+                              <label className="text-[#666666] block mb-1 font-medium font-serif">
+                                可执行文件绝对路径 ({p.type === 'antigravity' ? 'agy' : 'binary'})
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                pattern="/.+"
+                                title="请输入以 / 开头的可执行文件绝对路径"
+                                value={(p.type === 'antigravity' ? p.agy : p.binary) || ''}
+                                onChange={(e) => handleUpdateProvider(
+                                  pId,
+                                  p.type === 'antigravity' ? 'agy' : 'binary',
+                                  e.target.value,
+                                )}
+                                placeholder={`/absolute/path/to/${p.type === 'antigravity' ? 'agy' : p.type}`}
+                                className="w-full bg-white border border-[#E5E0D8] rounded-sm p-2 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                              />
+                            </div>
+                          )}
+
                           {/* API Key (if openai type) */}
                           {p.type === 'openai' && (
                             <div>
@@ -1281,8 +1308,12 @@ export const SettingsView: React.FC = () => {
               <div>
                 <label className="text-[#4A4A4A] block mb-1 font-medium font-serif">Provider 类型</label>
                 <select
+                  aria-label="Provider 类型"
                   value={newProviderType}
-                  onChange={(e) => setNewProviderType(e.target.value)}
+                  onChange={(e) => {
+                    setNewProviderType(e.target.value);
+                    setNewExecutablePath('');
+                  }}
                   className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-[#1A1A1A] focus:outline-none focus:border-[#1D4ED8]"
                 >
                   <option value="openai">OpenAI 兼容 API (DeepSeek / SiliconFlow / LM Studio / Ollama 等)</option>
@@ -1319,6 +1350,29 @@ export const SettingsView: React.FC = () => {
                     />
                   </div>
                 </>
+              )}
+
+              {newProviderType !== 'openai' && (
+                <div>
+                  <label className="text-[#4A4A4A] block mb-1 font-medium font-serif">
+                    可执行文件绝对路径 ({newProviderType === 'antigravity' ? 'agy' : 'binary'})
+                  </label>
+                  <input
+                    aria-label={`可执行文件绝对路径 (${newProviderType === 'antigravity' ? 'agy' : 'binary'})`}
+                    type="text"
+                    required
+                    pattern="/.+"
+                    title="请输入以 / 开头的可执行文件绝对路径"
+                    autoComplete="off"
+                    placeholder={`/absolute/path/to/${newProviderType === 'antigravity' ? 'agy' : newProviderType}`}
+                    value={newExecutablePath}
+                    onChange={(e) => setNewExecutablePath(e.target.value)}
+                    className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                  />
+                  <p className="mt-1 text-[10px] text-[#888888]">
+                    请填写本机 CLI 的完整路径；不要只填写命令名。
+                  </p>
+                </div>
               )}
 
               <div>

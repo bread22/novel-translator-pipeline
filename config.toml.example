@@ -1,0 +1,206 @@
+[paths]
+output_root = "output"
+translation_policy = "docs/prompts/france-shoin-90s-classic.md"
+
+[roles]
+primary_translator = "nemotron"
+fallback_translators = [
+    "deepseek-original",
+    "gemini_lite",
+]
+fallback_translator = "deepseek-original"
+secondary_fallback_translator = "gemini_lite"
+reviewer = "nemotron"
+secondary_reviewer = "nemotron-3-super"
+dual_review = false
+fallback_reviewers = []
+
+[providers.nemotron]
+type = "openai"
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "nvidia/nemotron-3-ultra-550b-a55b"
+context_tokens = 131072
+timeout = 600
+thinking = false
+api_key = "$NVIDIA_API_KEY"
+
+[providers.nemotron.chat_template_kwargs]
+thinking = false
+enable_thinking = false
+
+[providers.gemini_lite]
+type = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-3.5-flash-lite"
+context_tokens = 1048576
+timeout = 600
+api_key = "$GEMINI_API_KEY"
+
+[providers.deepseek]
+type = "openai"
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "deepseek-ai/deepseek-v4-flash-0731"
+context_tokens = 131072
+timeout = 600
+api_key = "$NVIDIA_API_KEY"
+
+[providers.lmstudio]
+type = "openai"
+base_url = "http://127.0.0.1:1234/v1"
+model = "murasaki-14b-v0.2"
+context_tokens = 8192
+timeout = 600
+api_key = "lm-studio"
+
+[providers.antigravity]
+type = "antigravity"
+agy = "/absolute/path/to/agy"
+model = "gemini-3.7-flash"
+effort = "low"
+timeout = 600
+concurrency = 1
+context_tokens = 1048576
+
+[providers.gemini]
+type = "antigravity"
+agy = "/absolute/path/to/agy"
+model = "gemini-3.7-flash"
+effort = "low"
+timeout = 600
+concurrency = 1
+context_tokens = 1048576
+
+[providers.opencode]
+type = "opencode"
+binary = "/absolute/path/to/opencode"
+model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
+
+[providers.opencode_reviewer]
+type = "opencode"
+binary = "/absolute/path/to/opencode"
+model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
+
+[providers.codex]
+type = "codex"
+binary = "/absolute/path/to/codex"
+model = ""
+timeout = 600
+
+[providers.hy3]
+type = "opencode"
+binary = "/absolute/path/to/opencode"
+model = "opencode/hy3-free"
+agent = ""
+timeout = 600
+
+[providers.mimo]
+type = "opencode"
+binary = "/absolute/path/to/opencode"
+model = "opencode/mimo-v2.5-free"
+agent = ""
+timeout = 600
+
+[providers.muse]
+type = "opencode"
+binary = "/absolute/path/to/opencode"
+model = "opencode/muse-spark-1.2-contributor-free"
+agent = ""
+timeout = 600
+
+[providers.online_api]
+type = "openai"
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "deepseek-ai/deepseek-v4-flash-0731"
+context_tokens = 131072
+timeout = 600
+api_key = "$ONLINE_API_API_KEY"
+
+[providers.nemotron-3-super]
+type = "openai"
+model = "nvidia/nemotron-3-super-120b-a12b"
+base_url = "https://integrate.api.nvidia.com/v1"
+temperature = 0.3
+context_tokens = 1000000
+timeout = 600
+thinking = false
+api_key = "$NVIDIA_API_KEY"
+
+[providers.nemotron-3-super.chat_template_kwargs]
+thinking = false
+enable_thinking = false
+
+[providers.deepseek-original]
+type = "openai"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com"
+temperature = 0.3
+context_tokens = 1000000
+timeout = 600
+api_key = "$DEEPSEEK_API_KEY"
+
+[knowledge_extractor]
+enabled = true
+provider = "gemini_lite"
+model = ""
+credential_ref = ""
+temperature = 0.2
+max_output_tokens = 2048
+request_timeout = 300
+input_hard_limit_chars = 30000
+
+[pipeline]
+max_cycles = 1000
+max_chapter_batches = 1000
+primary_batch_max_chars = 1500
+max_provider_split_depth = 2
+split_on_content_filter = false
+translation_max_tokens = 8192
+health_check_timeout = 120
+layout = "horizontal"
+review_chunk_min_chars = 1000
+review_chunk_max_chars = 1500
+review_context_before = 3
+review_context_after = 3
+review_backtrack_enabled = true
+review_backtrack_min_confidence = 0.8
+transient_http_retries = 3
+transient_backoff_min_seconds = 10
+transient_backoff_max_seconds = 20
+transient_backoff_multiplier = 2
+transient_backoff_cap_seconds = 80
+timeout_retries = 1
+connection_retries = 2
+
+[pipeline.review_context]
+enabled = true
+budget_version = "review-context-v2"
+selector_version = "review-selector-v1"
+operational_input_hard_limit_chars = 50000
+background_soft_limit_chars = 30000
+operational_headroom_chars = 2000
+local_context_soft_chars = 8000
+glossary_soft_chars = 8000
+memory_soft_chars = 14000
+state_soft_chars = 4000
+book_summary_soft_chars = 1500
+known_hits_soft_chars = 4000
+recent_evidence_chapters = 3
+entity_relation_hops = 1
+max_global_critical_facts = 8
+
+[queue]
+source_root = "source"
+max_cycles = 1000
+apply = true
+autonomous = true
+finalize = true
+stop_on_error = false
+layout = "horizontal"
+[pipeline.review_apply]
+mode = "hard_fix" # report_only | hard_fix
+style_auto_apply = false
+minimum_confidence = 0.90

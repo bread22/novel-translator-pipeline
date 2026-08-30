@@ -30,25 +30,35 @@ class OpenCodeError(RuntimeError):
 
 def executable() -> str | None:
     config = load_config()
-    return shutil.which(setting(config, "providers.opencode.binary", "OPENCODE_BIN"))
+    try:
+        bin_path = setting(config, "providers.opencode.binary", "OPENCODE_BIN")
+    except KeyError:
+        bin_path = os.environ.get("OPENCODE_BIN", "opencode")
+    return shutil.which(bin_path) if bin_path else shutil.which("opencode")
 
 
 def model_for(role: str) -> str:
     role_key = role.upper().replace("-", "_")
-    config = load_config()
     env_name = f"OPENCODE_{role_key}_MODEL"
     if env_name in os.environ:
         return os.environ[env_name].strip()
-    return setting(config, "providers.opencode.model", "OPENCODE_MODEL").strip()
+    config = load_config()
+    try:
+        return str(setting(config, "providers.opencode.model", "OPENCODE_MODEL")).strip()
+    except KeyError:
+        return os.environ.get("OPENCODE_MODEL", "").strip()
 
 
 def _agent_for(role: str) -> str:
     role_key = role.upper().replace("-", "_")
-    config = load_config()
     env_name = f"OPENCODE_{role_key}_AGENT"
     if env_name in os.environ:
         return os.environ[env_name].strip()
-    return setting(config, "providers.opencode.agent", "OPENCODE_AGENT").strip()
+    config = load_config()
+    try:
+        return str(setting(config, "providers.opencode.agent", "OPENCODE_AGENT")).strip()
+    except KeyError:
+        return os.environ.get("OPENCODE_AGENT", "").strip()
 
 
 def _event_text(stdout: str) -> str:
@@ -194,7 +204,7 @@ class OpenCodeProvider(BaseProvider):
         self.agent = str(config.get("agent", ""))
         self.timeout = int(config.get("timeout", 600))
 
-    def health_check(self, timeout: int = 5) -> dict[str, Any]:
+    def health_check(self, timeout: int = 10) -> dict[str, Any]:
         eff_model = self.model or model_for("reviewer") or "(configured default)"
         try:
             raw = run_prompt(
@@ -203,7 +213,7 @@ class OpenCodeProvider(BaseProvider):
                 timeout=timeout,
                 model=self.model or None,
                 binary=self.binary or None,
-                agent=self.agent or None,
+                agent=self.agent,
                 max_retries=1,
             )
             payload = parse_json_object(raw)
@@ -251,7 +261,7 @@ class OpenCodeProvider(BaseProvider):
                 timeout=timeout or self.timeout,
                 model=self.model or None,
                 binary=self.binary or None,
-                agent=self.agent or None,
+                agent=self.agent,
             )
         except OpenCodeError as exc:
             return [], {
@@ -297,7 +307,7 @@ class OpenCodeProvider(BaseProvider):
                     timeout=timeout or self.timeout,
                     model=self.model or None,
                     binary=self.binary or None,
-                    agent=self.agent or None,
+                    agent=self.agent,
                 )
                 return parse_json_object(content)
             except Exception as exc:

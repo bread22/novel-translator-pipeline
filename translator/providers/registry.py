@@ -15,8 +15,16 @@ def get_provider(name: str, config: dict[str, Any] | None = None) -> BaseProvide
     cfg = config or load_config()
     providers = cfg.get("providers", {})
     if name not in providers:
-        raise ValueError(f"未在 config.toml 的 [providers] 中找到 provider: '{name}'")
-    p_config = dict(providers[name])
+        matching = [p_name for p_name, p_val in providers.items() if isinstance(p_val, dict) and p_val.get("type") == name]
+        if matching:
+            p_config = dict(providers[matching[0]])
+            name = matching[0]
+        elif name in {"opencode", "antigravity", "codex"}:
+            p_config = {"type": name}
+        else:
+            raise ValueError(f"未在 config.toml 的 [providers] 中找到 provider: '{name}'")
+    else:
+        p_config = dict(providers[name])
     p_type = str(p_config.get("type", "")).strip().casefold()
 
     if p_type in {"openai", "http"}:

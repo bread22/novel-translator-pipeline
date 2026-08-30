@@ -322,7 +322,7 @@ def run_system_preflight() -> PreflightResponse:
         role_desc = " / ".join(role_mapping.get(p_name, ["未分配"]))
         model_name = p_conf.get("model", "")
         t0 = time.time()
-        timeout = 12 if is_assigned else 3
+        timeout = 15 if is_assigned else (15 if p_type in {"antigravity", "opencode"} else 8)
         try:
             provider_inst = create_provider(p_name, config)
             check_res = provider_inst.health_check(timeout=timeout)

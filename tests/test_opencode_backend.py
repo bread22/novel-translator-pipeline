@@ -104,6 +104,30 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(mock_run.call_args.kwargs["model"], "opencode/muse-spark-1.2-contributor-free")
 
+    def test_custom_named_opencode_provider_health_and_resolution(self) -> None:
+        from translator.providers.opencode import OpenCodeProvider
+        from translator.providers.registry import get_provider
+
+        custom_cfg = {
+            "providers": {
+                "deepseek-opencode": {
+                    "type": "opencode",
+                    "binary": "opencode",
+                    "model": "deepseek-ai/deepseek-v3",
+                    "agent": "",
+                    "timeout": 60,
+                }
+            }
+        }
+        provider = get_provider("deepseek-opencode", custom_cfg)
+        self.assertIsInstance(provider, OpenCodeProvider)
+        with patch("translator.providers.opencode.run_prompt", return_value=json.dumps({"ok": True})) as mock_run:
+            res = provider.health_check(timeout=10)
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(mock_run.call_args.kwargs["model"], "deepseek-ai/deepseek-v3")
+        self.assertEqual(mock_run.call_args.kwargs["agent"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
+

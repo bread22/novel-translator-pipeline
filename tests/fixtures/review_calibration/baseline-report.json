@@ -1,0 +1,15 @@
+{
+  "manifest_sha256": "bac2ac3ed60c144facffa8b87ac886ae9ac74522fa632a1e9c8eb1a95a1fe747",
+  "original_report": {
+    "chapters": 9,
+    "paragraphs": 1349,
+    "findings": 1167,
+    "style_findings": 1130
+  },
+  "expected": {
+    "style_auto_writes": 0,
+    "below_threshold_auto_writes": 0,
+    "invalid_replacement_writes": 0,
+    "knowledge_unaccepted_projection": 0
+  }
+}

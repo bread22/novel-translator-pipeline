@@ -113,6 +113,15 @@
             "max_global_critical_facts": {"type": "integer", "minimum": 0}
           }
         },
+        "review_apply": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {"enum": ["report_only", "hard_fix"]},
+            "style_auto_apply": {"const": false},
+            "minimum_confidence": {"type": "number", "minimum": 0.9, "maximum": 1.0}
+          }
+        },
         "layout": {"enum": ["preserve", "horizontal"]}
       }
     },

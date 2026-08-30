@@ -270,17 +270,18 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
             kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留日文假名或韩文字符，必须逐一在 fixes 中输出 policy_violation 修复并提供纯正中文 replacement】：\n    {', '.join(flagged_kana_ids)}"
 
         instructions = f"""
-这是章节级语义审阅与中文润色，知识提取由独立的 Knowledge Extractor 负责。
+这是章节级语义审阅，知识提取由独立的 Knowledge Extractor 负责。
 - 顶层只输出 {{"schema_version":"2.0", "checked_ids":[...], "fixes":[...], "context_findings":[...]}}。
 - 知识库、记忆库和章节状态字段全部交给独立提取器；本角色只返回语义审阅与润色结果。
 - {kana_warning}
 - 证据边界：只依据输入中的 source、translated、context、translation_policy 和 glossary 判断。不得把模型记忆、未经提供的出版社惯例、年代惯例、文库惯例或所谓中文出版惯例当作规则；除非该规则明确写在 translation_policy 或 glossary 中，否则不得据此要求修改。
 - 检查错译、漏译、增译、主客体、指代、否定、条件、因果、时间、关系、专名和 replacement 完整性。
 - 必须检查 items 中每条译文并把全部 ID 且不重复地写入 checked_ids。
-- 审阅顺序固定为：先做基础语义与中文自然度检查，再做风格润色。当前译文中反复出现的词不等于正确术语，不能把现状当作 Glossary 或规则；先回到 source 确认概念、关系和中文词法，再处理句式、节奏和文学质感。
+- 每个目标先决定 PASS、REPORT_ONLY 或 FIX_REQUIRED。语义正确且中文自然时必须 PASS；只是同义词、文学质感或个人措辞偏好也必须 PASS，且不得输出 finding 或 replacement。
 - 在开始润色前必须先回答：译文中是否存在“字面看似中文、实际是日语词法直搬”的表达？重点检查亲属称谓、职务、学校制度、日语汉字词，以及汉字相同但中文不自然的词。此类问题优先于标题修辞和局部措辞优化。
 - `兄嫁（あによめ）` 的概念是哥哥的妻子，不是正常中文亲属称谓；根据叙述视角译为 `嫂子`、`兄嫂` 或 `大嫂`。不得因为它在多个标题中重复出现，就默认它是系统术语或为了文库风格原样保留；`義弟` 同样要结合关系译为 `小叔子`、`妻弟` 等自然称谓。
-- Reviewer 同时负责中文润色：可修正生硬、机翻腔、不自然搭配、重复、节奏和叙述衔接，并给出完整段落 replacement。润色必须保留 source 的事实、动作、关系、信息量和语气，不得凭空扩写剧情；纯润色使用 `category: style`，客观错误使用对应的客观类别。
+- 只有 source 与 translated 存在可明确指出的客观矛盾时才输出 decision=FIX_REQUIRED，并给出单一完整段落 replacement。多种解释合理、人物关系或上下文证据不足时输出 decision=REPORT_ONLY，不提供自动写回许可。
+- 90 年代、港台文库或其他文学风格只作为 advisory，不得单独触发 finding。`序章/序言`、`酒店/饭店`、`兴奋/狂喜` 均是固定 PASS 示例，不得为这些同义表达生成 replacement。
 - severity=major 只表示会造成实质意义错误或关键事实错误，例如否定/主体客体/指代/动作/关系/关键术语被改变；纯润色使用 `style` 且通常为 `minor`，不得把润色包装成 major。
 - 置信度是基于证据的记录，不是校准后的正确率，也不是自动写回许可。不得仅凭 confidence=0.8、0.9 或更高创建或升级 finding；客观错误必须指出 source 与 translated 的具体语义矛盾，style 润色必须指出具体的中文表达问题及其 translation_policy 依据。
 - **透明的外来语不得默认音译。** 对标题和片假名按意义优先：`レイプ` → 强暴/强奸，`ホテル` → 酒店，`ナイフ` → 刀，`セックス` → 性爱；不要机械写成“雷普”“厚泰鲁”“奈夫”“塞库斯”。只有人名、品牌、虚构专名、无法自然意译的名称，或 Glossary 已明确指定音译时，才考虑音译。书名也一样；片假名书名若是有明确意义的普通英语词组合，默认优先传达标题意义，而不是机械保留声音。
@@ -336,9 +337,9 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 """.strip()
 
     auto_rule = (
-        "全自动模式下，只有同时满足以下条件才设置 auto_apply=true：属于上述客观错误或 style 类别、有输入证据或 translation_policy 支持、severity 与修改幅度相称、replacement 是完整准确的段落译文，且没有改变 source 的事实与语义。confidence 只能作为辅助记录，绝不能单独触发 auto_apply；证据不足或改写不确定时保持 auto_apply=false，但仍可输出供人工查看的润色 replacement。"
+        "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整中文段落，不得含多个答案、编辑说明、Markdown、日文、韩文或遮掩符号。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
         if autonomous
-        else "对已确认不改变原意的润色可输出 style fix；涉及语义取舍、未提供的出版惯例或不确定改写时，auto_apply=false，replacement 仅在能给出完整可靠段落时填写。"
+        else "只报告明确客观错误；普通润色和同义表达必须 PASS。证据不足时使用 REPORT_ONLY 且 auto_apply=false。"
     )
     schema = schema_path.read_text(encoding="utf-8")
     role_intro = "资深日译中小说审阅专家" if kind in {"chapter", "global"} else "本书知识提取器"

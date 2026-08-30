@@ -395,7 +395,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                 </div>
 
                 <p className="text-xs text-[#4A4A4A] font-serif leading-relaxed bg-[#FAF9F6] p-3 rounded-sm border border-[#E5E0D8]">
-                  已核查 {rep.checked_paragraphs} 段落，发现 {rep.reported_issues} 处客观问题，已自动修正 {rep.applied_fixes} 处。
+                  已核查 {rep.reviewed ?? rep.checked_paragraphs} 段落：PASS {rep.pass ?? 0}，明确错误 {rep.fix_required ?? rep.reported_issues}，建议复核 {rep.suggestions ?? 0}，已验证写回 {rep.applied ?? rep.applied_fixes}，拦截 {rep.blocked ?? 0}。
                 </p>
 
                 {rep.knowledge && (
@@ -441,13 +441,13 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                               )}
                             </div>
                             <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-sm border ${
-                              fix.applied === true
+                              fix.apply_state === 'applied' || fix.applied === true
                                 ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                                : fix.applied === false
+                                : fix.apply_state === 'blocked' || fix.apply_state === 'failed' || fix.applied === false
                                 ? 'text-rose-700 bg-rose-50 border-rose-200'
                                 : 'text-amber-800 bg-white border-amber-200'
                             }`}>
-                              {fix.applied === true ? '已自动修正' : fix.applied === false ? '未修正' : '写回状态未知'}
+                              {fix.apply_state === 'applied' || fix.applied === true ? '已验证写回' : fix.apply_state === 'blocked' ? '已拦截' : fix.apply_state === 'failed' ? '写回失败' : '未写回'}
                             </span>
                           </div>
                           {fix.reason && (
@@ -465,9 +465,19 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
                               <strong>未修正原因：</strong>{fix.not_applied_reason}
                             </p>
                           )}
+                          {fix.apply_reason && (
+                            <p className="text-[11px] text-rose-800 bg-rose-50 p-2.5 border border-rose-200 rounded-sm leading-relaxed">
+                              <strong>门禁结果：</strong>{fix.apply_reason}
+                            </p>
+                          )}
+                          {fix.validation_errors && fix.validation_errors.length > 0 && (
+                            <p className="text-[10px] text-rose-700 bg-rose-50 p-2 border border-rose-200 rounded-sm">
+                              校验错误：{fix.validation_errors.join('、')}
+                            </p>
+                          )}
                           {(fix.replacement || fix.approved_translation) && (
                             <div className="text-emerald-900 text-[11px] leading-relaxed bg-white p-2.5 border border-emerald-200 rounded-sm break-words">
-                              <strong className="text-emerald-700">{fix.applied === true ? '写回修正译文：' : '建议修正译文：'}</strong>{fix.replacement || fix.approved_translation}
+                              <strong className="text-emerald-700">{fix.apply_state === 'applied' || fix.applied === true ? '写回修正译文：' : '建议修正译文：'}</strong>{fix.replacement || fix.approved_translation}
                             </div>
                           )}
                           {fix.reporters && fix.reporters.length > 0 && (

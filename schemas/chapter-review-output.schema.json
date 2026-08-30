@@ -1,8 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ChapterReviewOutput",
-  "type": "object",
-  "additionalProperties": false,
   "$defs": {
     "ChapterFix": {
       "additionalProperties": false,
@@ -10,6 +6,16 @@
         "id": {
           "minLength": 1,
           "title": "Id",
+          "type": "string"
+        },
+        "decision": {
+          "default": "FIX_REQUIRED",
+          "enum": [
+            "PASS",
+            "REPORT_ONLY",
+            "FIX_REQUIRED"
+          ],
+          "title": "Decision",
           "type": "string"
         },
         "category": {
@@ -95,6 +101,34 @@
           ],
           "default": null,
           "title": "Invalid Reason"
+        },
+        "base_translation_hash": {
+          "default": "",
+          "title": "Base Translation Hash",
+          "type": "string"
+        },
+        "apply_state": {
+          "default": "not_applied",
+          "enum": [
+            "not_applied",
+            "blocked",
+            "applied",
+            "failed"
+          ],
+          "title": "Apply State",
+          "type": "string"
+        },
+        "apply_reason": {
+          "default": "",
+          "title": "Apply Reason",
+          "type": "string"
+        },
+        "validation_errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Validation Errors",
+          "type": "array"
         }
       },
       "required": [
@@ -167,6 +201,7 @@
       "type": "object"
     }
   },
+  "additionalProperties": false,
   "properties": {
     "schema_version": {
       "default": "2.0",
@@ -220,5 +255,7 @@
       "default": null,
       "title": "Review Diagnostics"
     }
-  }
+  },
+  "title": "ChapterReviewOutput",
+  "type": "object"
 }

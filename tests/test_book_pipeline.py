@@ -65,22 +65,22 @@ class PipelineFunctionTests(unittest.TestCase):
         ]
         self.assertEqual([item["id"] for item in approved_fixes(items, autonomous=True)], ["a"])
 
-    def test_approved_fixes_allows_explicit_style_polish(self) -> None:
+    def test_approved_fixes_rejects_explicit_style_polish(self) -> None:
         item = {
             "id": "p1", "category": "style", "severity": "minor", "confidence": 0.85,
             "replacement": "更自然的段落。", "auto_apply": True,
         }
         approved = approved_fixes([item], autonomous=True)
-        self.assertEqual([fix["id"] for fix in approved], ["p1"])
+        self.assertEqual(approved, [])
 
-    def test_approved_fixes_allows_objective_minor_and_lower_threshold_fixes(self) -> None:
+    def test_approved_fixes_rejects_objective_fixes_below_point_nine(self) -> None:
         items = [
             {"id": "p1", "category": "mistranslation", "severity": "minor", "confidence": 0.85, "replacement": "修复1", "auto_apply": True},
             {"id": "p2", "category": "terminology", "severity": "minor", "confidence": 0.80, "replacement": "修复2", "auto_apply": True},
             {"id": "p3", "category": "mistranslation", "severity": "minor", "confidence": 0.79, "replacement": "修复3", "auto_apply": True},
         ]
         approved = approved_fixes(items, autonomous=True)
-        self.assertEqual([item["id"] for item in approved], ["p1", "p2"])
+        self.assertEqual(approved, [])
 
     def test_approved_fixes_rejects_japanese_kana_hallucinations(self) -> None:
         items = [
@@ -152,6 +152,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+                review_apply_mode="hard_fix",
                 knowledge_extractor=lambda *args, **kwargs: {},
                 targeted_translator=lambda *args, **kwargs: {"status": "error"},
             )
@@ -195,6 +196,7 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline = IterativePipeline(
                 book="book", workspace=workspace, manifest=manifest_path,
                 chapter_reviewer=chapter_reviewer, apply=True, autonomous=True,
+                review_apply_mode="hard_fix",
                 knowledge_extractor=lambda *args, **kwargs: {},
                 targeted_translator=mock_targeted_translator,
             )
@@ -227,7 +229,8 @@ class PipelineFunctionTests(unittest.TestCase):
         # Same paragraph but divergent replacements are not a fix-level consensus.
         self.assertFalse(fixes_by_id["p1"]["consensus"])
         self.assertEqual(fixes_by_id["p1"]["confidence"], 0.95)
-        self.assertEqual(fixes_by_id["p1"]["replacement"], "修复B (更准确)")
+        self.assertEqual(fixes_by_id["p1"]["replacement"], "")
+        self.assertEqual(fixes_by_id["p1"]["decision"], "REPORT_ONLY")
         
         # p2 was only reported by A
         self.assertFalse(fixes_by_id["p2"]["consensus"])
@@ -237,7 +240,7 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertFalse(fixes_by_id["p3"]["consensus"])
         self.assertEqual(fixes_by_id["p3"]["reporters"], ["secondary"])
 
-    def test_merge_chapter_reviews_least_invasive_priority(self) -> None:
+    def test_merge_chapter_reviews_does_not_choose_divergent_replacement(self) -> None:
         # Paragraph original: "这是原始译文，含有萨丁玫瑰花瓣。"
         # Reviewer A suggests: "这是原始译文，含有缎面玫瑰花瓣。" (Edit distance: 2)
         # Reviewer B suggests: "这里是全新的重写翻译，散落着色丁质感的玫瑰花瓣！" (Edit distance: 15)
@@ -253,8 +256,9 @@ class PipelineFunctionTests(unittest.TestCase):
         merged = merge_chapter_reviews(rev_a, rev_b, current_translations=current_translations)
         fix = merged["fixes"][0]
         self.assertEqual(fix["id"], "p1")
-        # Reviewer A is chosen because it made the least extraneous edits (edit distance 2 vs 15)
-        self.assertEqual(fix["replacement"], "这是原始译文，含有缎面玫瑰花瓣。")
+        self.assertEqual(fix["replacement"], "")
+        self.assertEqual(fix["decision"], "REPORT_ONLY")
+        self.assertEqual(fix["apply_reason"], "replacement_disagreement")
         self.assertFalse(fix["consensus"])
 
     def test_merge_chapter_reviews_requires_identical_fix_for_consensus(self) -> None:
@@ -280,7 +284,8 @@ class PipelineFunctionTests(unittest.TestCase):
             {**base, "fixes": [{"id": "p1", "category": "policy_violation", "severity": "critical",
                                   "confidence": 0.92, "replacement": "第二章·内衣小偷"}]},
         )
-        self.assertEqual(merged["fixes"][0]["replacement"], "第二章·内衣小偷")
+        self.assertEqual(merged["fixes"][0]["replacement"], "")
+        self.assertEqual(merged["fixes"][0]["decision"], "REPORT_ONLY")
         self.assertFalse(merged["fixes"][0]["consensus"])
 
     def test_chapter_validation_requires_exact_checked_ids(self) -> None:
@@ -378,6 +383,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 tool_call=tool_call, chapter_reviewer=chapter_reviewer,
                 knowledge_extractor=mock_knowledge_extractor,
                 apply=True, autonomous=True, max_chapter_batches=5,
+                review_apply_mode="hard_fix",
                 on_phase_changed=phases.append,
             )
             pipeline.initialize()

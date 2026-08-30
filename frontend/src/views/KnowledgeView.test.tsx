@@ -94,8 +94,8 @@ describe('Knowledge loading states', () => {
     expect(screen.getByText(/原译改变了原文语义强度/)).toBeInTheDocument();
     expect(screen.getByText(/第四章 章子 惨烈的侵入/)).toBeInTheDocument();
     expect(screen.getByText('双审共识')).toBeInTheDocument();
-    expect(screen.getAllByText('已自动修正')).toHaveLength(2);
-    expect(screen.getByText('未修正')).toBeInTheDocument();
+    expect(screen.getAllByText('已验证写回')).toHaveLength(2);
+    expect(screen.getByText('未写回')).toBeInTheDocument();
     expect(screen.getByText(/问题分类 style 不在客观缺陷自动修正白名单/)).toBeInTheDocument();
     expect(screen.getByText(/建议风格译文/)).toBeInTheDocument();
   });

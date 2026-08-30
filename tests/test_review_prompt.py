@@ -36,9 +36,9 @@ def test_chapter_review_prompt_uses_meaning_first_titles_and_allows_polishing() 
     assert "ナイフ` → 刀" in prompt
     assert "セックス` → 性爱" in prompt
     assert "只有人名、品牌、虚构专名、无法自然意译的名称" in prompt
-    assert "Reviewer 同时负责中文润色" in prompt
-    assert "纯润色使用 `category: style`" in prompt
-    assert "审阅顺序固定为：先做基础语义与中文自然度检查，再做风格润色" in prompt
+    assert "只是同义词、文学质感或个人措辞偏好也必须 PASS" in prompt
+    assert "style 永远不得自动写回" in prompt
+    assert "每个目标先决定 PASS、REPORT_ONLY 或 FIX_REQUIRED" in prompt
     assert "字面看似中文、实际是日语词法直搬" in prompt
     assert "兄嫁（あによめ）" in prompt
     assert "嫂子`、`兄嫂` 或 `大嫂" in prompt

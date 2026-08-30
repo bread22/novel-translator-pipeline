@@ -67,8 +67,9 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         }
         normalized = validate_chapter_review_payload(payload, {"p1"})
         self.assertFalse(normalized["fixes"][0]["auto_apply"])
-        self.assertEqual(normalized["fixes"][0]["confidence"], 0.3)
-        self.assertIn("韩文字符", normalized["fixes"][0]["invalid_reason"])
+        self.assertEqual(normalized["fixes"][0]["apply_state"], "blocked")
+        self.assertIn("target_script_residue", normalized["fixes"][0]["validation_errors"])
+        self.assertEqual(normalized["fixes"][0]["invalid_reason"], "target_script_residue")
 
     def test_approve_real_kana_policy_violation_when_text_actually_has_kana(self) -> None:
         current_translations = {
@@ -153,13 +154,12 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertEqual([x["id"] for x in approved_fixes([good], current_translations=current)], ["p1"])
         self.assertEqual(approved_fixes([bad], current_translations=current), [])
 
-    def test_consensus_duplicate_paragraph_can_be_cleared_and_verified(self) -> None:
+    def test_clear_is_disabled_even_with_consensus(self) -> None:
         fix = {"id": "p1", "category": "addition", "severity": "major", "confidence": 0.98,
                "reason": "与上一段完全重复", "replacement": "", "operation": "clear",
                "auto_apply": True, "consensus": True}
         approved = approved_fixes([fix], current_translations={"p1": "重复译文"})
-        self.assertEqual([x["id"] for x in approved], ["p1"])
-        verify_applied_fixes({"chapters": [{"paragraphs": [{"id": "p1", "translated": ""}]}]}, approved)
+        self.assertEqual(approved, [])
 
 
 if __name__ == "__main__":

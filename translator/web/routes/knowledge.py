@@ -85,9 +85,12 @@ def _decorate_fixes_for_display(
     decorated: list[dict[str, Any]] = []
     for raw in fixes:
         fix = dict(raw)
-        applied = str(fix.get("id", "")) in applied_ids
+        apply_state = str(fix.get("apply_state", ""))
+        applied = apply_state == "applied" if apply_state else str(fix.get("id", "")) in applied_ids
         fix["applied"] = applied
-        fix["not_applied_reason"] = None if applied else _not_applied_reason(fix, apply_disabled=apply_disabled)
+        fix["not_applied_reason"] = None if applied else (
+            str(fix.get("apply_reason", "")) or _not_applied_reason(fix, apply_disabled=apply_disabled)
+        )
         decorated.append(fix)
     return decorated
 
@@ -296,7 +299,7 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
         approved = read_json(approved_fix_files.get(ch_id, Path("nonexistent")), default={})
         st = read_json(state_files.get(ch_id, Path("nonexistent")), default={})
 
-        fixes = rev.get("fixes", [])
+        fixes = rep.get("fixes", []) if isinstance(rep.get("fixes"), list) else rev.get("fixes", [])
         if not fixes and isinstance(rep.get("approved_fixes"), list):
             fixes = rep.get("approved_fixes", [])
         if not fixes and approved.get("items"):
@@ -326,8 +329,16 @@ def list_chapter_reports(book_id: str) -> list[dict[str, Any]]:
             "chapter_id": ch_id,
             "reviewed_at": reviewed_at,
             "checked_paragraphs": rep.get("checked_paragraphs") or len(rev.get("checked_ids", [])),
-            "reported_issues": len(fixes),
+            "reported_issues": int(rep.get("reported_issues", 0) or 0) if "reported_issues" in rep else sum(
+                1 for item in fixes if item.get("decision", "FIX_REQUIRED") == "FIX_REQUIRED"
+            ),
             "applied_fixes": applied_count,
+            "reviewed": int(rep.get("reviewed", rep.get("checked_paragraphs", 0)) or 0),
+            "pass": int(rep.get("pass", 0) or 0),
+            "fix_required": int(rep.get("fix_required", rep.get("reported_issues", 0)) or 0),
+            "suggestions": int(rep.get("suggestions", 0) or 0),
+            "applied": int(rep.get("applied", applied_count) or 0) if isinstance(rep.get("applied", applied_count), (int, bool)) else applied_count,
+            "blocked": int(rep.get("blocked", 0) or 0),
             "fixes": fixes,
             "knowledge": rep.get("knowledge", {}),
             "pre_scan": rep.get("pre_scan", {}),

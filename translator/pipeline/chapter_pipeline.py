@@ -54,12 +54,13 @@ from translator.review.knowledge_extractor import (
 )
 from translator.review.prescan import deterministic_known_hit_scan
 from translator.review.reviewer import (
-    approved_fixes,
+    evaluate_apply_gate,
+    finalize_writeback_states,
     has_target_script_residue,
     missing_checked_ids,
     run_chapter_review,
     validate_chapter_review_payload,
-    verify_applied_fixes,
+    review_report_counts,
 )
 
 
@@ -210,6 +211,8 @@ class IterativePipeline:
         translation_policy: Path | None = None,
         apply: bool = False,
         autonomous: bool = False,
+        review_apply_mode: str | None = None,
+        review_apply_minimum_confidence: float | None = None,
         reviewer: str | None = None,
         layout: str | None = None,
         translated_root: Path | None = None,
@@ -278,6 +281,15 @@ class IterativePipeline:
         paths = PathResolver.for_config()
         self.translation_policy = translation_policy or paths.translation_policy(config)
         self.apply = apply
+        review_apply_cfg = dict(pipeline_cfg.get("review_apply", {}) or {})
+        self.review_apply_mode = str(review_apply_mode or review_apply_cfg.get("mode", "report_only"))
+        configured_threshold = (
+            review_apply_minimum_confidence
+            if review_apply_minimum_confidence is not None
+            else float(review_apply_cfg.get("minimum_confidence", 0.9))
+        )
+        self.review_apply_threshold = max(0.9, configured_threshold)
+        self.review_apply_enabled = bool(apply and self.review_apply_mode == "hard_fix")
         self.autonomous = autonomous
         self.reviewer = reviewer or reviewer_name(config)
         self.layout = layout or str(pipeline_cfg.get("layout", "preserve"))
@@ -295,6 +307,7 @@ class IterativePipeline:
         self._knowledge_candidates: dict[str, list[dict[str, Any]]] = {}
         self._knowledge_conflicts: dict[str, list[dict[str, Any]]] = {}
         self._knowledge_windows: dict[str, list[dict[str, Any]]] = {}
+        self._deferred_knowledge_windows: dict[str, list[tuple[dict[str, list[dict[str, Any]]], int, int]]] = {}
 
     def _checkpoint(self) -> None:
         self.pause_gate.wait(self.cancellation_token)
@@ -711,6 +724,8 @@ class IterativePipeline:
         for fix in review.get("fixes", []) if isinstance(review.get("fixes"), list) else []:
             if not isinstance(fix, dict):
                 continue
+            if fix.get("apply_state") != "applied":
+                continue
             item = by_id.get(str(fix.get("id", "")))
             if item is None:
                 continue
@@ -729,7 +744,16 @@ class IterativePipeline:
         total_windows: int,
     ) -> dict[str, Any]:
         """Extract one temporary window result without touching formal stores."""
-        projected = self._project_window_fixes(window, review, apply=self.apply)
+        # The window starts from manifest-backed accepted text. Only fixes whose
+        # write and exact verification completed may override it.
+        manifest_paragraphs = paragraph_map(read_json(self.manifest))
+        accepted_window = {key: [dict(item) for item in values] for key, values in window.items()}
+        for values in accepted_window.values():
+            for item in values:
+                accepted = manifest_paragraphs.get(str(item.get("id", "")))
+                if accepted is not None:
+                    item["translated"] = str(accepted.get("translated", ""))
+        projected = self._project_window_fixes(accepted_window, review, apply=self.review_apply_enabled)
         window_id = f"{chapter_id}:window:{window_index:04d}"
         rolling_context: dict[str, list[str]] = {}
         for previous_window in self._knowledge_windows.get(chapter_id, []):
@@ -957,6 +981,9 @@ class IterativePipeline:
         window_callback = None
         if self._builtin_reviewer:
             def window_callback(review_result: dict[str, Any], window: dict[str, list[dict[str, Any]]], index: int, total: int) -> dict[str, Any]:
+                if self.review_apply_enabled:
+                    self._deferred_knowledge_windows.setdefault(chapter_id, []).append((window, index, total))
+                    return {}
                 return self._extract_window_knowledge(chapter_id, window, review_result, index, total)
             if self.chapter_reviewer is run_chapter_review:
                 run_chapter_review(
@@ -1003,20 +1030,48 @@ class IterativePipeline:
             context_before_ids=expected_ids,
         )
         current_translations = {item["id"]: item["translated"] for item in items}
-        fixes = approved_fixes(
+        gate_results = evaluate_apply_gate(
             review["fixes"],
+            threshold=self.review_apply_threshold,
             autonomous=self.autonomous,
             current_translations=current_translations,
         )
+        # Re-read immediately before producing the write artifact so a manifest
+        # change during review becomes stale instead of being overwritten.
+        fresh_paragraphs = paragraph_map(read_json(self.manifest))
+        fresh_translations = {
+            item_id: str(fresh_paragraphs.get(item_id, {}).get("translated", ""))
+            for item_id in expected_ids
+        }
+        gate_results = evaluate_apply_gate(
+            gate_results,
+            threshold=self.review_apply_threshold,
+            autonomous=self.autonomous,
+            current_translations=fresh_translations,
+        )
+        if not self.review_apply_enabled:
+            for item in gate_results:
+                if item.get("apply_reason") == "gate_passed":
+                    item["apply_reason"] = "report_only_mode"
+        pass_diagnostics = [
+            {"id": item.get("id", ""), "apply_reason": item.get("apply_reason", "pass")}
+            for item in gate_results if item.get("decision") == "PASS"
+        ]
+        if pass_diagnostics:
+            review.setdefault("review_diagnostics", {})["apply_gate_pass"] = pass_diagnostics
+        gate_results = [item for item in gate_results if item.get("decision") != "PASS"]
+        review["fixes"] = gate_results
+        fixes = [item for item in gate_results if item.get("apply_reason") == "gate_passed"]
         fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-fixes.json"
         write_json(fixes_path, {"book": self.book, "items": fixes})
         applied_fixes: Any = False
         remaining_kana: list[str] = []
-        if self.apply:
+        if self.review_apply_enabled:
             if fixes:
                 self._checkpoint()
                 replacement_fixes = [item for item in fixes if item.get("operation", "replace") != "clear"]
-                clear_fixes = [item for item in fixes if item.get("operation") == "clear"]
+                clear_fixes: list[dict[str, Any]] = []  # clear is disabled by the shared gate
+                write_error: Exception | None = None
                 try:
                     if replacement_fixes:
                         tool_fixes_path = fixes_path
@@ -1024,24 +1079,13 @@ class IterativePipeline:
                             tool_fixes_path = self.workspace.reviews_dir / f"{chapter_id}-approved-replacements.json"
                             write_json(tool_fixes_path, {"book": self.book, "items": replacement_fixes})
                         applied_fixes = self.tool_call("apply-review-fixes", "--book", self.book, "--input", str(tool_fixes_path))
-                except Exception:
-                    manifest_data = read_json(self.manifest)
-                    p_map = paragraph_map(manifest_data)
-                    for item in replacement_fixes:
-                        if item.get("id") in p_map and item.get("replacement"):
-                            p_map[item["id"]]["translated"] = item["replacement"]
-                    write_json(self.manifest, manifest_data)
-                    applied_fixes = {"status": "ok", "summary": {"applied": len(replacement_fixes)}}
-                if clear_fixes:
-                    manifest_data = read_json(self.manifest)
-                    p_map = paragraph_map(manifest_data)
-                    for item in clear_fixes:
-                        if item.get("id") in p_map:
-                            p_map[item["id"]]["translated"] = ""
-                    write_json(self.manifest, manifest_data)
-                    applied_fixes = {"status": "ok", "summary": {"applied": len(fixes)}}
+                except Exception as exc:
+                    write_error = exc
+                    applied_fixes = {"status": "error", "error": str(exc)}
             manifest_after_fixes = read_json(self.manifest)
-            verify_applied_fixes(manifest_after_fixes, fixes)
+            gate_results = finalize_writeback_states(gate_results, manifest_after_fixes, execution_error=locals().get("write_error"))
+            review["fixes"] = gate_results
+            fixes = [item for item in gate_results if item.get("apply_state") == "applied"]
             remaining_kana = [
                 item_id
                 for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
@@ -1060,6 +1104,7 @@ class IterativePipeline:
                 guarded_fixes = list(review["fixes"])
                 guarded_fixes.extend({
                     "id": item_id,
+                    "decision": "FIX_REQUIRED",
                     "category": "policy_violation",
                     "severity": "critical",
                     "confidence": 1.0,
@@ -1067,6 +1112,9 @@ class IterativePipeline:
                     "replacement": "",
                     "auto_apply": False,
                     "invalid_reason": "最终写回校验发现未解决的日文假名或韩文字符残留",
+                    "apply_state": "blocked",
+                    "apply_reason": "remaining_target_script",
+                    "validation_errors": ["target_script_residue"],
                     "reporters": ["writeback_guard"],
                 } for item_id in remaining_kana)
                 review = {**review, "fixes": guarded_fixes}
@@ -1074,6 +1122,10 @@ class IterativePipeline:
                 # after earlier fixes have already been written to the manifest.
                 write_json(output_path, review)
         self._checkpoint()
+        for deferred_window, deferred_index, deferred_total in self._deferred_knowledge_windows.pop(chapter_id, []):
+            self._extract_window_knowledge(
+                chapter_id, deferred_window, review, deferred_index, deferred_total
+            )
         # Custom reviewer integrations do not expose window callbacks. Treat
         # the complete chapter as one window so the same extractor/finalizer
         # boundary still applies.
@@ -1108,16 +1160,19 @@ class IterativePipeline:
             "knowledge": knowledge_summary,
         }
         report_path = self.workspace.reports_dir / f"{chapter_id}.json"
+        counts = review_report_counts(len(expected_ids), review["fixes"])
         write_json(report_path, {
             "book": self.book,
             "chapter_id": chapter_id,
             "reviewed_at": utc_now(),
             "checked_paragraphs": len(expected_ids),
-            "reported_issues": len(review["fixes"]),
+            "reported_issues": counts["fix_required"],
+            **counts,
             "context_findings": len(review.get("context_findings", []) or []),
             "review_diagnostics": review.get("review_diagnostics", {}),
-            "applied_fixes": len(fixes) if self.apply else 0,
-            "approved_fixes": fixes,
+            "applied_fixes": counts["applied"],
+            "approved_fixes": [item for item in review["fixes"] if item.get("apply_state") == "applied"],
+            "fixes": review["fixes"],
             "term_summary": term_summary,
             "pre_scan": self._prescan_reports.get(chapter_id, {}),
             "knowledge": knowledge_summary,

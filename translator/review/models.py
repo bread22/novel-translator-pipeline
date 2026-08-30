@@ -68,6 +68,7 @@ class ChapterState(StrictModel):
 
 class ChapterFix(StrictModel):
     id: str = Field(min_length=1)
+    decision: Literal["PASS", "REPORT_ONLY", "FIX_REQUIRED"] = "FIX_REQUIRED"
     category: str = "context_conflict"
     severity: str = "major"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -79,6 +80,10 @@ class ChapterFix(StrictModel):
     consensus: bool | None = None
     reporters: list[str] = Field(default_factory=list)
     invalid_reason: str | None = None
+    base_translation_hash: str = ""
+    apply_state: Literal["not_applied", "blocked", "applied", "failed"] = "not_applied"
+    apply_reason: str = ""
+    validation_errors: list[str] = Field(default_factory=list)
 
 
 class ContextFinding(StrictModel):

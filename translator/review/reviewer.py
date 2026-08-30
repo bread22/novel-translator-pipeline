@@ -63,10 +63,18 @@ class ReviewValidationError(ValueError):
 
 
 import re
+import hashlib
 
 JAPANESE_KANA_REGEX = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
 HANGUL_REGEX = re.compile(r"[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]")
 MASKING_SYMBOL_REGEX = re.compile(r"[○●×＊※□]")
+ASCII_WORD_REGEX = re.compile(r"(?<![A-Za-z])[A-Za-z]{2,}(?![A-Za-z])")
+REVIEW_META_REGEX = re.compile(
+    r"(?:译者注|审阅|修改(?:为|说明|建议)|可改为|建议译为|replacement|option\s*[a-z]?|答案[一二12]|以下(?:是|为))",
+    re.IGNORECASE,
+)
+MARKDOWN_REGEX = re.compile(r"(?:^|\n)\s*(?:#{1,6}\s|[-*+]\s|```|>\s)|\[[^\]]+\]\([^)]+\)")
+MULTIPLE_ANSWER_REGEX = re.compile(r"(?:^|\n)\s*(?:[A-Da-d][.)、]|[12一二][.)、])\s*")
 
 
 def has_japanese_kana(text: str) -> bool:
@@ -100,14 +108,41 @@ def paragraph_map(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def approved_fixes(
+def translation_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def replacement_validation_errors(replacement: str) -> list[str]:
+    """Return deterministic format/script errors; semantic quality stays with reviewers."""
+    errors: list[str] = []
+    if not replacement.strip():
+        errors.append("empty_replacement")
+    if has_target_script_residue(replacement):
+        errors.append("target_script_residue")
+    if has_masking_symbol(replacement):
+        errors.append("masking_symbol")
+    if ASCII_WORD_REGEX.search(replacement):
+        errors.append("latin_word")
+    if REVIEW_META_REGEX.search(replacement):
+        errors.append("review_meta_text")
+    if MARKDOWN_REGEX.search(replacement):
+        errors.append("markdown")
+    if MULTIPLE_ANSWER_REGEX.search(replacement) or re.search(r"(?:或者|或译为|二选一|/\s*或\s*/)", replacement):
+        errors.append("multiple_answers")
+    if "\x00" in replacement or "\r" in replacement:
+        errors.append("illegal_format")
+    return list(dict.fromkeys(errors))
+
+
+def evaluate_apply_gate(
     items: list[dict[str, Any]],
     threshold: float = 0.9,
     *,
     autonomous: bool = False,
     current_translations: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    approved: list[dict[str, Any]] = []
+    """Evaluate every proposal and retain its final report-facing gate state."""
+    evaluated: list[dict[str, Any]] = []
     for raw in items:
         item = dict(raw)
         item_id = str(item.get("id", ""))
@@ -116,7 +151,24 @@ def approved_fixes(
         replacement = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         is_new_contract = "category" in item or "replacement" in item
         current_text = str(current_translations.get(item_id, "")) if current_translations else ""
+        item.setdefault("decision", "FIX_REQUIRED")
+        item["apply_state"] = "not_applied"
+        item["apply_reason"] = ""
+        item["validation_errors"] = []
+        if current_translations is not None and item_id not in current_translations:
+            item["apply_reason"] = "unknown_target"
+            evaluated.append(item)
+            continue
+        if str(item.get("decision")) != "FIX_REQUIRED":
+            item["apply_reason"] = "pass" if item.get("decision") == "PASS" else "report_only"
+            evaluated.append(item)
+            continue
         if current_translations and not is_clear and replacement == current_text:
+            item["decision"] = "PASS"
+            item["replacement"] = ""
+            item["approved_translation"] = ""
+            item["apply_reason"] = "no_op"
+            evaluated.append(item)
             continue
         mandatory_script_cleanup = bool(
             current_translations
@@ -136,6 +188,8 @@ def approved_fixes(
         if current_translations and category == "policy_violation":
             is_kana_reason = any(k in reason for k in ("假名", "片假名", "平假名", "kana", "日文假名"))
             if is_kana_reason and not mandatory_script_cleanup and not mandatory_masking_cleanup:
+                item["apply_reason"] = "unsubstantiated_policy_violation"
+                evaluated.append(item)
                 continue
 
         if mandatory_script_cleanup or mandatory_masking_cleanup:
@@ -145,36 +199,63 @@ def approved_fixes(
         if is_new_contract or mandatory_script_cleanup or mandatory_masking_cleanup:
             item["category"] = category
         if is_new_contract and (
-            category not in REVIEW_FIX_CATEGORIES
+            category not in OBJECTIVE_CATEGORIES
             or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
         ):
+            item["decision"] = "PASS" if category == "style" else "REPORT_ONLY"
+            item["apply_reason"] = "style_not_auto_applied" if category == "style" else "ineligible_category"
+            evaluated.append(item)
             continue
-        # Quality Guardrail: Strictly reject replacements containing Japanese/Korean script.
-        if not is_clear and (has_target_script_residue(replacement) or has_masking_symbol(replacement)):
+        if is_clear:
+            item["apply_reason"] = "clear_disabled"
+            evaluated.append(item)
+            continue
+        errors = replacement_validation_errors(replacement)
+        if errors:
+            item["apply_state"] = "blocked"
+            item["apply_reason"] = "replacement_validation_failed"
+            item["validation_errors"] = errors
+            item["invalid_reason"] = ", ".join(errors)
+            evaluated.append(item)
             continue
         conf = float(item.get("confidence", 0) or 0)
-        is_consensus = bool(item.get("consensus"))
-        clear_allowed = bool(
-            is_clear
-            and current_text.strip()
-            and category in {"omission", "addition"}
-            and str(item.get("severity", "")) in {"critical", "major"}
-            and conf >= 0.95
-            and is_consensus
-            and item.get("auto_apply") is True
+        if not (mandatory_script_cleanup or mandatory_masking_cleanup) and conf < threshold:
+            item["apply_reason"] = "below_threshold"
+            evaluated.append(item)
+            continue
+        if item.get("consensus") is False and len(item.get("reporters", [])) > 1:
+            item["decision"] = "REPORT_ONLY"
+            item["apply_reason"] = "replacement_disagreement"
+            evaluated.append(item)
+            continue
+        if not (autonomous or item.get("auto_apply") is True or mandatory_script_cleanup or mandatory_masking_cleanup):
+            item["apply_reason"] = "auto_apply_disabled"
+            evaluated.append(item)
+            continue
+        base_hash = str(item.get("base_translation_hash", ""))
+        if base_hash and current_translations is not None and base_hash != translation_hash(current_text):
+            item["apply_reason"] = "stale_base_translation"
+            evaluated.append(item)
+            continue
+        item["operation"] = operation
+        item["approved_translation"] = replacement
+        item["replacement"] = replacement
+        item["base_translation_hash"] = base_hash or translation_hash(current_text)
+        item["apply_reason"] = "gate_passed"
+        evaluated.append(item)
+    return evaluated
+
+
+def approved_fixes(
+    items: list[dict[str, Any]], threshold: float = 0.9, *, autonomous: bool = False,
+    current_translations: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        item for item in evaluate_apply_gate(
+            items, threshold, autonomous=autonomous, current_translations=current_translations
         )
-        # Category-based Dynamic Threshold: review fix categories qualify at 0.80+, consensus auto-qualifies
-        req_threshold = 0.8 if (is_new_contract and category in REVIEW_FIX_CATEGORIES) else threshold
-        meets_approval_threshold = mandatory_script_cleanup or mandatory_masking_cleanup or is_consensus or (
-            (autonomous or item.get("auto_apply") is True)
-            and conf >= req_threshold
-        )
-        if (meets_approval_threshold and replacement) or clear_allowed:
-            item["operation"] = operation
-            item["approved_translation"] = "" if is_clear else replacement
-            item["replacement"] = "" if is_clear else replacement
-            approved.append(item)
-    return approved
+        if item.get("apply_reason") == "gate_passed"
+    ]
 
 
 def missing_checked_ids(payload: dict[str, Any], expected_ids: set[str]) -> set[str]:
@@ -209,10 +290,17 @@ def validate_chapter_review_payload(
             continue
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         item["category"] = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
-        if rep and (has_target_script_residue(rep) or has_masking_symbol(rep)):
+        # PASS is represented by the checked ID alone. Legacy style findings are
+        # ordinary acceptable wording differences and normalize to PASS.
+        if item.get("decision") == "PASS" or item["category"] == "style":
+            continue
+        errors = replacement_validation_errors(rep) if item.get("decision") == "FIX_REQUIRED" else []
+        if errors:
             item["auto_apply"] = False
-            item["confidence"] = min(float(item.get("confidence", 0) or 0), 0.3)
-            item["invalid_reason"] = "修正译文中残留日文假名、韩文字符或伏字遮掩符号，已拦截并禁用自动写回"
+            item["apply_state"] = "blocked"
+            item["apply_reason"] = "replacement_validation_failed"
+            item["validation_errors"] = errors
+            item["invalid_reason"] = ", ".join(errors)
         sanitized_fixes.append(item)
     normalized["fixes"] = sanitized_fixes
 
@@ -279,6 +367,53 @@ def verify_applied_fixes(manifest: dict[str, Any], fixes: list[dict[str, Any]]) 
             mismatches.append(item_id or "<empty>")
     if mismatches:
         raise ValueError(f"应用修复后 manifest 未验证通过：{', '.join(mismatches)}")
+
+
+def finalize_writeback_states(
+    gate_results: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    *,
+    execution_error: Exception | None = None,
+) -> list[dict[str, Any]]:
+    """Promote gate-passed records only after exact manifest verification."""
+    paragraphs = paragraph_map(manifest)
+    finalized: list[dict[str, Any]] = []
+    for raw in gate_results:
+        item = dict(raw)
+        if item.get("apply_reason") != "gate_passed":
+            finalized.append(item)
+            continue
+        if execution_error is not None:
+            item["apply_state"] = "failed"
+            item["apply_reason"] = "write_failed"
+            item["validation_errors"] = [str(execution_error)]
+            finalized.append(item)
+            continue
+        item_id = str(item.get("id", ""))
+        expected = str(item.get("replacement", ""))
+        actual = str(paragraphs.get(item_id, {}).get("translated", ""))
+        if item_id in paragraphs and expected and actual == expected:
+            item["apply_state"] = "applied"
+            item["apply_reason"] = "manifest_verified"
+        else:
+            item["apply_state"] = "failed"
+            item["apply_reason"] = "manifest_verification_failed"
+            item["validation_errors"] = ["manifest_mismatch"]
+        finalized.append(item)
+    return finalized
+
+
+def review_report_counts(checked: int, records: list[dict[str, Any]]) -> dict[str, int]:
+    fix_required = sum(1 for item in records if item.get("decision") == "FIX_REQUIRED")
+    suggestions = sum(1 for item in records if item.get("decision") == "REPORT_ONLY")
+    return {
+        "reviewed": checked,
+        "pass": max(0, checked - fix_required - suggestions),
+        "fix_required": fix_required,
+        "suggestions": suggestions,
+        "applied": sum(1 for item in records if item.get("apply_state") == "applied"),
+        "blocked": sum(1 for item in records if item.get("apply_state") == "blocked"),
+    }
 
 
 def _selected_backend(backend: str | None = None) -> str:
@@ -356,26 +491,6 @@ def merge_chapter_reviews(
             conf_b = float(in_b.get("confidence", 0) or 0)
             rep_a = str(in_a.get("replacement", "")).strip()
             rep_b = str(in_b.get("replacement", "")).strip()
-            residue_a = has_target_script_residue(rep_a)
-            residue_b = has_target_script_residue(rep_b)
-            if residue_a and not residue_b:
-                chosen = dict(in_b)
-            elif residue_b and not residue_a:
-                chosen = dict(in_a)
-            else:
-                # Least Invasive Priority: choose the fix that makes the least extraneous modifications to the original translation
-                orig_text = str((current_translations or {}).get(fix_id, "")).strip()
-                if orig_text and rep_a and rep_b:
-                    dist_a = edit_distance(rep_a, orig_text)
-                    dist_b = edit_distance(rep_b, orig_text)
-                    if dist_a < dist_b:
-                        chosen = dict(in_a)
-                    elif dist_b < dist_a:
-                        chosen = dict(in_b)
-                    else:
-                        chosen = dict(in_a if conf_a >= conf_b else in_b)
-                else:
-                    chosen = dict(in_a if conf_a >= conf_b else in_b)
             same_fix = (
                 str(in_a.get("category", "")) == str(in_b.get("category", ""))
                 and str(in_a.get("operation", "replace") or "replace")
@@ -383,17 +498,36 @@ def merge_chapter_reviews(
                 and rep_a == rep_b
                 and bool(rep_a or str(in_a.get("operation", "replace")) == "clear")
             )
+            if same_fix:
+                chosen = dict(in_a if conf_a >= conf_b else in_b)
+                chosen["decision"] = "FIX_REQUIRED"
+                chosen["apply_reason"] = ""
+            else:
+                # Different answers are evidence of ambiguity, not a signal to choose
+                # one by confidence or edit distance.
+                chosen = dict(in_a if conf_a >= conf_b else in_b)
+                chosen["decision"] = "REPORT_ONLY"
+                chosen["replacement"] = ""
+                chosen["approved_translation"] = ""
+                chosen["apply_state"] = "not_applied"
+                chosen["apply_reason"] = "replacement_disagreement"
             chosen["confidence"] = max(conf_a, conf_b)
             chosen["consensus"] = same_fix
             chosen["reporters"] = ["primary", "secondary"]
             merged_fixes.append(chosen)
         elif in_a:
             item = dict(in_a)
+            item["decision"] = "REPORT_ONLY"
+            item["apply_state"] = "not_applied"
+            item["apply_reason"] = "single_reviewer_only"
             item["consensus"] = False
             item["reporters"] = ["primary"]
             merged_fixes.append(item)
         else:
             item = dict(in_b or {})
+            item["decision"] = "REPORT_ONLY"
+            item["apply_state"] = "not_applied"
+            item["apply_reason"] = "single_reviewer_only"
             item["consensus"] = False
             item["reporters"] = ["secondary"]
             merged_fixes.append(item)
@@ -1451,6 +1585,9 @@ def review_book(
     export: bool = False,
     reviewer: str | None = None,
 ) -> dict[str, Any]:
+    review_apply_cfg = dict(load_config().get("pipeline", {}).get("review_apply", {}) or {})
+    apply = bool(apply and review_apply_cfg.get("mode", "report_only") == "hard_fix")
+    gate_threshold = max(0.9, float(review_apply_cfg.get("minimum_confidence", 0.9)))
     workspace = BookWorkspace.at(output_root, name)
     workspace.initialize(book_id=book)
     manifest = read_json(manifest_path(book))
@@ -1511,19 +1648,50 @@ def review_book(
             context_before_ids=set(expected),
         )
         current_translations = {item["id"]: item["translated"] for item in items}
-        fixes = approved_fixes(
+        gate_results = evaluate_apply_gate(
             review["fixes"],
+            threshold=gate_threshold,
             autonomous=autonomous,
             current_translations=current_translations,
         )
+        fresh_paragraphs = paragraph_map(read_json(manifest_path(book)))
+        gate_results = evaluate_apply_gate(
+            gate_results,
+            threshold=gate_threshold,
+            autonomous=autonomous,
+            current_translations={
+                item_id: str(fresh_paragraphs.get(item_id, {}).get("translated", ""))
+                for item_id in expected
+            },
+        )
+        if not apply:
+            for item in gate_results:
+                if item.get("apply_reason") == "gate_passed":
+                    item["apply_reason"] = "report_only_mode"
+        pass_diagnostics = [
+            {"id": item.get("id", ""), "apply_reason": item.get("apply_reason", "pass")}
+            for item in gate_results if item.get("decision") == "PASS"
+        ]
+        if pass_diagnostics:
+            review.setdefault("review_diagnostics", {})["apply_gate_pass"] = pass_diagnostics
+        gate_results = [item for item in gate_results if item.get("decision") != "PASS"]
+        review["fixes"] = gate_results
+        fixes = [item for item in gate_results if item.get("apply_reason") == "gate_passed"]
         fixes_path = workspace.reviews_dir / f"{c_id}-consistency-fixes.json"
         write_json(fixes_path, {"book": book, "items": fixes})
         applied_fixes: Any = False
         if apply:
+            write_error: Exception | None = None
             if fixes:
-                applied_fixes = call_novel_translator("apply-review-fixes", "--book", book, "--input", str(fixes_path))
+                try:
+                    applied_fixes = call_novel_translator("apply-review-fixes", "--book", book, "--input", str(fixes_path))
+                except Exception as exc:
+                    write_error = exc
+                    applied_fixes = {"status": "error", "error": str(exc)}
             manifest_after_fixes = read_json(manifest_path(book))
-            verify_applied_fixes(manifest_after_fixes, fixes)
+            gate_results = finalize_writeback_states(gate_results, manifest_after_fixes, execution_error=write_error)
+            review["fixes"] = gate_results
+            fixes = [item for item in gate_results if item.get("apply_state") == "applied"]
             remaining_kana = [
                 item_id
                 for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
@@ -1541,14 +1709,17 @@ def review_book(
             "active": 0,
         }
         report_path = workspace.reports_dir / f"{c_id}.json"
+        counts = review_report_counts(len(expected), review["fixes"])
         write_json(report_path, {
             "book": book,
             "chapter_id": c_id,
             "reviewed_at": utc_now(),
             "checked_paragraphs": len(expected),
-            "reported_issues": len(review["fixes"]),
-            "applied_fixes": len(fixes) if apply else 0,
-            "approved_fixes": fixes,
+            "reported_issues": counts["fix_required"],
+            **counts,
+            "applied_fixes": counts["applied"],
+            "approved_fixes": [item for item in review["fixes"] if item.get("apply_state") == "applied"],
+            "fixes": review["fixes"],
             "term_summary": knowledge_summary,
             "glossary": knowledge_summary,
             "memory_summary": knowledge_summary,

@@ -178,8 +178,15 @@ export interface ChapterReviewReport {
   checked_paragraphs: number;
   reported_issues: number;
   applied_fixes: number;
+  reviewed?: number;
+  pass?: number;
+  fix_required?: number;
+  suggestions?: number;
+  applied?: number;
+  blocked?: number;
   fixes: Array<{
     id: string;
+    decision?: 'PASS' | 'REPORT_ONLY' | 'FIX_REQUIRED';
     category?: string;
     severity?: string;
     confidence?: number;
@@ -191,6 +198,10 @@ export interface ChapterReviewReport {
     consensus?: boolean | null;
     reporters?: string[];
     invalid_reason?: string;
+    base_translation_hash?: string;
+    apply_state?: 'not_applied' | 'blocked' | 'applied' | 'failed';
+    apply_reason?: string;
+    validation_errors?: string[];
     applied?: boolean;
     not_applied_reason?: string | null;
   }>;

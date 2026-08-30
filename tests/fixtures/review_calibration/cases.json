@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "baseline": {"chapters": 9, "paragraphs": 1349, "findings": 1167, "style": 1130},
+  "cases": [
+    {"id": "c0001-p00001", "kind": "correct", "expected": "PASS"},
+    {"id": "c0001-p00002", "kind": "correct", "expected": "PASS"},
+    {"id": "c0006-p00153", "kind": "no_change_needed", "expected": "PASS"},
+    {"id": "c0009-p00098", "kind": "no_change_needed", "expected": "PASS"},
+    {"id": "c0003-p00001", "current": "序章", "proposed": "序言", "expected": "PASS"},
+    {"id": "c0004-p00002", "current": "酒店", "proposed": "饭店", "expected": "PASS"},
+    {"id": "c0005-p00001", "current": "兴奋", "proposed": "狂喜", "expected": "PASS"},
+    {"id": "c0003-p00014", "current": "一百五十万日元", "expected": "PASS_OR_REPORT_ONLY"},
+    {"id": "c0005-p00007", "kind": "hard_error", "expected": "FIX_REQUIRED"},
+    {"id": "c0006-p00109", "kind": "hard_error", "expected": "FIX_REQUIRED"},
+    {"id": "c0004-p00118", "replacement": "hiccup", "expected": "blocked"},
+    {"id": "c0008-p00094", "replacement": "残留かな", "expected": "blocked"},
+    {"id": "c0007-p00005", "replacement": "答案一或答案二", "expected": "blocked"}
+  ]
+}

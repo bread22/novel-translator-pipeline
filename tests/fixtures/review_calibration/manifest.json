@@ -1,0 +1,12 @@
+{
+  "book": "review-calibration",
+  "chapters": [{
+    "id": "c0001",
+    "paragraphs": [
+      {"id": "c0001-p00001", "source": "正确样本", "translated": "当前正确译文"},
+      {"id": "c0003-p00001", "source": "プロローグ", "translated": "序章"},
+      {"id": "c0004-p00002", "source": "ホテル", "translated": "酒店"},
+      {"id": "c0005-p00001", "source": "興奮", "translated": "兴奋"}
+    ]
+  }]
+}

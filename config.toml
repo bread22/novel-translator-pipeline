@@ -200,3 +200,7 @@ autonomous = true
 finalize = true
 stop_on_error = false
 layout = "horizontal"
+[pipeline.review_apply]
+mode = "report_only" # report_only | hard_fix
+style_auto_apply = false
+minimum_confidence = 0.90

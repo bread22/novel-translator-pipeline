@@ -290,6 +290,8 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - 只有 source 与 translated 存在可明确指出的客观矛盾时才输出 decision=FIX_REQUIRED，并给出单一完整段落 replacement。多种解释合理、人物关系或上下文证据不足时输出 decision=REPORT_ONLY，不提供自动写回许可。
 - 90 年代、港台文库或其他文学风格只作为 advisory，不得单独触发 finding。`序章/序言`、`酒店/饭店`、`兴奋/狂喜` 均是固定 PASS 示例，不得为这些同义表达生成 replacement。
 - severity=major 只表示会造成实质意义错误或关键事实错误，例如否定/主体客体/指代/动作/关系/关键术语被改变；纯润色使用 `style` 且通常为 `minor`，不得把润色包装成 major。
+- 术语问题必须有可复核的客观依据：source 与 translated 不一致，或 glossary/translation_policy 明确规定了唯一译法。`嫂子/大嫂/兄嫂`、`太太/少奶奶`、`那话儿/肉棒` 等同义称谓和语体选择不是 terminology，也不是 major；没有明确依据时使用 PASS 或 REPORT_ONLY。
+- 先判断“是否真的需要改变含义”，再判断“是否可以表达得更好”。语序润色、更自然、更流畅、文学质感、个人措辞偏好不得归入 mistranslation、terminology 或 major。
 - 置信度是基于证据的记录，不是校准后的正确率，也不是自动写回许可。不得仅凭 confidence=0.8、0.9 或更高创建或升级 finding；客观错误必须指出 source 与 translated 的具体语义矛盾，style 润色必须指出具体的中文表达问题及其 translation_policy 依据。
 - **透明的外来语不得默认音译。** 对标题和片假名按意义优先：`レイプ` → 强暴/强奸，`ホテル` → 酒店，`ナイフ` → 刀，`セックス` → 性爱；不要机械写成“雷普”“厚泰鲁”“奈夫”“塞库斯”。只有人名、品牌、虚构专名、无法自然意译的名称，或 Glossary 已明确指定音译时，才考虑音译。书名也一样；片假名书名若是有明确意义的普通英语词组合，默认优先传达标题意义，而不是机械保留声音。
 - `terminology` 只能用于 source、translation_policy 或 glossary 能直接证明的术语错误，不能用来包装润色；译文中确实残留未翻译的日文/韩文字符仍按 policy_violation 处理，但 source 中的片假名本身不是译文错误。

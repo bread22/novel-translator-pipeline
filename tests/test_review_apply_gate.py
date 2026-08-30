@@ -51,6 +51,32 @@ def test_fix_without_replacement_is_report_only_and_never_approved():
     assert approved_fixes([proposal(replacement="")], autonomous=True) == []
 
 
+def test_style_only_mistranslation_is_normalized_to_pass():
+    result = evaluate_apply_gate([
+        proposal(category="mistranslation", reason="语序润色，让表达更自然", replacement="润色后的译文")
+    ], autonomous=True)[0]
+    assert result["decision"] == "PASS"
+    assert result["category"] == "style"
+    assert result["apply_reason"] == "style_only_finding"
+
+
+def test_unsupported_terminology_is_report_only_but_evidenced_term_can_apply():
+    unsupported = evaluate_apply_gate([
+        proposal(category="terminology", severity="major", reason="称谓不统一", replacement="新称谓")
+    ], autonomous=True)[0]
+    assert unsupported["decision"] == "REPORT_ONLY"
+    assert unsupported["apply_reason"] == "terminology_evidence_required"
+
+    evidenced = evaluate_apply_gate([
+        proposal(
+            category="terminology",
+            reason="glossary 明确固定译名，当前译法不一致",
+            replacement="固定译名",
+        )
+    ], autonomous=True)[0]
+    assert evidenced["apply_reason"] == "gate_passed"
+
+
 def test_dual_review_divergence_is_report_only_without_selected_replacement():
     base = {"checked_ids": ["p1"]}
     merged = merge_chapter_reviews(

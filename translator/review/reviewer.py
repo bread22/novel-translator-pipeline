@@ -83,6 +83,21 @@ NON_ERROR_REASON_REGEX = re.compile(
     r"译文(?:正确|可接受)|当前译文(?:正确|可接受)|没有问题|无问题)",
     re.IGNORECASE,
 )
+STYLE_ONLY_REASON_REGEX = re.compile(
+    r"(?:润色|更自然|更流畅|更地道|文学(?:质感|风格)|措辞|语序调整|语感|表达偏好|个人偏好|读起来|文风)",
+    re.IGNORECASE,
+)
+OBJECTIVE_REASON_REGEX = re.compile(
+    r"(?:错译|误译|漏译|增译|遗漏|缺少|否定|主客体|指代|关系|时间|条件|因果|动作|事实|"
+    r"原文.{0,20}(?:译成|译为|应为|含义)|译成|译为|术语表|术语库|固定译名|统一译名|前后一致|"
+    r"glossary|translation_policy|残留|假名|韩文)",
+    re.IGNORECASE,
+)
+TERMINOLOGY_EVIDENCE_REGEX = re.compile(
+    r"(?:glossary|translation_policy|术语表|术语库|固定译名|统一译名|前后一致|"
+    r"原文.{0,20}(?:译成|译为|应为)|译名不一致)",
+    re.IGNORECASE,
+)
 MARKDOWN_REGEX = re.compile(r"(?:^|\n)\s*(?:#{1,6}\s|[-*+]\s|```|>\s)|\[[^\]]+\]\([^)]+\)")
 MULTIPLE_ANSWER_REGEX = re.compile(r"(?:^|\n)\s*(?:[A-Da-d][.)、]|[12一二][.)、])\s*")
 
@@ -160,6 +175,31 @@ def _normalize_decision_contract(item: dict[str, Any], replacement: str, *, is_c
     return decision
 
 
+def _normalize_quality_contract(item: dict[str, Any], category: str) -> str:
+    """Keep stylistic preferences and unsupported terminology out of auto-fix."""
+    if str(item.get("decision", "")) != "FIX_REQUIRED":
+        return str(item.get("decision", ""))
+    reason = str(item.get("reason", "")).strip()
+    if category != "policy_violation" and STYLE_ONLY_REASON_REGEX.search(reason) and not OBJECTIVE_REASON_REGEX.search(reason):
+        item["category"] = "style"
+        item["decision"] = "PASS"
+        item["replacement"] = ""
+        item["approved_translation"] = ""
+        item["auto_apply"] = False
+        item["invalid_reason"] = "style_only_finding"
+        item["apply_reason"] = "style_only_finding"
+        return "PASS"
+    if category == "terminology" and not TERMINOLOGY_EVIDENCE_REGEX.search(reason):
+        item["decision"] = "REPORT_ONLY"
+        item["replacement"] = ""
+        item["approved_translation"] = ""
+        item["auto_apply"] = False
+        item["invalid_reason"] = "terminology_evidence_required"
+        item["apply_reason"] = "terminology_evidence_required"
+        return "REPORT_ONLY"
+    return str(item.get("decision", ""))
+
+
 def evaluate_apply_gate(
     items: list[dict[str, Any]],
     threshold: float = 0.9,
@@ -230,6 +270,10 @@ def evaluate_apply_gate(
             item["auto_apply"] = True
         if is_new_contract or mandatory_script_cleanup or mandatory_masking_cleanup:
             item["category"] = category
+        decision = _normalize_quality_contract(item, category)
+        if decision != "FIX_REQUIRED":
+            evaluated.append(item)
+            continue
         if is_new_contract and (
             category not in OBJECTIVE_CATEGORIES
             or str(item.get("severity", "")) not in OBJECTIVE_SEVERITIES
@@ -328,17 +372,19 @@ def validate_chapter_review_payload(
             continue
         rep = str(item.get("replacement", "") or item.get("approved_translation", "")).strip()
         item["category"] = CATEGORY_ALIASES.get(str(item.get("category", "")), str(item.get("category", "")))
-        # PASS is represented by the checked ID alone. Legacy style findings are
-        # ordinary acceptable wording differences and normalize to PASS.
-        if item.get("decision") == "PASS" or item["category"] == "style":
-            continue
-        source_text = str(source_texts.get(str(item.get("id", "")), "")) if source_texts is not None else None
         decision = _normalize_decision_contract(
             item,
             rep,
             is_clear=str(item.get("operation", "replace") or "replace") == "clear",
         )
-        if decision == "PASS":
+        decision = _normalize_quality_contract(item, str(item.get("category", "")))
+        # PASS is represented by the checked ID alone. Legacy style findings are
+        # ordinary acceptable wording differences and normalize to PASS.
+        if decision == "PASS" or item.get("decision") == "PASS" or item["category"] == "style":
+            continue
+        source_text = str(source_texts.get(str(item.get("id", "")), "")) if source_texts is not None else None
+        if decision != "FIX_REQUIRED":
+            sanitized_fixes.append(item)
             continue
         errors = (
             replacement_validation_errors(rep, source=source_text)

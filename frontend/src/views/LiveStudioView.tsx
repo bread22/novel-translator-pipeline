@@ -13,6 +13,39 @@ import {
 import { BookSummary, PromptItem, ReviewerExecutionDetail, StreamEvent, SystemConfig, TaskStatusResponse } from '../types/api';
 import { api } from '../lib/api';
 
+const PIPELINE_EVENT_TYPES = [
+  'pipeline_started',
+  'chapter_started',
+  'batch_completed',
+  'pipeline_progress',
+  'pipeline_phase_changed',
+  'pipeline_reviewer_status',
+  'chapter_completed',
+  'pipeline_completed',
+];
+
+function isFallbackEvent(evt: StreamEvent): boolean {
+  if (evt.event === 'fallback_triggered') return true;
+  if (evt.event !== 'translation_attempt' || !evt.data || typeof evt.data !== 'object') return false;
+  return Boolean(evt.data.is_fallback || evt.data.status === 'failed');
+}
+
+function providerReasonLabel(reason: unknown): string {
+  const labels: Record<string, string> = {
+    content_filter: '内容拦截',
+    content_violation: '内容违规',
+    network: '网络/超时',
+    timeout: '超时',
+    output_format: '输出格式错误',
+    empty_translation: '空译文',
+    quota_reached: '配额/限流',
+    provider_error: '供应商错误',
+    unknown: '未知错误',
+  };
+  const value = String(reason || 'unknown');
+  return labels[value] || value;
+}
+
 interface LiveStudioViewProps {
   book: BookSummary | null;
   activeTask: TaskStatusResponse | null;
@@ -150,10 +183,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   };
 
   const filteredEvents = streamEvents.filter((evt) => {
-    if (eventFilter === 'fallback') return evt.event === 'fallback_triggered';
-    if (eventFilter === 'pipeline') {
-      return ['pipeline_started', 'chapter_started', 'batch_completed', 'pipeline_progress', 'pipeline_phase_changed', 'pipeline_reviewer_status', 'chapter_completed', 'pipeline_completed'].includes(evt.event);
-    }
+    if (eventFilter === 'fallback') return isFallbackEvent(evt);
+    if (eventFilter === 'pipeline') return PIPELINE_EVENT_TYPES.includes(evt.event);
     return true;
   });
 
@@ -263,7 +294,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         const rev2Model = config?.providers?.[rev2Name]?.model || rev2Name;
 
         const latestEvent = streamEvents[streamEvents.length - 1];
-        const isFallbackActive = latestEvent?.event === 'fallback_triggered' || latestEvent?.event?.includes('fallback');
+        const isFallbackActive = latestEvent ? isFallbackEvent(latestEvent) : false;
         const isReviewActive = activeTask?.phase === 'reviewing'
           || (!activeTask?.phase && (latestEvent?.event?.includes('review') || activeTask?.message?.includes('审阅') || activeTask?.message?.includes('一致性')));
         const isTranslationActive = activeTask?.phase === 'translating'
@@ -646,7 +677,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
             </div>
           ) : (
             filteredEvents.map((evt, idx) => {
-              const isFallback = evt.event === 'fallback_triggered';
+              const isFallback = isFallbackEvent(evt);
               const isCompleted = evt.event === 'pipeline_completed';
               const isChapterDone = evt.event === 'chapter_completed';
               const isBatchDone = evt.event === 'batch_completed';
@@ -699,6 +730,34 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                     🔎 <strong>{role}</strong> · 后端 <strong>{backend}</strong> · {status}{details ? ` · ${details}` : ''}
                   </span>
                 );
+              } else if (evt.event === 'translation_attempt') {
+                const provider = evt.data?.provider || '-';
+                const reason = providerReasonLabel(evt.data?.reason);
+                const attempted = evt.data?.attempted_ids?.length || 0;
+                const recovered = evt.data?.recovered_ids?.length || 0;
+                const error = evt.data?.error;
+                const detail = [
+                  evt.data?.fallback_from ? `原后端 ${evt.data.fallback_from}` : '',
+                  attempted ? `请求 ${attempted} 段` : '',
+                  recovered ? `完成 ${recovered} 段` : '',
+                  evt.data?.latency_ms !== undefined ? `${Math.round(evt.data.latency_ms)}ms` : '',
+                  evt.data?.http_status ? `HTTP ${evt.data.http_status}` : '',
+                ].filter(Boolean).join(' · ');
+                const success = evt.data?.status === 'ok';
+                content = (
+                  <span className={success ? 'text-emerald-800 font-sans' : 'text-rose-800 font-sans'}>
+                    {success
+                      ? evt.data?.is_fallback
+                        ? '✅'
+                        : '✓'
+                      : '❌'}{' '}
+                    <strong>{provider}</strong> · {success
+                      ? evt.data?.is_fallback ? '降级救回' : '翻译成功'
+                      : `翻译失败：${reason}`}
+                    {detail ? ` · ${detail}` : ''}
+                    {error ? ` · ${error}` : ''}
+                  </span>
+                );
               } else if (evt.event === 'chapter_completed') {
                 const chIndex = evt.data?.chapter_index ?? evt.data?.current_chapter_index;
                 const chId = evt.data?.chapter_id ?? evt.data?.current_chapter;
@@ -729,7 +788,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
               } else if (evt.event === 'fallback_triggered') {
                 content = (
                   <span className="text-amber-800 font-sans">
-                    ⚡ 触发模型降级: <strong className="text-amber-900">{evt.data?.from_provider}</strong> 发生异常 ({evt.data?.reason || '阻塞'}) ➔ 自动切换至 <strong className="text-emerald-800">{evt.data?.to_provider}</strong>
+                    ⚡ 触发模型降级: <strong className="text-amber-900">{evt.data?.from_provider}</strong> 发生异常 ({providerReasonLabel(evt.data?.reason)}) ➔ 自动切换至 <strong className="text-emerald-800">{evt.data?.to_provider}</strong>
                   </span>
                 );
               } else if (evt.event === 'pipeline_completed') {

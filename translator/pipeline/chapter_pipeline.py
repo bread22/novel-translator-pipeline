@@ -223,6 +223,8 @@ class IterativePipeline:
         on_batch_completed: Callable[[dict[str, Any]], None] | None = None,
         on_phase_changed: Callable[[dict[str, Any]], None] | None = None,
         on_reviewer_status: Callable[[dict[str, Any]], None] | None = None,
+        on_translation_attempt: Callable[[dict[str, Any]], None] | None = None,
+        on_fallback_triggered: Callable[[dict[str, Any]], None] | None = None,
         cancellation_token: CancellationToken | None = None,
         pause_gate: PauseGate | None = None,
         knowledge_extractor: Callable[..., Any] | None = None,
@@ -301,6 +303,8 @@ class IterativePipeline:
         self.on_batch_completed = on_batch_completed
         self.on_phase_changed = on_phase_changed
         self.on_reviewer_status = on_reviewer_status
+        self.on_translation_attempt = on_translation_attempt
+        self.on_fallback_triggered = on_fallback_triggered
         self.cancellation_token = cancellation_token or CancellationToken()
         self.pause_gate = pause_gate or PauseGate()
         self.knowledge_extractor = knowledge_extractor
@@ -397,6 +401,67 @@ class IterativePipeline:
         diagnostics.setdefault("book", self.book)
         diagnostics.setdefault("attempts", []).append(attempt)
         write_json(path, diagnostics)
+
+    def _emit_translation_attempt(
+        self,
+        *,
+        chapter_id: str,
+        provider: str,
+        attempt_id: str,
+        attempted_ids: list[str],
+        recovered_ids: list[str],
+        result: Mapping[str, Any] | None,
+        reason: str,
+        depth: int,
+        latency_ms: float,
+        fallback_from: str | None = None,
+        fallback_index: int | None = None,
+        fallback_reason: str | None = None,
+    ) -> None:
+        """Notify the web layer without forwarding provider raw responses or prompts."""
+        if self.on_translation_attempt is None:
+            return
+        result_data = result if isinstance(result, Mapping) else {}
+        status = str(result_data.get("status", "error")).strip().casefold()
+        payload: dict[str, Any] = {
+            "book_id": self.book,
+            "chapter_id": chapter_id,
+            "provider": provider,
+            "attempt_id": attempt_id,
+            "attempted_ids": attempted_ids,
+            "recovered_ids": recovered_ids,
+            "failed_ids": [item_id for item_id in attempted_ids if item_id not in recovered_ids],
+            "status": "ok" if recovered_ids else "failed",
+            "provider_status": status,
+            "reason": reason or "unknown",
+            "latency_ms": latency_ms,
+            "depth": depth,
+            "is_fallback": fallback_from is not None,
+        }
+        if fallback_from is not None:
+            payload["fallback_from"] = fallback_from
+        if fallback_index is not None:
+            payload["fallback_index"] = fallback_index
+        if fallback_reason:
+            payload["fallback_reason"] = fallback_reason
+        for key in ("error", "http_status", "finish_reason", "format", "split"):
+            value = result_data.get(key)
+            if value not in (None, ""):
+                payload[key] = str(value)[:800] if key == "error" else value
+        try:
+            self.on_translation_attempt(payload)
+        except Exception:
+            # Observability must never change translation behavior.
+            pass
+
+    def _emit_fallback_triggered(self, payload: dict[str, Any]) -> None:
+        if self.on_fallback_triggered is None:
+            return
+        try:
+            self.on_fallback_triggered(payload)
+        except Exception:
+            # Observability must never change translation behavior.
+            pass
 
     def _chapter_pending_paragraphs(self, chapter_id: str) -> list[dict[str, Any]]:
         chapter = self._chapter(chapter_id)
@@ -511,6 +576,17 @@ class IterativePipeline:
         }
         attempts.append(attempt)
         self._record_provider_attempt(attempt)
+        self._emit_translation_attempt(
+            chapter_id=chapter_id,
+            provider=primary_translator,
+            attempt_id=attempt_id,
+            attempted_ids=ids,
+            recovered_ids=recovered_ids,
+            result=result,
+            reason=reason,
+            depth=depth,
+            latency_ms=attempt["latency_ms"],
+        )
         if recovered_ids:
             self._record_translation_provenance(recovered_ids, primary_translator, reason, attempt_id=attempt_id)
         if not (set(ids) & remaining):
@@ -534,6 +610,8 @@ class IterativePipeline:
             return
 
         fallback_ids = sorted(set(ids) & remaining, key=ids.index)
+        route_from = self.primary_translator
+        route_reason = reason
         for fb_idx, fb_provider in enumerate(self.fallback_translators):
             self._checkpoint()
             current_pending = self._chapter_pending_ids(self._chapter(chapter_id))
@@ -543,6 +621,17 @@ class IterativePipeline:
             fb_source_chars = sum(len(source_by_id[item_id]) for item_id in attempted_ids)
             fb_attempt_id = uuid.uuid4().hex
             fb_started = time.monotonic()
+            self._emit_fallback_triggered({
+                "book_id": self.book,
+                "chapter_id": chapter_id,
+                "from_provider": route_from,
+                "to_provider": fb_provider,
+                "reason": route_reason or "provider_error",
+                "paragraph_ids": attempted_ids,
+                "depth": depth,
+                "fallback_index": fb_idx + 1,
+                "attempt_id": fb_attempt_id,
+            })
             try:
                 fb_result = self._translate_target(fb_provider, attempted_ids, fb_source_chars)
                 self._record_injected_terms(chapter_id, fb_result)
@@ -569,6 +658,20 @@ class IterativePipeline:
             }
             attempts.append(fb_attempt)
             self._record_provider_attempt(fb_attempt)
+            self._emit_translation_attempt(
+                chapter_id=chapter_id,
+                provider=fb_provider,
+                attempt_id=fb_attempt_id,
+                attempted_ids=attempted_ids,
+                recovered_ids=fb_recovered,
+                result=fb_result,
+                reason=provider_failure_reason(fb_result),
+                depth=depth,
+                latency_ms=fb_attempt["latency_ms"],
+                fallback_from=route_from,
+                fallback_index=fb_idx + 1,
+                fallback_reason=fb_reason,
+            )
             if fb_recovered:
                 self._record_translation_provenance(
                     fb_recovered,
@@ -579,6 +682,8 @@ class IterativePipeline:
                 )
             if not (set(ids) & fb_remaining):
                 break
+            route_from = fb_provider
+            route_reason = provider_failure_reason(fb_result) or fb_reason
 
         unresolved_now = set(ids) & self._chapter_pending_ids(self._chapter(chapter_id))
         if unresolved_now and len(fallback_ids) > 1:

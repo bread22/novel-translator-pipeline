@@ -580,7 +580,9 @@ def get_book_events(book_id: str, limit: int = 500) -> list[dict[str, Any]]:
     title = manifest.get("title", book_id) if manifest else book_id
     output_root = get_output_root()
     from translator.web.events import read_book_events
-    events = read_book_events(title, limit=limit, output_root=output_root)
+    # Keep the API's canonical book ID in projected diagnostic events. The
+    # workspace itself is still resolved through the display title when needed.
+    events = read_book_events(book_id, limit=limit, output_root=output_root)
     if not events and title != book_id:
-        events = read_book_events(book_id, limit=limit, output_root=output_root)
+        events = read_book_events(title, limit=limit, output_root=output_root)
     return events

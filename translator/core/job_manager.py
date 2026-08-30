@@ -826,6 +826,12 @@ class JobManager:
                     }
                 broadcaster.broadcast_sync("pipeline_reviewer_status", payload, book_id=item.book_id)
 
+            def handle_translation_attempt(attempt_info: dict[str, Any]) -> None:
+                broadcaster.broadcast_sync("translation_attempt", attempt_info, book_id=item.book_id)
+
+            def handle_fallback_triggered(route_info: dict[str, Any]) -> None:
+                broadcaster.broadcast_sync("fallback_triggered", route_info, book_id=item.book_id)
+
             # 2. Instantiate pipeline
             pipeline = ChapterPipeline(
                 book=item.book_id,
@@ -846,6 +852,8 @@ class JobManager:
                 on_batch_completed=handle_batch_completed,
                 on_phase_changed=handle_phase_changed,
                 on_reviewer_status=handle_reviewer_status,
+                on_translation_attempt=handle_translation_attempt,
+                on_fallback_triggered=handle_fallback_triggered,
                 cancellation_token=cancellation,
                 pause_gate=pause_gate,
             )

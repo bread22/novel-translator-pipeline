@@ -137,4 +137,44 @@ describe('live model topology', () => {
     expect(startPipeline.mock.calls[0][0]).toMatchObject({ translation_policy: 'old-policy.md' });
     expect(alertSpy).not.toHaveBeenCalled();
   });
+
+  it('shows provider failures and recovered fallback attempts in the fallback filter', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.spyOn(api, 'getConfig').mockResolvedValue({ roles: {}, providers: {} } as never);
+    vi.spyOn(api, 'getPrompts').mockResolvedValue([]);
+
+    render(<LiveStudioView
+      book={{ id: 'book', name: 'Book', source_type: 'epub', total_chapters: 1,
+        translated_chapters: 0, total_paragraphs: 1, translated_paragraphs: 1,
+        progress_percentage: 1 } as never}
+      activeTask={null}
+      streamEvents={[
+        {
+          event: 'translation_attempt', timestamp: '2026-08-30T12:00:00Z', event_id: 'attempt-1',
+          data: {
+            provider: 'nemotron', status: 'failed', reason: 'content_filter',
+            attempted_ids: ['p1'], recovered_ids: [], is_fallback: false,
+          },
+        },
+        {
+          event: 'fallback_triggered', timestamp: '2026-08-30T12:00:01Z', event_id: 'route-1',
+          data: { from_provider: 'nemotron', to_provider: 'deepseek', reason: 'content_filter' },
+        },
+        {
+          event: 'translation_attempt', timestamp: '2026-08-30T12:00:02Z', event_id: 'attempt-2',
+          data: {
+            provider: 'deepseek', status: 'ok', reason: 'ok', fallback_from: 'nemotron',
+            attempted_ids: ['p1'], recovered_ids: ['p1'], is_fallback: true,
+          },
+        },
+      ]}
+      onRefreshTask={vi.fn(async () => undefined)}
+      onRefreshBooks={vi.fn(async () => undefined)}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: '降级容灾' }));
+    expect(screen.getByText(/翻译失败：内容拦截/).parentElement?.textContent).toContain('nemotron');
+    expect(screen.getByText(/降级救回/).parentElement?.textContent).toContain('deepseek');
+    expect(screen.getByText(/自动切换至/).parentElement?.textContent).toContain('deepseek');
+  });
 });

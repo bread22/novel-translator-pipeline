@@ -319,6 +319,7 @@ export const api = {
           'chapter_started',
           'batch_completed',
           'chapter_completed',
+          'translation_attempt',
           'fallback_triggered',
           'review_completed',
           'finalizing',

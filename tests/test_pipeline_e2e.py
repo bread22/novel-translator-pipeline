@@ -261,6 +261,8 @@ class PipelineE2ETests(unittest.TestCase):
 
         workspace = BookWorkspace.at(self.output_root, "测试小说-容灾")
         workspace.initialize(book_id=self.book_id)
+        attempts: list[dict] = []
+        fallback_routes: list[dict] = []
 
         pipeline = ChapterPipeline(
             book=self.book_id,
@@ -271,6 +273,8 @@ class PipelineE2ETests(unittest.TestCase):
             fallback_translators=["gemini_lite", "deepseek"],
             apply=True,
             autonomous=True,
+            on_translation_attempt=attempts.append,
+            on_fallback_triggered=fallback_routes.append,
         )
 
         res = pipeline.run_chapter("c0001", cycle=1)
@@ -280,6 +284,14 @@ class PipelineE2ETests(unittest.TestCase):
         manifest_data = json.loads(self.manifest_file.read_text(encoding="utf-8"))
         p1 = manifest_data["chapters"][0]["paragraphs"][0]
         self.assertEqual(p1["translated"], "Fallback译文：c0001-p00001")
+        self.assertEqual(attempts[0]["provider"], "nemotron")
+        self.assertEqual(attempts[0]["status"], "failed")
+        self.assertEqual(attempts[0]["reason"], "provider_error")
+        self.assertEqual(fallback_routes[0]["from_provider"], "nemotron")
+        self.assertEqual(fallback_routes[0]["to_provider"], "gemini_lite")
+        self.assertEqual(attempts[1]["provider"], "gemini_lite")
+        self.assertTrue(attempts[1]["is_fallback"])
+        self.assertEqual(attempts[1]["status"], "ok")
 
 
 if __name__ == "__main__":

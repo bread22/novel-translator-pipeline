@@ -86,6 +86,15 @@ describe('SSE client', () => {
       lastEventId: 'evt-1',
     }));
     expect(events).toHaveBeenCalledWith(expect.objectContaining({ event_id: 'evt-1', book_id: null }));
+    source.listeners.get('translation_attempt')?.(new MessageEvent('translation_attempt', {
+      data: JSON.stringify({
+        event: 'translation_attempt',
+        data: { provider: 'primary', status: 'failed', reason: 'network' },
+        book_id: 'book-1', timestamp: 'now', event_id: 'evt-2',
+      }),
+      lastEventId: 'evt-2',
+    }));
+    expect(events).toHaveBeenCalledWith(expect.objectContaining({ event: 'translation_attempt', event_id: 'evt-2' }));
     source.readyState = FakeEventSource.CLOSED;
     source.onerror?.(new Event('error'));
     expect(states).toHaveBeenCalledWith('offline');

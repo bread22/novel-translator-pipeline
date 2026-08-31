@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from threading import RLock
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,6 +69,242 @@ class NovelToolError(RuntimeError):
     def __init__(self, message: str, result: ToolResult) -> None:
         super().__init__(message)
         self.result = result
+
+
+@dataclass(frozen=True)
+class _VendorApi:
+    """The small upstream API surface used by this project."""
+
+    EpubConfig: type[Any]
+    export_epub: Callable[..., dict[str, Any]]
+    export_txt: Callable[..., None]
+    load_source_book: Callable[..., Any]
+    validate_epub: Callable[..., dict[str, Any]]
+    reset_translations: Callable[..., dict[str, Any]]
+    load_book: Callable[..., Any]
+    save_book: Callable[..., Path]
+    slugify: Callable[..., str]
+    create_snapshot: Callable[..., dict[str, Any]]
+    apply_review_fixes: Callable[..., dict[str, Any]]
+
+
+_VENDOR_IMPORT_LOCK = RLock()
+_VENDOR_OPERATION_LOCK = RLock()
+_VENDOR_API_CACHE: dict[Path, _VendorApi] = {}
+_PYTHON_API_COMMANDS = {
+    "add-book",
+    "snapshot",
+    "apply-review-fixes",
+    "export",
+    "validate-epub",
+    "reset-translations",
+}
+
+
+def _purge_app_modules() -> None:
+    for module_name in list(sys.modules):
+        if module_name == "app" or module_name.startswith("app."):
+            del sys.modules[module_name]
+
+
+def _vendor_api(root: Path) -> _VendorApi:
+    """Import the vendored top-level ``app`` package once per runtime root."""
+    root = root.expanduser().resolve()
+    with _VENDOR_IMPORT_LOCK:
+        cached = _VENDOR_API_CACHE.get(root)
+        if cached is not None:
+            return cached
+
+        root_string = str(root)
+        if root_string not in sys.path:
+            sys.path.insert(0, root_string)
+
+        loaded_app = sys.modules.get("app")
+        loaded_paths = getattr(loaded_app, "__path__", ()) if loaded_app is not None else ()
+        if loaded_app is not None and not any(Path(path).resolve() == root / "app" for path in loaded_paths):
+            _purge_app_modules()
+
+        book_io = import_module("app.book_io")
+        config = import_module("app.config")
+        manual = import_module("app.manual")
+        models = import_module("app.models")
+        review = import_module("app.review")
+        snapshots = import_module("app.snapshots")
+        api = _VendorApi(
+            EpubConfig=config.EpubConfig,
+            export_epub=book_io.export_epub,
+            export_txt=book_io.export_txt,
+            load_source_book=book_io.load_source_book,
+            validate_epub=book_io.validate_epub,
+            reset_translations=manual.reset_translations,
+            load_book=models.load_book,
+            save_book=models.save_book,
+            slugify=models.slugify,
+            create_snapshot=snapshots.create_snapshot,
+            apply_review_fixes=review.apply_review_fixes,
+        )
+        _VENDOR_API_CACHE[root] = api
+        return api
+
+
+def _flag_value(args: tuple[str, ...], flag: str, *, required: bool = True) -> str | None:
+    try:
+        index = args.index(flag)
+    except ValueError:
+        if required:
+            raise ValueError(f"缺少参数：{flag}")
+        return None
+    value_index = index + 1
+    if value_index >= len(args) or args[value_index].startswith("--"):
+        raise ValueError(f"参数 {flag} 缺少值")
+    return args[value_index]
+
+
+def _has_flag(args: tuple[str, ...], flag: str) -> bool:
+    return flag in args
+
+
+def _books_dir(root: Path) -> Path:
+    return root / "data" / "books"
+
+
+def _epub_config(api: _VendorApi) -> Any:
+    """Use only the upstream EPUB contract; pipeline config has another shape."""
+    return api.EpubConfig()
+
+
+def _python_api_result(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        payload = {"payload": payload}
+    errors = payload.get("errors", []) or []
+    if not isinstance(errors, list):
+        errors = [{"code": "python_api_error", "message": str(errors)}]
+    summary = payload.get("summary", {}) or {}
+    if not isinstance(summary, dict):
+        summary = {"value": summary}
+    normalized: dict[str, Any] = {
+        "status": str(payload.get("status", "ok")),
+        "returncode": 0,
+        "errors": errors,
+        "summary": summary,
+        "stdout": "",
+        "stderr": "",
+    }
+    normalized.update(payload)
+    normalized["returncode"] = 0
+    normalized.setdefault("errors", errors)
+    normalized.setdefault("summary", summary)
+    normalized.setdefault("stdout", "")
+    normalized.setdefault("stderr", "")
+    return normalized
+
+
+def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
+    command = args[0] if args else ""
+    api = _vendor_api(root)
+    books_dir = _books_dir(root)
+
+    with _VENDOR_OPERATION_LOCK:
+        if command == "add-book":
+            source_path = Path(_flag_value(args, "--path") or "").expanduser().resolve()
+            if not source_path.exists():
+                raise FileNotFoundError(f"文件不存在：{source_path}")
+            book = api.load_source_book(
+                source_path,
+                title=_flag_value(args, "--title", required=False),
+                epub_config=_epub_config(api),
+            )
+            requested_id = _flag_value(args, "--id", required=False)
+            if requested_id:
+                book.id = api.slugify(requested_id)
+            target_dir = api.save_book(books_dir, book, source_path)
+            warnings: list[str] = []
+            summary: dict[str, Any] = {
+                "book": book.id,
+                "title": book.title,
+                "type": book.source_type,
+                "chapters": len(book.chapters),
+                "paragraphs": len(book.paragraphs),
+                "data_dir": str(target_dir),
+            }
+            if book.source_type == "epub":
+                epub_meta = book.metadata.get("epub", {})
+                warnings = list(epub_meta.get("warnings", []))
+                summary.update(
+                    {
+                        "parser_mode": epub_meta.get("parser_mode", ""),
+                        "nav_path": epub_meta.get("nav_path", ""),
+                        "toc_path": epub_meta.get("toc_path", ""),
+                        "warning_count": epub_meta.get("warning_count", 0),
+                    }
+                )
+            return _python_api_result(
+                {
+                    "status": "warning" if warnings else "ok",
+                    "warnings": warnings,
+                    "summary": summary,
+                    "details": {},
+                }
+            )
+
+        if command == "snapshot":
+            book_id = _flag_value(args, "--book") or ""
+            book = api.load_book(books_dir, book_id)
+            return _python_api_result(api.create_snapshot(books_dir, book, _flag_value(args, "--name") or ""))
+
+        if command == "apply-review-fixes":
+            book_id = _flag_value(args, "--book") or ""
+            book = api.load_book(books_dir, book_id)
+            input_path = Path(_flag_value(args, "--input") or "").expanduser().resolve()
+            return _python_api_result(api.apply_review_fixes(books_dir, book, input_path))
+
+        if command == "export":
+            book_id = _flag_value(args, "--book") or ""
+            output = Path(_flag_value(args, "--output") or "").expanduser().resolve()
+            export_format = (_flag_value(args, "--format") or "").casefold()
+            book = api.load_book(books_dir, book_id)
+            bilingual = _has_flag(args, "--bilingual") and not _has_flag(args, "--monolingual")
+            if export_format == "txt":
+                api.export_txt(book, output, bilingual=bilingual)
+                warnings: list[str] = []
+            elif export_format == "epub":
+                export_result = api.export_epub(book, output, _epub_config(api), bilingual=bilingual)
+                warnings = list(export_result.get("warnings", []))
+            else:
+                raise ValueError(f"不支持导出格式：{export_format}")
+            return _python_api_result(
+                {
+                    "status": "warning" if warnings else "ok",
+                    "warnings": warnings,
+                    "summary": {
+                        "book": book.id,
+                        "output": str(output),
+                        "format": export_format,
+                        "bilingual": bilingual,
+                        "warning_count": len(warnings),
+                    },
+                    "details": {},
+                }
+            )
+
+        if command == "validate-epub":
+            path = Path(_flag_value(args, "--path") or "").expanduser().resolve()
+            return _python_api_result(api.validate_epub(path, _epub_config(api)))
+
+        if command == "reset-translations":
+            book_id = _flag_value(args, "--book") or ""
+            book = api.load_book(books_dir, book_id)
+            input_value = _flag_value(args, "--input", required=False)
+            return _python_api_result(
+                api.reset_translations(
+                    books_dir,
+                    book,
+                    input_path=Path(input_value).expanduser().resolve() if input_value else None,
+                    reset_all=_has_flag(args, "--all"),
+                )
+            )
+
+    raise ValueError(f"不支持的 Python API 命令：{command}")
 
 
 def novel_translator_diagnostic(novel_root: Path | None = None, python_bin: Path | None = None) -> dict[str, Any]:
@@ -164,12 +402,13 @@ def provider_failure_reason(result: dict[str, Any] | None) -> str:
     return "provider_error"
 
 
-def call_novel_translator(
-    *args: str,
-    novel_root: Path | None = None,
-    python_bin: Path | None = None,
-    timeout: float = 600,
-    output_limit: int = 16_000,
+def _call_novel_translator_cli(
+    args: tuple[str, ...],
+    *,
+    novel_root: Path | None,
+    python_bin: Path | None,
+    timeout: float,
+    output_limit: int,
 ) -> dict[str, Any]:
     root = novel_root or resolve_novel_translator_root()
     py_bin = python_bin or resolve_novel_translator_python(root)
@@ -250,3 +489,44 @@ def call_novel_translator(
     normalized.update(payload)
     normalized["returncode"] = process.returncode
     return normalized
+
+
+def call_novel_translator(
+    *args: str,
+    novel_root: Path | None = None,
+    python_bin: Path | None = None,
+    timeout: float = 600,
+    output_limit: int = 16_000,
+) -> dict[str, Any]:
+    """Run one of the six book operations through the vendored Python API.
+
+    ``timeout`` remains part of the public signature for callers that still
+    pass it. The direct API path performs bounded file operations and does not
+    terminate a thread. Set ``NOVEL_TRANSLATOR_CALL_MODE=cli`` while the
+    migration is being validated to use the preserved subprocess fallback.
+    Roots that only contain the legacy ``main.py`` also use that fallback.
+    """
+    root = (novel_root or resolve_novel_translator_root()).expanduser().resolve()
+    command = args[0] if args else ""
+    mode = os.environ.get("NOVEL_TRANSLATOR_CALL_MODE", "python").strip().casefold()
+    use_python_api = command in _PYTHON_API_COMMANDS and (root / "app").is_dir() and mode not in {"cli", "subprocess", "legacy"}
+    if use_python_api:
+        try:
+            return _call_python_api(root, tuple(args))
+        except NovelToolError:
+            raise
+        except Exception as exc:
+            result = ToolResult(
+                status="error",
+                returncode=1,
+                errors=[{"code": type(exc).__name__, "message": str(exc)}],
+                summary={"operation": command},
+            )
+            raise NovelToolError("Novel Translator Python API 执行失败", result) from exc
+    return _call_novel_translator_cli(
+        tuple(args),
+        novel_root=root,
+        python_bin=python_bin,
+        timeout=timeout,
+        output_limit=output_limit,
+    )

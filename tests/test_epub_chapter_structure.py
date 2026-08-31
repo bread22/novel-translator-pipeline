@@ -137,7 +137,14 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
 
     with zipfile.ZipFile(output) as archive:
         root = ET.fromstring(archive.read("OEBPS/body.xhtml"))
+        toc = archive.read("OEBPS/toc.ncx").decode("utf-8")
     texts = ["".join(element.itertext()).strip() for element in root.iter() if element.tag.endswith("p")]
     assert "第二段译文。" in texts
     assert "第二章" not in texts
+    assert len([element for element in root.iter() if element.get("id", "").startswith("chapter-")]) == 4
+    assert "body.xhtml#chapter-0001" in toc
+    assert "body.xhtml#chapter-0004" in toc
 
+    output_validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
+    assert output_validation["summary"]["toc_broken_links"] == 0
+    assert output_validation["errors"] == []

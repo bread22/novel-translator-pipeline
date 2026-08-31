@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Mapping, Sequence
 from xml.etree import ElementTree as ET
 import hashlib
 import html
@@ -974,6 +974,57 @@ def export_txt(book: Book, output: Path, bilingual: bool = False) -> None:
     output.write_text("\n".join(chunks).rstrip() + "\n", encoding="utf-8")
 
 
+def _chapter_anchor_map(chapters_by_path: Mapping[str, Sequence[Chapter]]) -> dict[str, list[tuple[int, str]]]:
+    result: dict[str, list[tuple[int, str]]] = {}
+    for source_path, chapters in chapters_by_path.items():
+        for chapter in chapters:
+            if not chapter.paragraphs:
+                continue
+            marker = next(
+                (paragraph for paragraph in chapter.paragraphs if _normalize_text(paragraph.source) == _normalize_text(chapter.title)),
+                chapter.paragraphs[0],
+            )
+            locator = marker.metadata.get("epub", {})
+            if "node_index" not in locator:
+                continue
+            try:
+                node_index = int(locator["node_index"])
+            except (TypeError, ValueError):
+                continue
+            result.setdefault(source_path, []).append((node_index, f"chapter-{chapter.index:04d}"))
+    return result
+
+
+def _repair_navigation_targets(
+    data: bytes,
+    navigation_path: str,
+    anchor_map_by_path: Mapping[str, Sequence[tuple[int, str]]],
+) -> bytes:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return data
+    base = posixpath.dirname(navigation_path)
+    used: Counter[str] = Counter()
+    for element in root.iter():
+        local = _local_name(element.tag)
+        attribute = "src" if local == "content" else "href" if local == "a" else ""
+        if not attribute:
+            continue
+        value = element.attrib.get(attribute, "")
+        if not value or _external_link(value):
+            continue
+        path_part = _link_path(html.unescape(value))
+        target = navigation_path if not path_part else _norm_zip_path(posixpath.join(base, path_part))
+        anchors = anchor_map_by_path.get(target, ())
+        ordinal = used[target]
+        if not anchors or ordinal >= len(anchors):
+            continue
+        element.set(attribute, f"{path_part}#{anchors[ordinal][1]}")
+        used[target] += 1
+    return _serialize_xml(root)
+
+
 def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None, *, bilingual: bool = False) -> dict:
     config = epub_config or EpubConfig()
     if book.source_type != "epub":
@@ -984,6 +1035,7 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
     for chapter in book.chapters:
         chapters_by_path.setdefault(chapter.source_path, []).append(chapter)
     ignored_nodes_by_path = book.metadata.get("epub", {}).get("ignored_nodes", {})
+    anchor_map_by_path = _chapter_anchor_map(chapters_by_path)
     title_translations = _chapter_title_translations(book)
     source = Path(book.source_file)
     with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(output, "w") as dst:
@@ -1002,9 +1054,12 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
             is_toc = config.translate_toc and info.filename == toc_path
             if info.filename == opf_path:
                 data = _update_opf_for_export(data, book, title_translations)
-            elif title_translations and (is_nav or is_toc):
-                data, nav_warnings = _replace_navigation_text(data, title_translations)
-                warnings.extend(f"{info.filename}: {message}" for message in nav_warnings)
+            elif is_nav or is_toc:
+                if info.filename == nav_path or info.filename == toc_path:
+                    data = _repair_navigation_targets(data, info.filename, anchor_map_by_path)
+                if title_translations:
+                    data, nav_warnings = _replace_navigation_text(data, title_translations)
+                    warnings.extend(f"{info.filename}: {message}" for message in nav_warnings)
             else:
                 chapters = chapters_by_path.get(info.filename)
                 if chapters:
@@ -1014,6 +1069,7 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
                         config,
                         bilingual=bilingual,
                         ignored_nodes=ignored_nodes_by_path.get(info.filename, ()),
+                        chapter_anchor_ids=dict(anchor_map_by_path.get(info.filename, ())),
                     )
                     warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
             _write_epub_member(dst, info, data)
@@ -1094,6 +1150,7 @@ def _replace_chapters_by_locator(
     *,
     bilingual: bool = False,
     ignored_nodes: Sequence[int] = (),
+    chapter_anchor_ids: Mapping[int, str] | None = None,
 ) -> tuple[bytes, list[str]]:
     warnings: list[str] = []
     try:
@@ -1126,6 +1183,9 @@ def _replace_chapters_by_locator(
             warnings.append(f"{paragraph.id} 节点原文 hash 不一致，已保留原文")
             continue
         _set_element_text(element, _export_text(paragraph.source, paragraph.translated, bilingual=bilingual), config=config)
+    for node_index, anchor_id in (chapter_anchor_ids or {}).items():
+        if 0 <= int(node_index) < len(nodes):
+            nodes[int(node_index)].set("id", str(anchor_id))
     for node_index in ignored_nodes:
         if 0 <= int(node_index) < len(nodes):
             nodes[int(node_index)].clear()
@@ -1143,6 +1203,7 @@ def _replace_chapters_by_locator_with_soup(
     *,
     bilingual: bool = False,
     ignored_nodes: Sequence[int] = (),
+    chapter_anchor_ids: Mapping[int, str] | None = None,
 ) -> tuple[bytes, list[str]] | None:
     soup = _soup(data)
     if soup is None:
@@ -1172,6 +1233,9 @@ def _replace_chapters_by_locator_with_soup(
         else:
             node.clear()
             node.string = text
+    for node_index, anchor_id in (chapter_anchor_ids or {}).items():
+        if 0 <= int(node_index) < len(nodes):
+            nodes[int(node_index)]["id"] = str(anchor_id)
     for node_index in ignored_nodes:
         if 0 <= int(node_index) < len(nodes):
             nodes[int(node_index)].clear()

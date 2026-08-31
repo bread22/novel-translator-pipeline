@@ -177,10 +177,10 @@ def check_person_name(source: str, target: str, category: object) -> NameCheckRe
 
     if not name_source or not name_target:
         return result("ambiguous", reason="empty_name_after_honorific_split")
-    # The first phase targets kanji names. Keep legacy/non-CJK person entries
-    # flowing through the existing validator until a script-specific checker is
-    # added; mixed CJK/non-CJK names remain reviewable below.
-    if not _CJK_CHAR_RE.search(name_source) and not _CJK_CHAR_RE.search(name_target):
+    # The first phase targets kanji names. If the source name contains no CJK kanji,
+    # it is a transliterated/phonetic name (katakana/hiragana/latin) and does not use
+    # 1:1 character alignment. Return None to let standard glossary validation proceed.
+    if not _CJK_CHAR_RE.search(name_source):
         return None
     if not _is_cjk_name(name_source) or not _is_cjk_name(name_target):
         return result("ambiguous", reason="name_is_not_cjk_aligned")

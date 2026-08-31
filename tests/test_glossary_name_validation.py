@@ -111,3 +111,50 @@ def test_review_boundary_preserves_ambiguous_name_for_queue(tmp_path: Path) -> N
     summary = apply_knowledge_delta(workspace, "c1", candidates, decisions, evidence_texts={"p1": "甲髙乙君"})
     assert summary["candidate"] == 1
     assert workspace.knowledge_candidates_path.exists()
+
+
+def test_katakana_and_phonetic_names_bypass_kanji_alignment() -> None:
+    # Katakana names contain no CJK characters in source and must return None (not applicable)
+    assert check_person_name("ラルス", "拉尔斯", "person") is None
+    assert check_person_name("ルイーズ・ベネット", "路易丝·贝内特", "person") is None
+    assert check_person_name("エマ", "艾玛", "person") is None
+    assert check_person_name("マイク", "麦克", "person") is None
+    assert check_person_name("キャロル", "卡罗尔", "person") is None
+
+    # validate_term_candidate must validate and accept katakana/phonetic person terms
+    res = validate_term_candidate(
+        {
+            "source": "ラルス",
+            "target": "拉尔斯",
+            "category": "person",
+            "confidence": 0.95,
+            "evidence_ids": ["p1"],
+        },
+        evidence_texts={"p1": "ラルス走进房间"},
+    )
+    assert res.valid
+    assert res.candidate is not None
+    assert res.candidate.source == "ラルス"
+    assert res.candidate.target == "拉尔斯"
+
+
+def test_katakana_names_with_honorifics_and_aliases() -> None:
+    from translator.glossary.taxonomy import canonical_category
+
+    assert canonical_category("人物称谓") == "fixed_person_title"
+    assert canonical_category("游戏") == "system_term"
+    assert canonical_category("家族名") == "group"
+
+    res = validate_term_candidate(
+        {
+            "source": "ルイーズ・ベネット",
+            "target": "路易丝·贝内特",
+            "category": "person",
+            "confidence": 0.95,
+            "evidence_ids": ["p1", "p2"],
+        },
+        evidence_texts={"p1": "ルイーズ・ベネット说", "p2": "ルイーズ・ベネット来了"},
+    )
+    assert res.valid
+    assert res.candidate is not None
+    assert res.candidate.target == "路易丝·贝内特"

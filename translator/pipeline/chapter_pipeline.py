@@ -1022,7 +1022,11 @@ class IterativePipeline:
             str(item.get("candidate_id", "")): item
             for item in decisions if isinstance(item, dict) and item.get("candidate_id")
         }
-        evidence = {str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")}
+        manifest_doc = read_json(self.manifest, default={})
+        all_paragraphs = paragraph_map(manifest_doc)
+        evidence = {str(p_id): str(p.get("source", "")) for p_id, p in all_paragraphs.items()} if all_paragraphs else {
+            str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")
+        }
         try:
             applied = apply_knowledge_delta(
                 self.workspace, chapter_id, candidates, decision_map, conflicts,

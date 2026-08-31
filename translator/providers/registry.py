@@ -19,8 +19,8 @@ def get_provider(name: str, config: dict[str, Any] | None = None) -> BaseProvide
         if matching:
             p_config = dict(providers[matching[0]])
             name = matching[0]
-        elif name in {"opencode", "antigravity", "codex"}:
-            p_config = {"type": name}
+        elif name in {"opencode", "antigravity", "codex", "online_api", "openai"}:
+            p_config = {"type": "openai" if name in {"online_api", "openai"} else name}
         else:
             raise ValueError(f"未在 config.toml 的 [providers] 中找到 provider: '{name}'")
     else:

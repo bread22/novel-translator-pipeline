@@ -625,6 +625,8 @@ def apply_knowledge_delta(
             if action == "active":
                 if candidate.get("kind") == "glossary":
                     category = canonical_category(candidate.get("category", ""))
+                    if category_tier(category) is None:
+                        category = "system_term"
                     candidate["category"] = category
                     if (
                         str(candidate.get("source", "")).strip()

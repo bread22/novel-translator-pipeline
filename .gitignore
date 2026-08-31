@@ -32,3 +32,5 @@ release/
 .codex/
 docs/intermediate/
 docs/qa/
+config.toml.bak.*
+.codex-artifacts/

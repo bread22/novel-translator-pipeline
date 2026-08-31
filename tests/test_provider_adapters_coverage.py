@@ -154,6 +154,11 @@ def test_openai_provider_loads_dollar_env_after_dotenv(monkeypatch) -> None:
     monkeypatch.setattr("translator.core.config._load_dotenv", load_dotenv)
     provider = OpenAIProvider("sample", {"api_key": "$SAMPLE_API_KEY"})
     assert provider.api_key == "loaded-from-dotenv"
+    assert provider._make_headers()["Authorization"] == "Bearer loaded-from-dotenv"
+
+    monkeypatch.setenv("SAMPLE_API_KEY", "loaded-directly")
+    direct_provider = OpenAIProvider("sample", {})
+    assert direct_provider.api_key == "loaded-directly"
 
 
 def test_opencode_helpers_and_health(monkeypatch) -> None:

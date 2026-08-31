@@ -6,11 +6,33 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
-from translator.core.novel_tool import NovelToolError, call_novel_translator, novel_translator_diagnostic
+from translator.core.novel_tool import (
+    NovelToolError,
+    call_novel_translator,
+    novel_translator_diagnostic,
+    resolve_novel_translator_root,
+)
 
 
 class NovelToolTests(unittest.TestCase):
+    def test_default_root_points_to_vendored_runtime(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            resolved = resolve_novel_translator_root()
+        expected = Path(__file__).resolve().parents[1] / "vendor" / "novel-translator"
+        self.assertEqual(resolved, expected.resolve())
+        self.assertTrue((resolved / "main.py").is_file())
+        self.assertTrue((resolved / "LICENSE").is_file())
+
+    def test_environment_root_overrides_vendored_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            override = Path(temporary)
+            (override / "main.py").write_text("", encoding="utf-8")
+            with patch.dict(os.environ, {"NOVEL_TRANSLATOR_ROOT": str(override)}):
+                resolved = resolve_novel_translator_root()
+        self.assertEqual(resolved, override.resolve())
+
     def test_dependency_diagnostic_is_structured(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             diagnostic = novel_translator_diagnostic(Path(temporary), Path(sys.executable))

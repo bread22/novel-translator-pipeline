@@ -1,0 +1,2 @@
+"""Novel Translator package."""
+

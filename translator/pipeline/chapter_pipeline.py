@@ -557,7 +557,8 @@ class IterativePipeline:
             reason = provider_failure_reason(result)
         remaining = self._chapter_pending_ids(self._chapter(chapter_id))
         recovered_ids = [item_id for item_id in ids if item_id in before_pending and item_id not in remaining]
-        attempt = {
+        latency_ms = round((time.monotonic() - started) * 1000, 3)
+        attempt: dict[str, Any] = {
             "attempt_id": attempt_id,
             "provider": primary_translator,
             "depth": depth,
@@ -565,7 +566,7 @@ class IterativePipeline:
             "recovered_ids": recovered_ids,
             "source_chars": source_chars,
             "status": "ok" if recovered_ids else "error",
-            "latency_ms": round((time.monotonic() - started) * 1000, 3),
+            "latency_ms": latency_ms,
             "result": result,
             "reason": reason,
             "remaining": sorted(remaining),
@@ -581,7 +582,7 @@ class IterativePipeline:
             result=result,
             reason=reason,
             depth=depth,
-            latency_ms=attempt["latency_ms"],
+            latency_ms=latency_ms,
         )
         if recovered_ids:
             self._record_translation_provenance(recovered_ids, primary_translator, reason, attempt_id=attempt_id)
@@ -639,7 +640,8 @@ class IterativePipeline:
             fb_remaining = self._chapter_pending_ids(self._chapter(chapter_id))
             fb_recovered = [item_id for item_id in attempted_ids if item_id not in fb_remaining]
             fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
-            fb_attempt = {
+            fb_latency_ms = round((time.monotonic() - fb_started) * 1000, 3)
+            fb_attempt: dict[str, Any] = {
                 "attempt_id": fb_attempt_id,
                 "provider": fb_provider,
                 "depth": depth,
@@ -647,7 +649,7 @@ class IterativePipeline:
                 "recovered_ids": fb_recovered,
                 "source_chars": fb_source_chars,
                 "status": "ok" if fb_recovered else "error",
-                "latency_ms": round((time.monotonic() - fb_started) * 1000, 3),
+                "latency_ms": fb_latency_ms,
                 "result": fb_result,
                 "reason": fb_reason,
                 "remaining": sorted(fb_remaining),
@@ -663,7 +665,7 @@ class IterativePipeline:
                 result=fb_result,
                 reason=provider_failure_reason(fb_result),
                 depth=depth,
-                latency_ms=fb_attempt["latency_ms"],
+                latency_ms=fb_latency_ms,
                 fallback_from=route_from,
                 fallback_index=fb_idx + 1,
                 fallback_reason=fb_reason,

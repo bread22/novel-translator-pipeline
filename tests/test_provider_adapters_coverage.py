@@ -11,6 +11,7 @@ from translator.providers import antigravity, codex, opencode, registry
 from translator.providers.antigravity import AntigravityProvider
 from translator.providers.codex import CodexProvider
 from translator.providers.errors import ProviderConnectionError, ProviderResponseError
+from translator.providers.openai_provider import OpenAIProvider
 
 
 PAYLOAD = {"items": [{"id": "p1", "source": "hello"}]}
@@ -133,6 +134,26 @@ def test_registry_explicit_and_inferred_provider_types() -> None:
         registry.get_provider("missing", cfg)
     with pytest.raises(ValueError):
         registry.get_provider("unknown", {"providers": {"unknown": {}}})
+
+
+def test_registry_alias_and_builtin_openai_fallback() -> None:
+    aliased = registry.get_provider("openai", {"providers": {"custom": {"type": "openai"}}})
+    assert isinstance(aliased, OpenAIProvider)
+
+    builtin = registry.get_provider("online_api", {"providers": {}})
+    assert isinstance(builtin, OpenAIProvider)
+
+
+def test_openai_provider_loads_dollar_env_after_dotenv(monkeypatch) -> None:
+    monkeypatch.delenv("SAMPLE_API_KEY", raising=False)
+
+    def load_dotenv(*, override: bool = False) -> None:
+        assert override
+        monkeypatch.setenv("SAMPLE_API_KEY", "loaded-from-dotenv")
+
+    monkeypatch.setattr("translator.core.config._load_dotenv", load_dotenv)
+    provider = OpenAIProvider("sample", {"api_key": "$SAMPLE_API_KEY"})
+    assert provider.api_key == "loaded-from-dotenv"
 
 
 def test_opencode_helpers_and_health(monkeypatch) -> None:

@@ -97,6 +97,8 @@ jobs:
       NOVEL_TRANSLATOR_ROOT: ${{ github.workspace }}/tests/fixtures/novel-translator
     steps:
       - uses: actions/checkout@v4
+      - name: Stage vendored runtime in isolated fixture root
+        run: cp -R vendor/novel-translator/app tests/fixtures/novel-translator/app
       - run: cp config.toml.example config.toml
       - uses: actions/setup-python@v5
         with:

@@ -264,7 +264,7 @@ def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
             bilingual = _has_flag(args, "--bilingual") and not _has_flag(args, "--monolingual")
             if export_format == "txt":
                 api.export_txt(book, output, bilingual=bilingual)
-                warnings: list[str] = []
+                warnings = []
             elif export_format == "epub":
                 export_result = api.export_epub(book, output, _epub_config(api), bilingual=bilingual)
                 warnings = list(export_result.get("warnings", []))

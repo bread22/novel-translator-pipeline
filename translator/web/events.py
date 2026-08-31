@@ -116,7 +116,8 @@ def _legacy_translation_events(
         if not isinstance(attempt, dict):
             continue
         provider = str(attempt.get("provider", "-")).strip() or "-"
-        result = attempt.get("result") if isinstance(attempt.get("result"), dict) else {}
+        raw_result = attempt.get("result")
+        result: dict[str, Any] = raw_result if isinstance(raw_result, dict) else {}
         attempted_ids = attempt.get("attempted_ids", attempt.get("ids", []))
         recovered_ids = attempt.get("recovered_ids")
         attempted_ids = [str(item) for item in attempted_ids] if isinstance(attempted_ids, list) else []

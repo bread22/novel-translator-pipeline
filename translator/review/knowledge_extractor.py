@@ -435,14 +435,17 @@ def build_finalization_payload(
     active_terms = [item for item in active_terms_all if any(is_relevant(item, refs) for refs in candidate_refs)]
     memory_entries = [item for item in memory_entries_all if any(is_relevant(item, refs, memory_record=True) for refs in candidate_refs)]
 
-    compact_candidates = [
-        {
-            key: candidate[key] for key in (
+    def compact_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            str(key): candidate[key] for key in (
                 "candidate_id", "kind", "source", "target", "category", "key", "value", "note",
                 "confidence", "source_window", "source_paragraph_ids", "evidence_ids",
                 "source_fragment", "target_fragment", "referenced_glossary_ids", "referenced_memory_keys",
             ) if key in candidate
         }
+
+    compact_candidates = [
+        compact_candidate(candidate)
         for candidate in aggregated_candidates if isinstance(candidate, Mapping)
     ]
     compact_conflicts = [dict(item) for item in conflicts if isinstance(item, Mapping)]

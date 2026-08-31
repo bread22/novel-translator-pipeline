@@ -637,7 +637,7 @@ def _soup_translatable_nodes(soup) -> list:
 
 
 def _has_block_children(element: ET.Element) -> bool:
-    return any(_local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in list(element))
+    return any(child is not element and _local_name(child.tag) in TRANSLATABLE_TAGS - {"div"} for child in element.iter())
 
 
 def _element_text(element: ET.Element) -> str:
@@ -986,8 +986,13 @@ def _text_hash(text: str) -> str:
 def _chapter_title_translations(book: Book) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for chapter in book.chapters:
-        if chapter.paragraphs and chapter.paragraphs[0].translated and chapter.paragraphs[0].source == chapter.title:
-            mapping[chapter.title] = chapter.paragraphs[0].translated
+        if chapter.paragraphs and chapter.paragraphs[0].translated:
+            first = chapter.paragraphs[0]
+            # EPUB TOC entries often use the file-level chapter title while the
+            # visible translated heading is the first paragraph in the file.
+            # Map both forms so navigation text follows the translated heading.
+            mapping[chapter.title] = first.translated
+            mapping[first.source] = first.translated
         for paragraph in chapter.paragraphs:
             epub = paragraph.metadata.get("epub", {})
             if epub.get("node_tag") in {"h1", "h2", "h3", "h4", "h5", "h6"} and paragraph.translated:

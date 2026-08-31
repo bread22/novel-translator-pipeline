@@ -7,6 +7,9 @@ This repository vendors `novel-translator` from
 `d85f5f224981c6edd4bcd41d856c61593b13abf4`.
 
 The vendored project is distributed under the MIT License; its original
-license text is preserved at `vendor/novel-translator/LICENSE`. The local
-integration patches are recorded in `patches/` and applied in the subsequent
-integration stage.
+license text is preserved at `vendor/novel-translator/LICENSE`.
+
+- Upstream baseline: `d85f5f224981c6edd4bcd41d856c61593b13abf4`
+- Applied integration patches: `6b247658b3d0c0aba7e1379991e54e2bbeece6c3`
+  and `67ac8dbb2234f9c95e4581a5bc40a3c28488500f`
+- Baseline checksums: `patches/novel-translator-vendor-baseline.sha256`

@@ -11,6 +11,34 @@ from app.placeholders import placeholder_payload_for_paragraph
 from app.terminology import Term, relevant_terms_for_text
 
 
+TRANSLATION_RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "translation_result",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "text": {"type": "string"},
+                        },
+                        "required": ["id", "text"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 def pending_paragraphs(paragraphs: Iterable[Paragraph]) -> list[Paragraph]:
     return [paragraph for paragraph in paragraphs if not paragraph.translated.strip()]
 
@@ -61,7 +89,9 @@ def translate_batch(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
-                response_format={"type": "json_object"},
+                temperature=config.translation.temperature,
+                max_tokens=config.translation.max_tokens,
+                response_format=TRANSLATION_RESPONSE_SCHEMA,
             )
             content = response.choices[0].message.content or ""
             result = parse_translation_response(content)

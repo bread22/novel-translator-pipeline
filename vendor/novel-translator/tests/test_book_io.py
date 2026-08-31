@@ -1598,3 +1598,63 @@ def _write_epub_with_metadata(path: Path) -> None:
             """<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>Hello.</p></body></html>""",
         )
+
+
+def test_has_block_children_detects_deeply_nested_translatable_tags() -> None:
+    import xml.etree.ElementTree as ET
+    from app.book_io import _has_block_children
+
+    # 1. Deeply nested <p> inside <div> and <section>
+    xml_with_nested_block = "<section><div><p>Deep paragraph</p></div></section>"
+    element = ET.fromstring(xml_with_nested_block)
+    assert _has_block_children(element) is True
+
+    # 2. Only inline tags (e.g. <span>, <em>)
+    xml_with_inline_only = "<p>Hello <span>world</span> <em>!</em></p>"
+    inline_element = ET.fromstring(xml_with_inline_only)
+    assert _has_block_children(inline_element) is False
+
+    # 3. Plain text leaf
+    plain_element = ET.fromstring("<p>Simple text</p>")
+    assert _has_block_children(plain_element) is False
+
+
+def test_chapter_title_translations_maps_file_title_and_first_paragraph_source() -> None:
+    from app.book_io import _chapter_title_translations
+    from app.models import Book, Chapter, Paragraph
+
+    p1 = Paragraph(
+        id="p1",
+        index=0,
+        chapter_id="c1",
+        source="第一章 序幕",
+        translated="第一章 序幕（中文）",
+        metadata={"epub": {"node_tag": "h1"}},
+    )
+    p2 = Paragraph(
+        id="p2",
+        index=1,
+        chapter_id="c1",
+        source="正文内容",
+        translated="正文内容（中文）",
+        metadata={"epub": {"node_tag": "p"}},
+    )
+    chapter = Chapter(
+        id="c1",
+        index=0,
+        title="chapter01.xhtml",
+        source_path=Path("chapter01.xhtml"),
+        paragraphs=[p1, p2],
+    )
+    book = Book(
+        id="test-book",
+        title="测试书",
+        source_file=Path("test.epub"),
+        source_type="epub",
+        chapters=[chapter],
+    )
+
+    mapping = _chapter_title_translations(book)
+    assert mapping.get("chapter01.xhtml") == "第一章 序幕（中文）"
+    assert mapping.get("第一章 序幕") == "第一章 序幕（中文）"
+

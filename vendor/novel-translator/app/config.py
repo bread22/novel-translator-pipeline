@@ -29,6 +29,8 @@ class TranslationConfig:
     style_sample_file: str = ""
     style_sample_max_chars: int = 1200
     batch_max_chars: int = 4000
+    temperature: float = 0.3
+    max_tokens: int = 4096
     retry_count: int = 3
     retry_delay: int = 2
     quality_passes: int = 2
@@ -174,6 +176,8 @@ def load_config(root: Path, config_path: Path | None = None) -> AppConfig:
         style_sample_file=str(translation_raw.get("style_sample_file", "")),
         style_sample_max_chars=int(translation_raw.get("style_sample_max_chars", 1200)),
         batch_max_chars=int(translation_raw.get("batch_max_chars", 4000)),
+        temperature=float(translation_raw.get("temperature", 0.3)),
+        max_tokens=int(translation_raw.get("max_tokens", 4096)),
         retry_count=int(translation_raw.get("retry_count", 3)),
         retry_delay=int(translation_raw.get("retry_delay", 2)),
         quality_passes=int(translation_raw.get("quality_passes", 2)),

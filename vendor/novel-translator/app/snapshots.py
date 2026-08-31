@@ -6,7 +6,7 @@ from uuid import uuid4
 import json
 import shutil
 
-from app.models import Book, book_dir, load_book
+from app.models import Book, book_dir
 
 
 def snapshots_dir(root_books_dir: Path, book_id: str) -> Path:
@@ -33,30 +33,3 @@ def create_snapshot(root_books_dir: Path, book: Book, name: str) -> dict:
     }
     (directory / "snapshot.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"status": "ok", "warnings": [], "summary": meta, "details": {}}
-
-
-def list_snapshots(root_books_dir: Path, book_id: str) -> dict:
-    items = []
-    directory = snapshots_dir(root_books_dir, book_id)
-    if directory.exists():
-        for meta_path in sorted(directory.glob("*/snapshot.json")):
-            try:
-                items.append(json.loads(meta_path.read_text(encoding="utf-8")))
-            except json.JSONDecodeError:
-                continue
-    return {"status": "ok", "warnings": [], "summary": {"book": book_id, "count": len(items)}, "details": {"snapshots": items}}
-
-
-def restore_snapshot(root_books_dir: Path, book_id: str, snapshot_id: str) -> dict:
-    source = snapshots_dir(root_books_dir, book_id) / snapshot_id / "manifest.json"
-    if not source.exists():
-        raise FileNotFoundError(f"未找到快照：{snapshot_id}")
-    target = book_dir(root_books_dir, book_id) / "manifest.json"
-    shutil.copy2(source, target)
-    book = load_book(root_books_dir, book_id)
-    return {
-        "status": "ok",
-        "warnings": [],
-        "summary": {"book": book.id, "snapshot": snapshot_id, "paragraphs": len(book.paragraphs)},
-        "details": {},
-    }

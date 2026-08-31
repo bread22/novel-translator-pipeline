@@ -4,26 +4,22 @@ Baseline: `d85f5f224981c6edd4bcd41d856c61593b13abf4`.
 The complete pre-patch file checksum list is stored in
 `patches/novel-translator-vendor-baseline.sha256`.
 
-## Retain through direct-call validation
+## Retained after direct-call validation
 
-The following files are the current compatibility closure and remain intact
-until the process-internal implementation has passed its behavior tests:
+The direct-call tests passed before this cleanup. The final retained closure is
+now limited to the six operations:
 
-- `main.py` and `app/cli_main.py` (the CLI compatibility entry point and its
-  complete import closure)
+- `app/__init__.py`
 - `app/book_io.py`, `app/config.py`, `app/models.py`, `app/snapshots.py`
 - `app/review.py`, `app/manual.py`, `app/placeholders.py`
-- `app/terminology.py`, `app/quality.py` (transitive dependencies of review
-  writeback and translation reset)
 - `prompts/novel_translation_system.md` and `LICENSE`
 
-## Deferred cleanup candidates
+## Removed after direct-call validation
 
-The current pipeline has no call sites for the upstream translation and
-workflow-only features. After direct Python calls are verified, inspect and
-remove the corresponding CLI commands and these modules when they are no
-longer in the retained import closure:
+The CLI and upstream workflow-only modules were removed only after the direct
+operation and full pipeline tests passed:
 
+- `main.py`, `app/cli_main.py`
 - `app/analysis.py`
 - `app/context.py`
 - `app/delivery.py`
@@ -36,6 +32,4 @@ longer in the retained import closure:
 - `app/translator.py`
 - `app/work_records.py`
 - `app/workspace.py`
-
-This inventory deliberately does not delete those files in stage two because
-`app/cli_main.py` imports them at startup.
+- vendor-only documentation, build metadata, skills, and tests

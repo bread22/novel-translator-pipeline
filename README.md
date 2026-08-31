@@ -99,17 +99,17 @@ npm run build
 cd ..
 ```
 
-### 准备上游运行时
+### 上游运行时
 
 ```bash
-git clone https://github.com/OYcedar/novel-translator.git ~/src/novel-translator
-python3 -m venv ~/src/novel-translator/.venv
-~/src/novel-translator/.venv/bin/pip install -e "$HOME/src/novel-translator[epub]"
+# 默认使用仓库内固定版本的 vendor/novel-translator
+
+# 可选：临时切换到另一个包含 app/ 包的 checkout
 export NOVEL_TRANSLATOR_ROOT="$HOME/src/novel-translator"
-export NOVEL_TRANSLATOR_PYTHON="$HOME/src/novel-translator/.venv/bin/python"
 ```
 
-这些变量也可写入 `.env`。未设置时，程序会尝试发现 `~/src/novel-translator` 及其 `.venv`。
+`NOVEL_TRANSLATOR_ROOT` 也可写入 `.env`。运行时现在直接调用 vendor 的 Python API，
+不需要单独配置上游 Python 解释器。
 
 ## 启动 Web Studio
 

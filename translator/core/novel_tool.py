@@ -4,8 +4,6 @@ import json
 from importlib import import_module
 import os
 from pathlib import Path
-import signal
-import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from threading import RLock
@@ -19,12 +17,12 @@ def resolve_novel_translator_root() -> Path:
     if env_root:
         return Path(env_root).expanduser().resolve()
     vendor_root = ROOT / "vendor" / "novel-translator"
-    if (vendor_root / "main.py").exists():
+    if (vendor_root / "app").is_dir():
         return vendor_root.resolve()
     default_home = Path.home() / "src" / "novel-translator"
-    if (default_home / "main.py").exists():
+    if (default_home / "app").is_dir():
         return default_home.resolve()
-    return default_home.resolve()
+    return vendor_root.resolve()
 
 
 def resolve_novel_translator_python(novel_root: Path | None = None) -> Path:
@@ -313,14 +311,15 @@ def novel_translator_diagnostic(novel_root: Path | None = None, python_bin: Path
     checks = {
         "root_exists": root.is_dir(),
         "main_py_exists": (root / "main.py").is_file(),
+        "app_package_exists": (root / "app").is_dir(),
         "python_exists": py_bin.is_file(),
     }
     return {
-        "status": "ok" if all(checks.values()) else "error",
+        "status": "ok" if checks["root_exists"] and checks["app_package_exists"] else "error",
         "root": str(root),
         "python": str(py_bin),
         "checks": checks,
-        "setup": "设置 NOVEL_TRANSLATOR_ROOT 和 NOVEL_TRANSLATOR_PYTHON，或安装受支持的 external runtime。",
+        "setup": "设置 NOVEL_TRANSLATOR_ROOT，或使用仓库内 vendor/novel-translator 运行时。",
     }
 
 
@@ -402,95 +401,6 @@ def provider_failure_reason(result: dict[str, Any] | None) -> str:
     return "provider_error"
 
 
-def _call_novel_translator_cli(
-    args: tuple[str, ...],
-    *,
-    novel_root: Path | None,
-    python_bin: Path | None,
-    timeout: float,
-    output_limit: int,
-) -> dict[str, Any]:
-    root = novel_root or resolve_novel_translator_root()
-    py_bin = python_bin or resolve_novel_translator_python(root)
-    diagnostic = novel_translator_diagnostic(root, py_bin)
-    if diagnostic["status"] != "ok":
-        result = ToolResult(status="error", errors=[{"code": "dependency_missing", "message": diagnostic["setup"]}], summary=diagnostic)
-        raise NovelToolError("Novel Translator runtime 检查失败", result)
-    command = [
-        str(py_bin),
-        str(root / "main.py"),
-        "--agent-mode",
-        *args,
-        "--json",
-    ]
-    process = subprocess.Popen(
-        command,
-        cwd=root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=(os.name != "nt"),
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        if os.name != "nt":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
-        try:
-            stdout, stderr = process.communicate(timeout=3)
-        except subprocess.TimeoutExpired:
-            if os.name != "nt":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-            stdout, stderr = process.communicate()
-        result = ToolResult(
-            status="timeout",
-            returncode=process.returncode,
-            errors=[{"code": "timeout", "message": f"外部工具超过 {timeout} 秒"}],
-            stdout=stdout[-output_limit:],
-            stderr=stderr[-output_limit:],
-        )
-        raise NovelToolError("Novel Translator 执行超时", result) from exc
-    stdout = stdout[-output_limit:]
-    stderr = stderr[-output_limit:]
-    if process.returncode != 0:
-        result = ToolResult(
-            status="error",
-            returncode=process.returncode,
-            errors=[{"code": "nonzero_exit", "message": stderr or stdout or "外部工具返回非零状态"}],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        raise NovelToolError(f"Novel Translator failed ({process.returncode})", result)
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        result = ToolResult(
-            status="error",
-            returncode=process.returncode,
-            errors=[{"code": "invalid_json", "message": "外部工具未返回 JSON"}],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        raise NovelToolError("Novel Translator returned non-JSON output", result) from exc
-    if not isinstance(payload, dict):
-        payload = {"payload": payload}
-    normalized = ToolResult(
-        status=str(payload.get("status", "ok")),
-        returncode=process.returncode,
-        errors=list(payload.get("errors", []) or []),
-        summary=dict(payload.get("summary", {}) or {}),
-        stdout="",
-        stderr=stderr,
-    ).as_dict()
-    normalized.update(payload)
-    normalized["returncode"] = process.returncode
-    return normalized
-
-
 def call_novel_translator(
     *args: str,
     novel_root: Path | None = None,
@@ -500,33 +410,30 @@ def call_novel_translator(
 ) -> dict[str, Any]:
     """Run one of the six book operations through the vendored Python API.
 
-    ``timeout`` remains part of the public signature for callers that still
-    pass it. The direct API path performs bounded file operations and does not
-    terminate a thread. Set ``NOVEL_TRANSLATOR_CALL_MODE=cli`` while the
-    migration is being validated to use the preserved subprocess fallback.
-    Roots that only contain the legacy ``main.py`` also use that fallback.
+    ``timeout``, ``python_bin`` and ``output_limit`` remain compatibility
+    parameters for callers that still pass them. These file operations run in
+    process and do not use subprocess termination for timeouts.
     """
+    del python_bin, timeout, output_limit
     root = (novel_root or resolve_novel_translator_root()).expanduser().resolve()
     command = args[0] if args else ""
-    mode = os.environ.get("NOVEL_TRANSLATOR_CALL_MODE", "python").strip().casefold()
-    use_python_api = command in _PYTHON_API_COMMANDS and (root / "app").is_dir() and mode not in {"cli", "subprocess", "legacy"}
-    if use_python_api:
-        try:
-            return _call_python_api(root, tuple(args))
-        except NovelToolError:
-            raise
-        except Exception as exc:
-            result = ToolResult(
-                status="error",
-                returncode=1,
-                errors=[{"code": type(exc).__name__, "message": str(exc)}],
-                summary={"operation": command},
-            )
-            raise NovelToolError("Novel Translator Python API 执行失败", result) from exc
-    return _call_novel_translator_cli(
-        tuple(args),
-        novel_root=root,
-        python_bin=python_bin,
-        timeout=timeout,
-        output_limit=output_limit,
-    )
+    if command not in _PYTHON_API_COMMANDS:
+        result = ToolResult(
+            status="error",
+            returncode=1,
+            errors=[{"code": "unsupported_operation", "message": f"不支持的 Novel Translator 操作：{command}"}],
+            summary={"operation": command},
+        )
+        raise NovelToolError("Novel Translator 操作不受支持", result)
+    try:
+        return _call_python_api(root, tuple(args))
+    except NovelToolError:
+        raise
+    except Exception as exc:
+        result = ToolResult(
+            status="error",
+            returncode=1,
+            errors=[{"code": type(exc).__name__, "message": str(exc)}],
+            summary={"operation": command},
+        )
+        raise NovelToolError("Novel Translator Python API 执行失败", result) from exc

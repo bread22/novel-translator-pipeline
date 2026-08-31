@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
 
 from translator.core.novel_tool import call_novel_translator
@@ -46,7 +45,6 @@ class NovelToolPythonApiTests(unittest.TestCase):
         self.runtime = self.root / "runtime"
         self.runtime.mkdir()
         (self.runtime / "app").symlink_to(VENDOR_ROOT / "app", target_is_directory=True)
-        (self.runtime / "main.py").symlink_to(VENDOR_ROOT / "main.py")
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -66,79 +64,77 @@ class NovelToolPythonApiTests(unittest.TestCase):
         epub_source = self.root / "source.epub"
         write_epub(epub_source)
 
-        with patch("translator.core.novel_tool.subprocess.Popen", side_effect=AssertionError("CLI fallback was used")):
-            registered = self.call(
-                "add-book",
-                "--path",
-                str(source),
-                "--title",
-                "Fixture Book",
-                "--id",
-                "fixture-book",
-            )
-            self.assertEqual(registered["summary"]["book"], "fixture-book")
+        registered = self.call(
+            "add-book",
+            "--path",
+            str(source),
+            "--title",
+            "Fixture Book",
+            "--id",
+            "fixture-book",
+        )
+        self.assertEqual(registered["summary"]["book"], "fixture-book")
 
-            snapshot = self.call("snapshot", "--book", "fixture-book", "--name", "before-fix")
-            self.assertEqual(snapshot["summary"]["book"], "fixture-book")
-            self.assertTrue(list((self.runtime / "data" / "books" / "fixture-book" / "snapshots").glob("*/manifest.json")))
+        snapshot = self.call("snapshot", "--book", "fixture-book", "--name", "before-fix")
+        self.assertEqual(snapshot["summary"]["book"], "fixture-book")
+        self.assertTrue(list((self.runtime / "data" / "books" / "fixture-book" / "snapshots").glob("*/manifest.json")))
 
-            fixes = self.root / "fixes.json"
-            fixes.write_text(
-                json.dumps({"items": [{"id": "c0001-p00001", "approved_translation": "第一段（译文）。"}]}),
-                encoding="utf-8",
-            )
-            applied = self.call("apply-review-fixes", "--book", "fixture-book", "--input", str(fixes))
-            self.assertEqual(applied["summary"]["applied"], 1)
+        fixes = self.root / "fixes.json"
+        fixes.write_text(
+            json.dumps({"items": [{"id": "c0001-p00001", "approved_translation": "第一段（译文）。"}]}),
+            encoding="utf-8",
+        )
+        applied = self.call("apply-review-fixes", "--book", "fixture-book", "--input", str(fixes))
+        self.assertEqual(applied["summary"]["applied"], 1)
 
-            txt_output = self.root / "translated.txt"
-            exported_txt = self.call(
-                "export",
-                "--book",
-                "fixture-book",
-                "--format",
-                "txt",
-                "--output",
-                str(txt_output),
-                "--monolingual",
-            )
-            self.assertEqual(exported_txt["summary"]["format"], "txt")
-            self.assertIn("第一段（译文）。", txt_output.read_text(encoding="utf-8"))
+        txt_output = self.root / "translated.txt"
+        exported_txt = self.call(
+            "export",
+            "--book",
+            "fixture-book",
+            "--format",
+            "txt",
+            "--output",
+            str(txt_output),
+            "--monolingual",
+        )
+        self.assertEqual(exported_txt["summary"]["format"], "txt")
+        self.assertIn("第一段（译文）。", txt_output.read_text(encoding="utf-8"))
 
-            registered_epub = self.call(
-                "add-book",
-                "--path",
-                str(epub_source),
-                "--title",
-                "EPUB Fixture",
-                "--id",
-                "epub-fixture",
-            )
-            self.assertEqual(registered_epub["summary"]["book"], "epub-fixture")
-            epub_output = self.root / "translated.epub"
-            exported_epub = self.call(
-                "export",
-                "--book",
-                "epub-fixture",
-                "--format",
-                "epub",
-                "--output",
-                str(epub_output),
-                "--monolingual",
-            )
-            self.assertEqual(exported_epub["summary"]["format"], "epub")
-            self.assertTrue(zipfile.is_zipfile(epub_output))
+        registered_epub = self.call(
+            "add-book",
+            "--path",
+            str(epub_source),
+            "--title",
+            "EPUB Fixture",
+            "--id",
+            "epub-fixture",
+        )
+        self.assertEqual(registered_epub["summary"]["book"], "epub-fixture")
+        epub_output = self.root / "translated.epub"
+        exported_epub = self.call(
+            "export",
+            "--book",
+            "epub-fixture",
+            "--format",
+            "epub",
+            "--output",
+            str(epub_output),
+            "--monolingual",
+        )
+        self.assertEqual(exported_epub["summary"]["format"], "epub")
+        self.assertTrue(zipfile.is_zipfile(epub_output))
 
-            validated = self.call("validate-epub", "--path", str(epub_output))
-            self.assertIn(validated["status"], {"ok", "warning"})
-            self.assertEqual(validated["errors"], [])
+        validated = self.call("validate-epub", "--path", str(epub_output))
+        self.assertIn(validated["status"], {"ok", "warning"})
+        self.assertEqual(validated["errors"], [])
 
-            reset = self.call("reset-translations", "--book", "fixture-book", "--all")
-            self.assertEqual(reset["summary"]["reset"], 1)
-            manifest = json.loads(
-                (self.runtime / "data" / "books" / "fixture-book" / "manifest.json").read_text(encoding="utf-8")
-            )
-            self.assertTrue(all(not paragraph["translated"] for chapter in manifest["chapters"] for paragraph in chapter["paragraphs"]))
-
+        reset = self.call("reset-translations", "--book", "fixture-book", "--all")
+        self.assertEqual(reset["summary"]["reset"], 1)
+        manifest = json.loads(
+            (self.runtime / "data" / "books" / "fixture-book" / "manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(all(not paragraph["translated"] for chapter in manifest["chapters"] for paragraph in chapter["paragraphs"]))
         from translator.core import novel_tool
 
         self.assertIn(self.runtime.resolve(), novel_tool._VENDOR_API_CACHE)

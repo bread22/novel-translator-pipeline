@@ -142,6 +142,15 @@ context_tokens = 1000000
 timeout = 600
 api_key = "$DEEPSEEK_API_KEY"
 
+[providers.muse-glimmer-30b-nv]
+type = "openai"
+model = "meta/muse-glimmer-30b"
+base_url = "https://integrate.api.nvidia.com/v1"
+temperature = 0.2
+context_tokens = 1048576
+timeout = 180
+api_key = "$NVIDIA_API_KEY"
+
 [knowledge_extractor]
 enabled = true
 provider = "gemini_lite"

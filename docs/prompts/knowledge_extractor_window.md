@@ -1,3 +1,5 @@
+Reasoning strength: low
+
 # Knowledge Extractor — Window Update v1
 
 审阅窗口已经完成语义修复。只从输入窗口提取后续本章 Reviewer 需要的少量临时上下文，并提出长期知识候选；不要重新审阅译文，不要改写译文。

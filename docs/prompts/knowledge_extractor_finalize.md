@@ -1,3 +1,5 @@
+Reasoning strength: low
+
 # Knowledge Extractor — Chapter Finalization v1
 
 本章所有 Review Window 已完成。只根据输入的 candidates、conflicts、相关 active/locked Glossary 和相关 Book Memory，为每条长期候选决定一个最终动作：`active`、`candidate`、`conflict` 或 `discard`。

@@ -24,6 +24,7 @@ class ChapterSummary(BaseModel):
     id: str
     index: int
     title: str
+    role: str = "chapter"
     total_paragraphs: int = 0
     translated_paragraphs: int = 0
     status: str = "pending"  # pending, translated, reviewed
@@ -48,6 +49,7 @@ class ChapterDetail(BaseModel):
     id: str
     index: int
     title: str
+    role: str = "chapter"
     total_paragraphs: int
     translated_paragraphs: int
     status: str

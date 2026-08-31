@@ -63,6 +63,7 @@ def test_book_read_update_reset_delete_and_download_routes(tmp_path: Path, monke
     assert books.list_chapters("book-1")[0].status == "translated"
     detail = books.get_chapter_detail("book-1", "c1")
     assert detail.chapter_summary == "summary"
+    assert detail.role == "chapter"
     assert detail.paragraphs[0].status == "fallback_recovered"
     assert books.update_paragraph("book-1", "p2", ParagraphUpdateRequest(translated="二"))["status"] == "ok"
     assert read_json(manifest_file)["chapters"][0]["paragraphs"][1]["translated"] == "二"
@@ -77,6 +78,24 @@ def test_book_read_update_reset_delete_and_download_routes(tmp_path: Path, monke
     assert read_json(manifest_file)["chapters"][0]["paragraphs"][0]["translated"] == ""
     deleted = books.delete_book("book-1")
     assert deleted["status"] == "ok" and not workspace.root.exists()
+
+
+def test_book_routes_expose_non_chapter_spine_roles(tmp_path: Path, monkeypatch) -> None:
+    manifest_file = tmp_path / "data" / "books" / "book-1" / "manifest.json"
+    manifest = _manifest()
+    manifest["chapters"] = [
+        {"id": "c1", "index": 1, "title": "封面", "role": "cover", "paragraphs": [{"id": "p1", "source": "封面"}]},
+        {"id": "c2", "index": 2, "title": "第一章", "role": "chapter", "paragraphs": [{"id": "p2", "source": "正文"}]},
+        {"id": "c3", "index": 3, "title": "目录", "role": "toc", "paragraphs": [{"id": "p3", "source": "第一章"}]},
+    ]
+    write_json(manifest_file, manifest)
+    output = tmp_path / "output"
+    monkeypatch.setattr(books, "manifest_path", lambda _book: manifest_file)
+    monkeypatch.setattr(books, "get_output_root", lambda: output)
+
+    summaries = books.list_chapters("book-1")
+    assert [summary.role for summary in summaries] == ["cover", "chapter", "toc"]
+    assert books.get_chapter_detail("book-1", "c1").role == "cover"
 
 
 def test_list_upload_and_export_book_routes(tmp_path: Path, monkeypatch) -> None:

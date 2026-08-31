@@ -20,6 +20,15 @@ interface ReaderViewProps {
   book: BookSummary | null;
 }
 
+const DOCUMENT_ROLE_LABELS: Record<string, string> = {
+  chapter: 'CHAPTER',
+  cover: 'COVER',
+  toc: 'TOC',
+  frontmatter: 'FRONT MATTER',
+  backmatter: 'BACK MATTER',
+  colophon: 'COLOPHON',
+};
+
 export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
@@ -195,7 +204,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
         <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-[#E5E0D8]">
           <div className="flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-[#1D4ED8]" />
-            <h3 className="font-serif font-bold text-[#1A1A1A] text-sm">目次 / 章节索引 ({chapters.length})</h3>
+            <h3 className="font-serif font-bold text-[#1A1A1A] text-sm">目录 / 内容索引 ({chapters.length})</h3>
           </div>
         </div>
 
@@ -241,7 +250,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-mono px-2 py-0.5 bg-[#F2EFE9] border border-[#E5E0D8] text-[#1A1A1A] rounded-sm font-bold">
-                CHAPTER {chapterDetail?.index || 1}
+                {DOCUMENT_ROLE_LABELS[chapterDetail?.role || 'chapter'] || String(chapterDetail?.role || 'chapter').toUpperCase()} {chapterDetail?.index || 1}
               </span>
               <h2 className="text-xl font-serif font-bold text-[#1A1A1A] tracking-tight">
                 {chapterDetail?.title || '加载中...'}
@@ -273,14 +282,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
               className="flex items-center gap-1 px-3 py-1.5 rounded-sm bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] disabled:opacity-30 text-[#1A1A1A] text-xs font-medium transition-all shadow-sm cursor-pointer"
             >
               <ChevronLeft className="w-4 h-4" />
-              上一章
+              上一项
             </button>
             <button
               onClick={() => nextChapter && handleSelectChapter(nextChapter.id)}
               disabled={!nextChapter}
               className="flex items-center gap-1 px-3 py-1.5 rounded-sm bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] disabled:opacity-30 text-[#1A1A1A] text-xs font-medium transition-all shadow-sm cursor-pointer"
             >
-              下一章
+              下一项
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>

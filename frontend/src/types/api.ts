@@ -18,6 +18,7 @@ export interface ChapterSummary {
   id: string;
   index: number;
   title: string;
+  role?: 'chapter' | 'cover' | 'toc' | 'frontmatter' | 'backmatter' | 'colophon' | string;
   total_paragraphs: number;
   translated_paragraphs: number;
   status: 'pending' | 'translated' | 'reviewed';
@@ -42,6 +43,7 @@ export interface ChapterDetail {
   id: string;
   index: number;
   title: string;
+  role?: 'chapter' | 'cover' | 'toc' | 'frontmatter' | 'backmatter' | 'colophon' | string;
   total_paragraphs: number;
   translated_paragraphs: number;
   status: 'pending' | 'translated' | 'fallback_recovered' | 'review_fixed' | 'manually_edited';

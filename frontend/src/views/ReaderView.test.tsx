@@ -10,8 +10,8 @@ const deferred = <T,>() => {
 };
 
 const book = (id: string) => ({ id, name: id } as any);
-const chapter = (id: string, title: string) => ({
-  id, index: 1, title, total_paragraphs: 0, translated_paragraphs: 0, status: 'pending', auto_fixed_count: 0,
+const chapter = (id: string, title: string, role = 'chapter') => ({
+  id, index: 1, title, role, total_paragraphs: 0, translated_paragraphs: 0, status: 'pending', auto_fixed_count: 0,
 } as any);
 
 describe('Reader request sequencing', () => {
@@ -30,5 +30,18 @@ describe('Reader request sequencing', () => {
     await screen.findAllByText('Book B chapter');
     first.resolve([chapter('a-1', 'Stale A chapter')]);
     await waitFor(() => expect(screen.queryByText('Stale A chapter')).not.toBeInTheDocument());
+  });
+
+  it('shows cover and TOC units as translatable reader items', async () => {
+    vi.spyOn(api, 'getChapters').mockResolvedValue([chapter('cover-1', '封面', 'cover')]);
+    vi.spyOn(api, 'getChapterDetail').mockResolvedValue({
+      ...chapter('cover-1', '封面', 'cover'), paragraphs: [], chapter_summary: '',
+    });
+    vi.spyOn(api, 'getChapterReview').mockResolvedValue(null);
+
+    render(<ReaderView book={book('fixture')} />);
+
+    expect(await screen.findByText('COVER 1')).toBeInTheDocument();
+    expect(screen.getByText(/目录 \/ 内容索引/)).toBeInTheDocument();
   });
 });

@@ -115,7 +115,9 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
         ignored_nodes: dict[str, list[int]] = {}
         spine_documents: list[dict[str, Any]] = []
         chapter_index = 1
-        for spine_item in _spine_items(opf, opf_path, config):
+        spine_items = _spine_items(opf, opf_path, config)
+        navigation_labels = [label for labels in navigation.values() for label in labels]
+        for spine_position, spine_item in enumerate(spine_items):
             if spine_item.path not in archive.namelist():
                 continue
             data = archive.read(spine_item.path)
@@ -125,6 +127,9 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
                 nav_path=nav_path,
                 toc_path=toc_path,
                 navigation_paths=navigation_paths,
+                navigation_labels=navigation_labels,
+                spine_position=spine_position,
+                spine_count=len(spine_items),
             )
             spine_documents.append(
                 {
@@ -200,7 +205,8 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
         parser_mode = _select_parser_mode(config)
         warning_count = 0
         spine_documents: list[dict[str, Any]] = []
-        for spine_item in spine_items:
+        navigation_labels = [label for labels in navigation.values() for label in labels]
+        for spine_position, spine_item in enumerate(spine_items):
             if spine_item.path not in names:
                 warnings.append(f"spine 文件不存在：{spine_item.path}")
                 warning_count += 1
@@ -212,6 +218,9 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
                 nav_path=nav_path,
                 toc_path=toc_path,
                 navigation_paths=navigation_paths,
+                navigation_labels=navigation_labels,
+                spine_position=spine_position,
+                spine_count=len(spine_items),
             )
             spine_documents.append(
                 {
@@ -581,6 +590,31 @@ def _semantic_tokens(data: bytes) -> set[str]:
     return {token for token in tokens if token}
 
 
+def _document_texts(data: bytes) -> list[str]:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return []
+    return [_element_text(element) for element in _translatable_elements(root) if _element_text(element)]
+
+
+def _looks_like_colophon(texts: Sequence[str]) -> bool:
+    content = " ".join(texts).casefold()
+    return bool(
+        re.search(
+            r"著者|作者|发行|発行|出版|copyright|printed in|版权|序列号|isbn|publisher|publisher",
+            content,
+        )
+    )
+
+
+def _looks_like_toc(texts: Sequence[str]) -> bool:
+    if len(texts) < 2:
+        return False
+    marker_count = sum(_chapter_marker(text, "toc", index) is not None for index, text in enumerate(texts))
+    return marker_count >= 2 and marker_count / len(texts) >= 0.6
+
+
 def _classify_spine_item(
     spine_item: SpineItem,
     data: bytes,
@@ -588,6 +622,9 @@ def _classify_spine_item(
     nav_path: str,
     toc_path: str,
     navigation_paths: set[str],
+    navigation_labels: Sequence[str] = (),
+    spine_position: int = 0,
+    spine_count: int = 1,
 ) -> str:
     """Classify a spine XHTML without excluding it from translation.
 
@@ -611,6 +648,24 @@ def _classify_spine_item(
 
     if spine_item.path in navigation_paths:
         return "chapter"
+
+    texts = _document_texts(data)
+    normalized_navigation = {_normalized_label(label) for label in navigation_labels if label}
+    if _looks_like_toc(texts):
+        return "toc"
+    if normalized_navigation and len(texts) >= 2:
+        matching_labels = sum(_normalized_label(text) in normalized_navigation for text in texts)
+        if matching_labels >= 2 and matching_labels / len(texts) >= 0.6:
+            return "toc"
+
+    # Some converters use generic text00000/text00001 names and omit all
+    # semantic EPUB properties.  Position plus content shape is the fallback
+    # for those files: a short first page is usually the cover, while a final
+    # page with publication/copyright fields is colophon.
+    if spine_position == 0 and texts and len(texts) <= 8 and all(len(text) <= 240 for text in texts):
+        return "cover"
+    if spine_position == spine_count - 1 and texts and _looks_like_colophon(texts):
+        return "colophon"
     return "chapter"
 
 

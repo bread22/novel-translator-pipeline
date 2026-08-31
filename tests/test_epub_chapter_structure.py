@@ -32,29 +32,29 @@ def write_monolithic_epub(path: Path) -> None:
             """<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Monolithic Fixture</dc:title></metadata>
 <manifest>
-<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
-<item id="toc-page" href="toc.xhtml" media-type="application/xhtml+xml"/>
-<item id="body" href="body.xhtml" media-type="application/xhtml+xml"/>
-<item id="colophon" href="colophon.xhtml" media-type="application/xhtml+xml"/>
+<item id="id_1" href="text00000.html" media-type="application/xhtml+xml"/>
+<item id="id_2" href="text00001.html" media-type="application/xhtml+xml"/>
+<item id="id_3" href="text00002.html" media-type="application/xhtml+xml"/>
+<item id="id_4" href="text00003.html" media-type="application/xhtml+xml"/>
 <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
 </manifest>
-<spine toc="ncx"><itemref idref="cover"/><itemref idref="toc-page"/><itemref idref="body"/><itemref idref="colophon"/></spine>
+<spine toc="ncx"><itemref idref="id_1"/><itemref idref="id_2"/><itemref idref="id_3"/><itemref idref="id_4"/></spine>
 </package>""",
         )
-        archive.writestr("OEBPS/cover.xhtml", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>封面</p></body></html>")
+        archive.writestr("OEBPS/text00000.html", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>封面</p></body></html>")
         archive.writestr(
-            "OEBPS/toc.xhtml",
+            "OEBPS/text00001.html",
             "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>第一章 序幕</p><p>第二章 秘密</p></body></html>",
         )
-        archive.writestr("OEBPS/body.xhtml", body)
-        archive.writestr("OEBPS/colophon.xhtml", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>尾页</p></body></html>")
+        archive.writestr("OEBPS/text00002.html", body)
+        archive.writestr("OEBPS/text00003.html", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>版权页</p></body></html>")
         archive.writestr(
             "OEBPS/toc.ncx",
             """<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
-<navPoint><navLabel><text>第一章 序幕</text></navLabel><content src="body.xhtml#missing-1"/></navPoint>
-<navPoint><navLabel><text>第二章 秘密</text></navLabel><content src="body.xhtml#missing-2"/></navPoint>
-<navPoint><navLabel><text>第三章 转折</text></navLabel><content src="body.xhtml#missing-3"/></navPoint>
-<navPoint><navLabel><text>第四章 终章</text></navLabel><content src="body.xhtml#missing-4"/></navPoint>
+<navPoint><navLabel><text>第一章 序幕</text></navLabel><content src="text00002.html#missing-1"/></navPoint>
+<navPoint><navLabel><text>第二章 秘密</text></navLabel><content src="text00002.html#missing-2"/></navPoint>
+<navPoint><navLabel><text>第三章 转折</text></navLabel><content src="text00002.html#missing-3"/></navPoint>
+<navPoint><navLabel><text>第四章 终章</text></navLabel><content src="text00002.html#missing-4"/></navPoint>
 </navMap></ncx>""",
         )
 
@@ -105,16 +105,16 @@ def test_monolithic_epub_keeps_translatable_spine_frontmatter_and_splits_body(tm
         "版权信息",
     ]
     assert [chapter["source_path"] for chapter in manifest["chapters"]] == [
-        "OEBPS/cover.xhtml",
-        "OEBPS/toc.xhtml",
-        "OEBPS/body.xhtml",
-        "OEBPS/body.xhtml",
-        "OEBPS/body.xhtml",
-        "OEBPS/body.xhtml",
-        "OEBPS/colophon.xhtml",
+        "OEBPS/text00000.html",
+        "OEBPS/text00001.html",
+        "OEBPS/text00002.html",
+        "OEBPS/text00002.html",
+        "OEBPS/text00002.html",
+        "OEBPS/text00002.html",
+        "OEBPS/text00003.html",
     ]
     assert "第二章" not in [paragraph["source"] for paragraph in manifest["chapters"][4]["paragraphs"]]
-    assert manifest["metadata"]["epub"]["ignored_nodes"] == {"OEBPS/body.xhtml": [6]}
+    assert manifest["metadata"]["epub"]["ignored_nodes"] == {"OEBPS/text00002.html": [6]}
 
 
 def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_chapters(tmp_path: Path) -> None:
@@ -160,10 +160,10 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
     assert exported["summary"]["format"] == "epub"
 
     with zipfile.ZipFile(output) as archive:
-        root = ET.fromstring(archive.read("OEBPS/body.xhtml"))
-        cover = ET.fromstring(archive.read("OEBPS/cover.xhtml"))
-        toc_page = ET.fromstring(archive.read("OEBPS/toc.xhtml"))
-        colophon = ET.fromstring(archive.read("OEBPS/colophon.xhtml"))
+        root = ET.fromstring(archive.read("OEBPS/text00002.html"))
+        cover = ET.fromstring(archive.read("OEBPS/text00000.html"))
+        toc_page = ET.fromstring(archive.read("OEBPS/text00001.html"))
+        colophon = ET.fromstring(archive.read("OEBPS/text00003.html"))
         toc = archive.read("OEBPS/toc.ncx").decode("utf-8")
     texts = ["".join(element.itertext()).strip() for element in root.iter() if element.tag.endswith("p")]
     cover_texts = ["".join(element.itertext()).strip() for element in cover.iter() if element.tag.endswith("p")]
@@ -175,8 +175,8 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
     assert "第二段译文。" in texts
     assert "第二章" not in texts
     assert len([element for element in root.iter() if element.get("id", "").startswith("chapter-")]) == 4
-    assert "body.xhtml#chapter-0001" in toc
-    assert "body.xhtml#chapter-0004" in toc
+    assert "text00002.html#chapter-0001" in toc
+    assert "text00002.html#chapter-0004" in toc
 
     output_validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
     assert output_validation["summary"]["toc_broken_links"] == 0

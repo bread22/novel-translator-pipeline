@@ -9,6 +9,7 @@ import hashlib
 import html
 import posixpath
 import re
+from urllib.parse import unquote
 import zipfile
 
 from app.config import EpubConfig
@@ -34,6 +35,7 @@ class SpineItem:
     path: str
     media_type: str
     linear: bool
+    role: str = "chapter"
 
 
 @dataclass(frozen=True)
@@ -105,24 +107,40 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
         opf = _read_xml(archive, opf_path)
         navigation = _navigation_chapters(archive, opf, opf_path)
         navigation_paths = set(navigation)
+        manifest = _opf_manifest_items(opf)
+        nav_path = _find_nav_path(manifest, opf_path)
+        toc_path = _find_toc_path(opf, manifest, opf_path)
         book_title = title or _metadata_title(opf) or path.stem
         chapters: list[Chapter] = []
         ignored_nodes: dict[str, list[int]] = {}
+        spine_documents: list[dict[str, Any]] = []
         chapter_index = 1
         for spine_item in _spine_items(opf, opf_path, config):
             if spine_item.path not in archive.namelist():
                 continue
-            # A valid EPUB often keeps cover, TOC, and colophon pages in the
-            # linear spine.  When navigation identifies actual chapter files,
-            # use those targets instead of turning every page into a chapter.
-            if navigation_paths and spine_item.path not in navigation_paths:
-                continue
+            data = archive.read(spine_item.path)
+            role = _classify_spine_item(
+                spine_item,
+                data,
+                nav_path=nav_path,
+                toc_path=toc_path,
+                navigation_paths=navigation_paths,
+            )
+            spine_documents.append(
+                {
+                    "item_id": spine_item.item_id,
+                    "path": spine_item.path,
+                    "linear": spine_item.linear,
+                    "role": role,
+                }
+            )
             parsed, warning_count, ignored = _parse_epub_chapters(
-                archive.read(spine_item.path),
+                data,
                 chapter_index,
                 spine_item.path,
                 config,
                 navigation_titles=navigation.get(spine_item.path, ()),
+                document_role=role,
             )
             if ignored:
                 ignored_nodes[spine_item.path] = ignored
@@ -132,6 +150,7 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
                     chapter_index += 1
             inspection["summary"]["warning_count"] += warning_count
         inspection["details"]["ignored_nodes"] = ignored_nodes
+        inspection["details"]["spine_documents"] = spine_documents
     return Book(
         id=slugify(book_title),
         title=book_title,
@@ -147,6 +166,7 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
                 "warning_count": inspection["summary"]["warning_count"],
                 "warnings": inspection["warnings"],
                 "ignored_nodes": ignored_nodes,
+                "spine_documents": inspection["details"].get("spine_documents", []),
             }
         },
     )
@@ -179,16 +199,34 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
         duplicate_counter: Counter[str] = Counter()
         parser_mode = _select_parser_mode(config)
         warning_count = 0
+        spine_documents: list[dict[str, Any]] = []
         for spine_item in spine_items:
             if spine_item.path not in names:
                 warnings.append(f"spine 文件不存在：{spine_item.path}")
                 warning_count += 1
                 continue
+            data = archive.read(spine_item.path)
+            role = _classify_spine_item(
+                spine_item,
+                data,
+                nav_path=nav_path,
+                toc_path=toc_path,
+                navigation_paths=navigation_paths,
+            )
+            spine_documents.append(
+                {
+                    "item_id": spine_item.item_id,
+                    "path": spine_item.path,
+                    "linear": spine_item.linear,
+                    "role": role,
+                }
+            )
             stats = _inspect_chapter_bytes(
-                archive.read(spine_item.path),
+                data,
                 spine_item.path,
                 config,
                 navigation_titles=navigation.get(spine_item.path, ()),
+                document_role=role,
             )
             chapter_stats.append(stats)
             duplicate_counter.update(stats["texts"])
@@ -201,10 +239,10 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
             warnings.append("部分章节需要增强解析器处理；未安装 beautifulsoup4/lxml 时只能报告风险")
         if any(int(stats.get("marker_warning_count", 0)) for stats in chapter_stats):
             warnings.append("检测到顺序异常或重复的章节标记；已按导航和章节编号抑制误分章")
-        logical_stats = [
-            stats for stats in chapter_stats
-            if not navigation_paths or stats["path"] in navigation_paths
-        ]
+        # Every translatable spine document is a logical unit.  Navigation
+        # targets only guide chapter splitting; they do not filter translation
+        # input, so cover/TOC/front/back matter remain available to the user.
+        logical_stats = chapter_stats
         details = {
             "opf_path": opf_path,
             "nav_path": nav_path,
@@ -221,6 +259,7 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
                 for stats in chapter_stats
             ],
             "navigation_chapter_paths": sorted(navigation_paths),
+            "spine_documents": spine_documents,
         }
     status = "warning" if warnings else "ok"
     return {
@@ -511,6 +550,70 @@ def _opf_manifest_items(opf: ET.Element) -> dict[str, dict[str, str]]:
     return result
 
 
+_DOCUMENT_ROLE_LABELS = {
+    "cover": "封面",
+    "toc": "目录",
+    "frontmatter": "前置内容",
+    "backmatter": "后置内容",
+    "colophon": "版权信息",
+}
+_DOCUMENT_ROLE_HINTS = {
+    "cover": ("cover", "titlepage", "title-page", "表紙", "封面"),
+    "toc": ("toc", "tableofcontents", "table-of-contents", "contents", "目次", "目录"),
+    "colophon": ("colophon", "copyright", "奥付", "版权"),
+    "frontmatter": ("frontmatter", "front-matter", "preface", "foreword", "prologue", "序言", "前言", "序章", "扉页"),
+    "backmatter": ("backmatter", "back-matter", "afterword", "epilogue", "appendix", "后记", "附录", "尾页"),
+}
+
+
+def _semantic_tokens(data: bytes) -> set[str]:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return set()
+    tokens: set[str] = set()
+    for element in root.iter():
+        for key, value in element.attrib.items():
+            local_key = _local_name(key)
+            if local_key not in {"type", "role"}:
+                continue
+            tokens.update(re.split(r"[\s,]+", value.casefold().strip()))
+    return {token for token in tokens if token}
+
+
+def _classify_spine_item(
+    spine_item: SpineItem,
+    data: bytes,
+    *,
+    nav_path: str,
+    toc_path: str,
+    navigation_paths: set[str],
+) -> str:
+    """Classify a spine XHTML without excluding it from translation.
+
+    Navigation targets answer *where chapter boundaries are*; they do not
+    answer *which files are translatable*.  The latter is the complete spine,
+    with EPUB semantic hints and conservative filename hints used only to
+    decide whether a document should be split into ordinary chapters.
+    """
+    if spine_item.path == nav_path or spine_item.path == toc_path:
+        return "toc"
+
+    semantic = _semantic_tokens(data)
+    for role, values in _DOCUMENT_ROLE_HINTS.items():
+        if semantic.intersection(values):
+            return role
+
+    identifier = unquote(f"{spine_item.item_id} {spine_item.href} {spine_item.path}").casefold()
+    for role, values in _DOCUMENT_ROLE_HINTS.items():
+        if any(value.casefold() in identifier for value in values):
+            return role
+
+    if spine_item.path in navigation_paths:
+        return "chapter"
+    return "chapter"
+
+
 def _spine_items(opf: ET.Element, opf_path: str, config: EpubConfig) -> list[SpineItem]:
     manifest = _opf_manifest_items(opf)
     opf_dir = str(Path(opf_path).parent)
@@ -736,14 +839,22 @@ def _build_epub_chapters(
     default_title: str,
     parser_name: str,
     navigation_titles: Sequence[str] = (),
+    document_role: str = "chapter",
 ) -> tuple[list[Chapter], int, list[int]]:
-    markers, ignored, warning_count = _select_chapter_markers(nodes, navigation_titles)
+    split_chapters = document_role == "chapter"
+    if split_chapters:
+        markers, ignored, warning_count = _select_chapter_markers(nodes, navigation_titles)
+    else:
+        # Front matter, cover, TOC, and colophon are translatable documents,
+        # but chapter markers inside them are labels or links rather than
+        # body chapter boundaries.
+        markers, ignored, warning_count = [], set(), 0
     if len(markers) >= 2:
         starts = [0] + [marker.node_index for marker in markers[1:]]
         titles = [marker.title for marker in markers]
     else:
         starts = [0]
-        titles = [markers[0].title if markers else default_title]
+        titles = [markers[0].title if markers else (default_title or _DOCUMENT_ROLE_LABELS.get(document_role, "Chapter"))]
 
     chapters: list[Chapter] = []
     for offset, start in enumerate(starts):
@@ -753,6 +864,7 @@ def _build_epub_chapters(
             title=titles[offset] or f"Chapter {index + offset}",
             index=index + offset,
             source_path=source_path,
+            role=document_role,
         )
         paragraph_index = 1
         for node_index in range(start, end):
@@ -769,6 +881,7 @@ def _build_epub_chapters(
                     metadata={
                         "epub": {
                             "chapter_path": source_path,
+                            "document_role": document_role,
                             "node_index": node_index,
                             "node_tag": node.tag,
                             "node_id": node.node_id,
@@ -791,6 +904,7 @@ def _parse_epub_chapters(
     source_path: str,
     config: EpubConfig,
     navigation_titles: Sequence[str] = (),
+    document_role: str = "chapter",
 ) -> tuple[list[Chapter], int, list[int]]:
     try:
         root = ET.fromstring(data)
@@ -805,10 +919,10 @@ def _parse_epub_chapters(
                     node_class=" ".join(node.attrs.get("class", [])) if isinstance(node.attrs.get("class"), list) else str(node.attrs.get("class", "")),
                     risks=_soup_node_risks(node),
                 )
-                for node in _soup_translatable_nodes(soup)
+                for node in _soup_translatable_nodes(soup, document_role=document_role)
             ]
-            title_node = soup.find(["h1", "h2", "title"])
-            title = _normalize_text(title_node.get_text(" ")) if title_node else f"Chapter {index}"
+            title_node = soup.find(["h1", "h2"])
+            title = _normalize_text(title_node.get_text(" ")) if title_node else _DOCUMENT_ROLE_LABELS.get(document_role, f"Chapter {index}")
             chapters, warning_count, ignored = _build_epub_chapters(
                 nodes,
                 index,
@@ -816,6 +930,7 @@ def _parse_epub_chapters(
                 title,
                 "soup",
                 navigation_titles,
+                document_role,
             )
             return chapters, warning_count + 1, ignored
         raise
@@ -828,34 +943,58 @@ def _parse_epub_chapters(
             node_class=element.attrib.get("class", ""),
             risks=_element_risks(element),
         )
-        for element in _translatable_elements(root)
+        for element in _translatable_elements(root, document_role=document_role)
     ]
     return _build_epub_chapters(
         nodes,
         index,
         source_path,
-        _chapter_title(root) or f"Chapter {index}",
+        _document_title(root, document_role, index),
         "stdlib",
         navigation_titles,
+        document_role,
     )
 
 
-def _parse_epub_chapter(data: bytes, index: int, source_path: str, config: EpubConfig) -> tuple[Chapter, int]:
-    chapters, warning_count, _ = _parse_epub_chapters(data, index, source_path, config)
+def _parse_epub_chapter(
+    data: bytes,
+    index: int,
+    source_path: str,
+    config: EpubConfig,
+    document_role: str = "chapter",
+) -> tuple[Chapter, int]:
+    chapters, warning_count, _ = _parse_epub_chapters(
+        data,
+        index,
+        source_path,
+        config,
+        document_role=document_role,
+    )
     if not chapters:
         return Chapter(id=f"c{index:04d}", title=f"Chapter {index}", index=index, source_path=source_path), warning_count
     return chapters[0], warning_count
 
 
-def _parse_epub_chapter_with_soup(data: bytes, index: int, source_path: str) -> tuple[Chapter, int] | None:
+def _parse_epub_chapter_with_soup(
+    data: bytes,
+    index: int,
+    source_path: str,
+    document_role: str = "chapter",
+) -> tuple[Chapter, int] | None:
     soup = _soup(data)
     if soup is None:
         return None
-    title_node = soup.find(["h1", "h2", "title"])
-    title = _normalize_text(title_node.get_text(" ")) if title_node else f"Chapter {index}"
-    chapter = Chapter(id=f"c{index:04d}", title=title or f"Chapter {index}", index=index, source_path=source_path)
+    title_node = soup.find(["h1", "h2"])
+    title = _normalize_text(title_node.get_text(" ")) if title_node else _DOCUMENT_ROLE_LABELS.get(document_role, f"Chapter {index}")
+    chapter = Chapter(
+        id=f"c{index:04d}",
+        title=title or f"Chapter {index}",
+        index=index,
+        source_path=source_path,
+        role=document_role,
+    )
     warning_count = 1
-    nodes = _soup_translatable_nodes(soup)
+    nodes = _soup_translatable_nodes(soup, document_role=document_role)
     for paragraph_index, node in enumerate(nodes, start=1):
         text = _normalize_text(node.get_text(" "))
         if not text:
@@ -871,6 +1010,7 @@ def _parse_epub_chapter_with_soup(data: bytes, index: int, source_path: str) -> 
                 metadata={
                     "epub": {
                         "chapter_path": source_path,
+                        "document_role": document_role,
                         "node_index": paragraph_index - 1,
                         "node_tag": str(getattr(node, "name", "")),
                         "node_id": str(node.attrs.get("id", "")),
@@ -895,13 +1035,29 @@ def _chapter_title(root: ET.Element) -> str:
     return ""
 
 
-def _translatable_elements(root: ET.Element) -> list[ET.Element]:
+def _document_title(root: ET.Element, document_role: str, index: int) -> str:
+    if document_role == "chapter":
+        return _chapter_title(root) or f"Chapter {index}"
+    for element in root.iter():
+        if _local_name(element.tag) in {"h1", "h2"}:
+            text = _element_text(element)
+            if text:
+                return text
+    return _DOCUMENT_ROLE_LABELS.get(document_role, f"Document {index}")
+
+
+def _translatable_elements(root: ET.Element, *, document_role: str = "chapter") -> list[ET.Element]:
     elements = []
     for element in root.iter():
         local_name = _local_name(element.tag)
-        if local_name not in TRANSLATABLE_TAGS:
+        allowed_tags = TRANSLATABLE_TAGS | ({"a"} if document_role == "toc" else set())
+        if local_name not in allowed_tags:
             continue
         if local_name == "div" and _has_block_children(element):
+            continue
+        if document_role == "toc" and local_name in TRANSLATABLE_TAGS and any(
+            _local_name(child.tag) == "a" for child in element.iter() if child is not element
+        ):
             continue
         text = _element_text(element)
         if text:
@@ -909,10 +1065,13 @@ def _translatable_elements(root: ET.Element) -> list[ET.Element]:
     return elements
 
 
-def _soup_translatable_nodes(soup) -> list:
+def _soup_translatable_nodes(soup, *, document_role: str = "chapter") -> list:
     nodes = []
-    for node in soup.find_all(list(TRANSLATABLE_TAGS)):
+    allowed_tags = TRANSLATABLE_TAGS | ({"a"} if document_role == "toc" else set())
+    for node in soup.find_all(list(allowed_tags)):
         if node.name == "div" and node.find(list(TRANSLATABLE_TAGS - {"div"})):
+            continue
+        if document_role == "toc" and node.name in TRANSLATABLE_TAGS and node.find("a"):
             continue
         text = _normalize_text(node.get_text(" "))
         if text:
@@ -977,9 +1136,11 @@ def export_txt(book: Book, output: Path, bilingual: bool = False) -> None:
 def _chapter_anchor_map(chapters_by_path: Mapping[str, Sequence[Chapter]]) -> dict[str, list[tuple[int, str]]]:
     result: dict[str, list[tuple[int, str]]] = {}
     for source_path, chapters in chapters_by_path.items():
+        body_chapter_index = 0
         for chapter in chapters:
-            if not chapter.paragraphs:
+            if chapter.role != "chapter" or not chapter.paragraphs:
                 continue
+            body_chapter_index += 1
             marker = next(
                 (paragraph for paragraph in chapter.paragraphs if _normalize_text(paragraph.source) == _normalize_text(chapter.title)),
                 chapter.paragraphs[0],
@@ -991,7 +1152,7 @@ def _chapter_anchor_map(chapters_by_path: Mapping[str, Sequence[Chapter]]) -> di
                 node_index = int(locator["node_index"])
             except (TypeError, ValueError):
                 continue
-            result.setdefault(source_path, []).append((node_index, f"chapter-{chapter.index:04d}"))
+            result.setdefault(source_path, []).append((node_index, f"chapter-{body_chapter_index:04d}"))
     return result
 
 
@@ -1057,12 +1218,24 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
             elif is_nav or is_toc:
                 if info.filename == nav_path or info.filename == toc_path:
                     data = _repair_navigation_targets(data, info.filename, anchor_map_by_path)
+                chapters = chapters_by_path.get(info.filename)
+                if chapters:
+                    document_role = chapters[0].role
+                    data, chapter_warnings = _replace_chapters_by_locator(
+                        data,
+                        chapters,
+                        config,
+                        bilingual=bilingual,
+                        document_role=document_role,
+                    )
+                    warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
                 if title_translations:
                     data, nav_warnings = _replace_navigation_text(data, title_translations)
                     warnings.extend(f"{info.filename}: {message}" for message in nav_warnings)
             else:
                 chapters = chapters_by_path.get(info.filename)
                 if chapters:
+                    document_role = chapters[0].role
                     data, chapter_warnings = _replace_chapters_by_locator(
                         data,
                         chapters,
@@ -1070,6 +1243,7 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
                         bilingual=bilingual,
                         ignored_nodes=ignored_nodes_by_path.get(info.filename, ()),
                         chapter_anchor_ids=dict(anchor_map_by_path.get(info.filename, ())),
+                        document_role=document_role,
                     )
                     warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
             _write_epub_member(dst, info, data)
@@ -1139,8 +1313,20 @@ def _write_epub_member(dst: zipfile.ZipFile, info: zipfile.ZipInfo, data: bytes,
     dst.writestr(out_info, data)
 
 
-def _replace_chapter_by_locator(data: bytes, chapter: Chapter, config: EpubConfig, *, bilingual: bool = False) -> tuple[bytes, list[str]]:
-    return _replace_chapters_by_locator(data, [chapter], config, bilingual=bilingual)
+def _replace_chapter_by_locator(
+    data: bytes,
+    chapter: Chapter,
+    config: EpubConfig,
+    *,
+    bilingual: bool = False,
+) -> tuple[bytes, list[str]]:
+    return _replace_chapters_by_locator(
+        data,
+        [chapter],
+        config,
+        bilingual=bilingual,
+        document_role=chapter.role,
+    )
 
 
 def _replace_chapters_by_locator(
@@ -1151,6 +1337,7 @@ def _replace_chapters_by_locator(
     bilingual: bool = False,
     ignored_nodes: Sequence[int] = (),
     chapter_anchor_ids: Mapping[int, str] | None = None,
+    document_role: str = "chapter",
 ) -> tuple[bytes, list[str]]:
     warnings: list[str] = []
     try:
@@ -1162,11 +1349,12 @@ def _replace_chapters_by_locator(
             config,
             bilingual=bilingual,
             ignored_nodes=ignored_nodes,
+            document_role=document_role,
         )
         if soup_result is not None:
             return soup_result
         return data, ["章节 XML 无法解析，且增强解析器不可用，已保留原文"]
-    nodes = _translatable_elements(root)
+    nodes = _translatable_elements(root, document_role=document_role)
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.paragraphs]
     for paragraph in paragraphs:
         if not paragraph.translated:
@@ -1193,7 +1381,13 @@ def _replace_chapters_by_locator(
 
 
 def _replace_chapter_by_locator_with_soup(data: bytes, chapter: Chapter, config: EpubConfig, *, bilingual: bool = False) -> tuple[bytes, list[str]] | None:
-    return _replace_chapters_by_locator_with_soup(data, [chapter], config, bilingual=bilingual)
+    return _replace_chapters_by_locator_with_soup(
+        data,
+        [chapter],
+        config,
+        bilingual=bilingual,
+        document_role=chapter.role,
+    )
 
 
 def _replace_chapters_by_locator_with_soup(
@@ -1204,12 +1398,13 @@ def _replace_chapters_by_locator_with_soup(
     bilingual: bool = False,
     ignored_nodes: Sequence[int] = (),
     chapter_anchor_ids: Mapping[int, str] | None = None,
+    document_role: str = "chapter",
 ) -> tuple[bytes, list[str]] | None:
     soup = _soup(data)
     if soup is None:
         return None
     warnings: list[str] = []
-    nodes = _soup_translatable_nodes(soup)
+    nodes = _soup_translatable_nodes(soup, document_role=document_role)
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.paragraphs]
     for paragraph in paragraphs:
         if not paragraph.translated:
@@ -1269,12 +1464,13 @@ def _inspect_chapter_bytes(
     path: str,
     config: EpubConfig,
     navigation_titles: Sequence[str] = (),
+    document_role: str = "chapter",
 ) -> dict:
     warnings: list[str] = []
     used_fallback_parser = False
     try:
         root = ET.fromstring(data)
-        nodes = _translatable_elements(root)
+        nodes = _translatable_elements(root, document_role=document_role)
         risks = [_element_risks(node) for node in nodes]
         texts = [_element_text(node) for node in nodes]
         link_count = sum(1 for element in root.iter() if _local_name(element.tag) == "a")
@@ -1304,7 +1500,7 @@ def _inspect_chapter_bytes(
                 "texts": [],
             }
         used_fallback_parser = True
-        nodes = _soup_translatable_nodes(soup)
+        nodes = _soup_translatable_nodes(soup, document_role=document_role)
         risks = [_soup_node_risks(node) for node in nodes]
         texts = [_normalize_text(node.get_text(" ")) for node in nodes]
         link_count = len(soup.find_all("a"))
@@ -1338,15 +1534,20 @@ def _inspect_chapter_bytes(
         for index, (node, text) in enumerate(zip(nodes, texts))
         if text
     ]
-    markers, ignored, marker_warning_count = _select_chapter_markers(records, navigation_titles)
-    detected_chapter_count = len(markers)
-    if detected_chapter_count < 2:
-        detected_chapter_count = 1
+    if document_role == "chapter":
+        markers, ignored, marker_warning_count = _select_chapter_markers(records, navigation_titles)
+        detected_chapter_count = len(markers)
+        if detected_chapter_count < 2:
+            detected_chapter_count = 1
+    else:
+        markers, ignored, marker_warning_count = [], set(), 0
+        detected_chapter_count = 1 if texts else 0
     risk_count = sum(1 for item in risks if item)
     if ruby_count and config.warn_on_ruby:
         warnings.append(f"包含 {ruby_count} 个 ruby 节点，导出后建议人工复核")
     return {
         "path": path,
+        "document_role": document_role,
         "paragraph_count": len([text for text in texts if text]),
         "logical_paragraph_count": len([text for text in texts if text]) - len(ignored),
         "detected_chapter_count": detected_chapter_count,

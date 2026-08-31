@@ -24,6 +24,7 @@ class Chapter:
     title: str
     index: int
     source_path: str = ""
+    role: str = "chapter"
     paragraphs: list[Paragraph] = field(default_factory=list)
 
 
@@ -92,6 +93,7 @@ def book_from_dict(raw: dict[str, Any]) -> Book:
                 title=str(chapter_raw.get("title", "")),
                 index=int(chapter_raw["index"]),
                 source_path=str(chapter_raw.get("source_path", "")),
+                role=str(chapter_raw.get("role", "chapter")),
                 paragraphs=paragraphs,
             )
         )

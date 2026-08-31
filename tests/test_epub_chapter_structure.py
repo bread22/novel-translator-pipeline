@@ -66,7 +66,7 @@ def _api_root(tmp_path: Path) -> Path:
     return runtime
 
 
-def test_monolithic_epub_uses_ordered_markers_and_skips_spine_frontmatter(tmp_path: Path) -> None:
+def test_monolithic_epub_keeps_translatable_spine_frontmatter_and_splits_body(tmp_path: Path) -> None:
     epub = tmp_path / "monolithic.epub"
     write_monolithic_epub(epub)
     runtime = _api_root(tmp_path)
@@ -82,18 +82,38 @@ def test_monolithic_epub_uses_ordered_markers_and_skips_spine_frontmatter(tmp_pa
         novel_root=runtime,
     )
 
-    assert result["summary"]["chapters"] == 4
+    assert result["summary"]["chapters"] == 7
     manifest = json.loads(
         (runtime / "data" / "books" / "monolithic-fixture" / "manifest.json").read_text(encoding="utf-8")
     )
+    assert [chapter["role"] for chapter in manifest["chapters"]] == [
+        "cover",
+        "toc",
+        "chapter",
+        "chapter",
+        "chapter",
+        "chapter",
+        "colophon",
+    ]
     assert [chapter["title"] for chapter in manifest["chapters"]] == [
+        "封面",
+        "目录",
         "第一章 序幕",
         "第二章 秘密",
         "第三章 转折",
         "第四章 终章",
+        "版权信息",
     ]
-    assert all(chapter["source_path"] == "OEBPS/body.xhtml" for chapter in manifest["chapters"])
-    assert "第二章" not in [paragraph["source"] for paragraph in manifest["chapters"][2]["paragraphs"]]
+    assert [chapter["source_path"] for chapter in manifest["chapters"]] == [
+        "OEBPS/cover.xhtml",
+        "OEBPS/toc.xhtml",
+        "OEBPS/body.xhtml",
+        "OEBPS/body.xhtml",
+        "OEBPS/body.xhtml",
+        "OEBPS/body.xhtml",
+        "OEBPS/colophon.xhtml",
+    ]
+    assert "第二章" not in [paragraph["source"] for paragraph in manifest["chapters"][4]["paragraphs"]]
     assert manifest["metadata"]["epub"]["ignored_nodes"] == {"OEBPS/body.xhtml": [6]}
 
 
@@ -118,7 +138,11 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
 
     manifest_path = runtime / "data" / "books" / "monolithic-fixture" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["chapters"][1]["paragraphs"][1]["translated"] = "第二段译文。"
+    manifest["chapters"][0]["paragraphs"][0]["translated"] = "封面译文"
+    manifest["chapters"][1]["paragraphs"][0]["translated"] = "第一章 序幕译"
+    manifest["chapters"][2]["paragraphs"][0]["translated"] = "第一章 序幕译"
+    manifest["chapters"][3]["paragraphs"][1]["translated"] = "第二段译文。"
+    manifest["chapters"][6]["paragraphs"][0]["translated"] = "尾页译文"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
 
     output = tmp_path / "translated.epub"
@@ -137,8 +161,17 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
 
     with zipfile.ZipFile(output) as archive:
         root = ET.fromstring(archive.read("OEBPS/body.xhtml"))
+        cover = ET.fromstring(archive.read("OEBPS/cover.xhtml"))
+        toc_page = ET.fromstring(archive.read("OEBPS/toc.xhtml"))
+        colophon = ET.fromstring(archive.read("OEBPS/colophon.xhtml"))
         toc = archive.read("OEBPS/toc.ncx").decode("utf-8")
     texts = ["".join(element.itertext()).strip() for element in root.iter() if element.tag.endswith("p")]
+    cover_texts = ["".join(element.itertext()).strip() for element in cover.iter() if element.tag.endswith("p")]
+    toc_page_texts = ["".join(element.itertext()).strip() for element in toc_page.iter() if element.tag.endswith("p")]
+    colophon_texts = ["".join(element.itertext()).strip() for element in colophon.iter() if element.tag.endswith("p")]
+    assert "封面译文" in cover_texts
+    assert "第一章 序幕译" in toc_page_texts
+    assert "尾页译文" in colophon_texts
     assert "第二段译文。" in texts
     assert "第二章" not in texts
     assert len([element for element in root.iter() if element.get("id", "").startswith("chapter-")]) == 4

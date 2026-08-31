@@ -8,7 +8,8 @@ class EpubConfig:
     """EPUB options consumed by the pipeline's direct book operations."""
 
     parser: str = "auto"
-    include_non_linear_spine: bool = False
+    # Non-linear items may still contain translatable cover/front/back matter.
+    include_non_linear_spine: bool = True
     preserve_outer_markup: bool = True
     warn_on_ruby: bool = True
     warn_on_duplicate_source: bool = True

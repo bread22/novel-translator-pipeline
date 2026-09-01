@@ -154,8 +154,7 @@ api_key = "$NVIDIA_API_KEY"
 [knowledge_extractor]
 enabled = true
 provider = "gemini_lite"
-model = ""
-credential_ref = ""
+fallback_providers = ["nemotron"]
 temperature = 0.2
 max_output_tokens = 2048
 request_timeout = 300

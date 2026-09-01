@@ -24,7 +24,11 @@ from translator.core.config import (
 )
 from translator.providers.registry import create_provider
 from translator.core.paths import PathResolver
-from translator.review.knowledge_extractor import knowledge_extractor_connection_test
+from translator.review.knowledge_extractor import (
+    knowledge_extractor_connection_test,
+    knowledge_extractor_enabled,
+    knowledge_extractor_provider_names,
+)
 from translator.web.models import PreflightProviderResult, PreflightResponse
 from translator.web.path_policy import resolve_under, validate_prompt_filename
 
@@ -315,6 +319,12 @@ def run_system_preflight() -> PreflightResponse:
         role_mapping.setdefault(reviewer, []).append("主审 (Reviewer)")
     if secondary_reviewer and is_dual_review:
         role_mapping.setdefault(secondary_reviewer, []).append("副审 (Secondary Reviewer)")
+    if knowledge_extractor_enabled(config):
+        extractor_providers = knowledge_extractor_provider_names(config)
+        if extractor_providers:
+            role_mapping.setdefault(extractor_providers[0], []).append("知识提取 (Knowledge Extractor)")
+            for idx, extractor_fallback in enumerate(extractor_providers[1:], start=1):
+                role_mapping.setdefault(extractor_fallback, []).append(f"知识提取备用 #{idx} (Knowledge Fallback)")
 
     def probe_single_provider(p_name: str, p_conf: dict[str, Any]) -> PreflightProviderResult:
         p_type = p_conf.get("type", "unknown")

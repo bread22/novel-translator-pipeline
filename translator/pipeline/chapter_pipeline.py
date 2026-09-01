@@ -1050,6 +1050,7 @@ class IterativePipeline:
         decisions: list[dict[str, Any]] = list(deterministic_decisions)
         missing_ids: list[str] = []
         validation_errors: list[dict[str, Any]] = []
+        provider_attempts: list[dict[str, Any]] = []
         total_attempts = 0
         for batch_index, batch in enumerate(prepared_batches, start=1):
             pending = list(batch)
@@ -1081,6 +1082,17 @@ class IterativePipeline:
                         "batch": batch_index, "attempt": retry_index + 1, "error": str(exc),
                     })
                     continue
+
+                if isinstance(finalized, dict) and finalized.get("provider"):
+                    provider_attempts.append({
+                        "batch": batch_index,
+                        "attempt": retry_index + 1,
+                        "provider": finalized.get("provider"),
+                        "is_fallback": bool(finalized.get("is_fallback", False)),
+                        "fallback_from": finalized.get("fallback_from"),
+                        "fallback_index": finalized.get("fallback_index"),
+                        "attempts": finalized.get("provider_attempts", []),
+                    })
 
                 coverage = validate_finalization_coverage(
                     pending,
@@ -1127,6 +1139,7 @@ class IterativePipeline:
             "missing_decision_ids": list(dict.fromkeys(missing_ids)),
             "batch_count": len(prepared_batches),
             "attempt_count": total_attempts,
+            "provider_attempts": provider_attempts,
             "validation_errors": validation_errors,
         }
         write_json(output_path, finalized)
@@ -1160,6 +1173,7 @@ class IterativePipeline:
             "missing_decisions": len(finalized.get("missing_decision_ids", [])),
             "batch_count": len(prepared_batches),
             "attempt_count": total_attempts,
+            "provider_attempts": provider_attempts,
             **applied,
         }
 

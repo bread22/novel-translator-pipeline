@@ -26,4 +26,22 @@ describe('provider deletion guard', () => {
       fallback_translators: ['beta'],
     });
   });
+
+  it('guards and migrates knowledge extractor fallback references', () => {
+    const config = {
+      roles: {},
+      knowledge_extractor: {
+        provider: 'alpha',
+        fallback_providers: ['alpha', 'beta'],
+      },
+    };
+    expect(providerRoleReferences(config, 'alpha')).toEqual([
+      'knowledge_extractor.provider',
+      'knowledge_extractor.fallback_providers',
+    ]);
+    expect(migrateProviderRoleReferences(config, 'alpha', 'beta').knowledge_extractor).toEqual({
+      provider: 'beta',
+      fallback_providers: ['beta'],
+    });
+  });
 });

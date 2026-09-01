@@ -51,8 +51,10 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "provider": {"type": "string"},
-        "model": {"type": "string"},
-        "credential_ref": {"type": "string"},
+        "fallback_providers": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
         "temperature": {"type": "number", "minimum": 0, "maximum": 2},
         "max_output_tokens": {"type": "integer", "minimum": 1},
         "request_timeout": {"type": "integer", "minimum": 1},

@@ -28,7 +28,12 @@ export const SettingsView: React.FC = () => {
   const [preflightData, setPreflightData] = useState<PreflightResponse | null>(null);
   const [isRunningPreflight, setIsRunningPreflight] = useState(false);
   const [isTestingKnowledgeExtractor, setIsTestingKnowledgeExtractor] = useState(false);
-  const [knowledgeTestResult, setKnowledgeTestResult] = useState<{ status: string; error?: string } | null>(null);
+  const [knowledgeTestResult, setKnowledgeTestResult] = useState<{
+    status: string;
+    error?: string;
+    provider?: string;
+    is_fallback?: boolean;
+  } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [providerPendingDeletion, setProviderPendingDeletion] = useState<string | null>(null);
@@ -261,6 +266,27 @@ export const SettingsView: React.FC = () => {
       roles: {
         ...config.roles,
         fallback_reviewers: newFallbacks.filter(Boolean),
+      },
+    });
+  };
+
+  const currentKnowledgeFallbacks = config?.knowledge_extractor?.fallback_providers || [];
+
+  const handleSetKnowledgeFallback = (index: number, providerName: string) => {
+    if (!config) return;
+    const newFallbacks = [...currentKnowledgeFallbacks];
+    if (providerName) {
+      newFallbacks[index] = providerName;
+    } else if (index < newFallbacks.length) {
+      newFallbacks.splice(index, 1);
+    }
+    const primary = config.knowledge_extractor?.provider || '';
+    const cleanFallbacks = [...new Set(newFallbacks.filter((provider) => provider && provider !== primary))];
+    setConfig({
+      ...config,
+      knowledge_extractor: {
+        ...config.knowledge_extractor,
+        fallback_providers: cleanFallbacks,
       },
     });
   };
@@ -780,10 +806,17 @@ export const SettingsView: React.FC = () => {
                     <label className="text-[11px] text-[#666666] block mb-1 font-serif">Extractor Provider</label>
                     <select
                       value={config.knowledge_extractor?.provider || ''}
-                      onChange={(e) => setConfig({
-                        ...config,
-                        knowledge_extractor: { ...config.knowledge_extractor, provider: e.target.value },
-                      })}
+                      onChange={(e) => {
+                        const provider = e.target.value;
+                        setConfig({
+                          ...config,
+                          knowledge_extractor: {
+                            ...config.knowledge_extractor,
+                            provider,
+                            fallback_providers: currentKnowledgeFallbacks.filter((fallback) => fallback !== provider),
+                          },
+                        });
+                      }}
                       className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
                     >
                       <option value="">-- 选择 Provider --</option>
@@ -792,29 +825,48 @@ export const SettingsView: React.FC = () => {
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">模型覆盖 (可选)</label>
-                    <input
-                      value={config.knowledge_extractor?.model || ''}
-                      onChange={(e) => setConfig({
-                        ...config,
-                        knowledge_extractor: { ...config.knowledge_extractor, model: e.target.value },
-                      })}
-                      placeholder="沿用 Provider 模型"
-                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-[#666666] block mb-1 font-serif">Credential Ref (可选)</label>
-                    <input
-                      value={config.knowledge_extractor?.credential_ref || ''}
-                      onChange={(e) => setConfig({
-                        ...config,
-                        knowledge_extractor: { ...config.knowledge_extractor, credential_ref: e.target.value },
-                      })}
-                      placeholder="$API_KEY 或 lm-studio"
-                      className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
-                    />
+                  <div className="md:col-span-2 lg:col-span-4 pt-3 border-t border-[#E5E0D8] space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <label className="text-[11px] text-[#666666] block mb-1 font-serif">
+                          Extractor Fallback 链
+                        </label>
+                        <p className="text-[10px] text-[#888888] font-sans">
+                          主 Extractor 失败后按此顺序切换，支持连续添加多个备用 Provider
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-mono text-[#888888]">
+                        {currentKnowledgeFallbacks.length} 个备用端
+                      </span>
+                    </div>
+                    {[...currentKnowledgeFallbacks, ''].map((providerName, index) => (
+                      <div key={`knowledge-fallback-${index}`} className="flex items-center gap-2">
+                        <label
+                          htmlFor={`knowledge-fallback-${index}`}
+                          className="w-28 shrink-0 text-[11px] text-[#666666] font-serif"
+                        >
+                          备用提取器 #{index + 1}
+                        </label>
+                        <select
+                          id={`knowledge-fallback-${index}`}
+                          aria-label={`备用提取器 #${index + 1}`}
+                          value={providerName}
+                          onChange={(e) => handleSetKnowledgeFallback(index, e.target.value)}
+                          className="w-full bg-white border border-[#E5E0D8] rounded-sm p-2.5 text-xs text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                        >
+                          <option value="">
+                            {index < currentKnowledgeFallbacks.length ? '-- 移除备用端 --' : '-- 添加备用端 --'}
+                          </option>
+                          {providersList
+                            .filter((provider) => provider !== config.knowledge_extractor?.provider)
+                            .map((provider) => (
+                              <option key={provider} value={provider}>
+                                {provider} ({config.providers?.[provider]?.model || config.providers?.[provider]?.type})
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    ))}
                   </div>
                   <div>
                     <label className="text-[11px] text-[#666666] block mb-1 font-serif">Temperature</label>
@@ -864,7 +916,9 @@ export const SettingsView: React.FC = () => {
                     </button>
                     {knowledgeTestResult && (
                       <span className={`text-xs ${knowledgeTestResult.status === 'ok' ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        {knowledgeTestResult.status === 'ok' ? '✓ 连接成功' : `连接失败：${knowledgeTestResult.error || '请检查配置'}`}
+                        {knowledgeTestResult.status === 'ok'
+                          ? `✓ 连接成功${knowledgeTestResult.provider ? `：${knowledgeTestResult.provider}${knowledgeTestResult.is_fallback ? '（fallback）' : ''}` : ''}`
+                          : `连接失败：${knowledgeTestResult.error || '请检查配置'}`}
                       </span>
                     )}
                   </div>
@@ -896,6 +950,8 @@ export const SettingsView: React.FC = () => {
                     const isReviewer = config.roles?.reviewer === pId;
                     const isFb1 = fb1 === pId;
                     const isFb2 = fb2 === pId;
+                    const isKnowledgeExtractor = config.knowledge_extractor?.provider === pId;
+                    const knowledgeFallbackIndex = currentKnowledgeFallbacks.indexOf(pId);
 
                     return (
                       <div
@@ -932,6 +988,16 @@ export const SettingsView: React.FC = () => {
                             {currentReviewerFallbacks.includes(pId) && (
                               <span className="px-2 py-0.5 rounded-sm text-[10px] font-medium bg-violet-50 text-violet-800 border border-violet-200">
                                 审阅备用 #{currentReviewerFallbacks.indexOf(pId) + 1}
+                              </span>
+                            )}
+                            {isKnowledgeExtractor && (
+                              <span className="px-2 py-0.5 rounded-sm text-[10px] font-medium bg-cyan-50 text-cyan-800 border border-cyan-200">
+                                知识提取主模型
+                              </span>
+                            )}
+                            {knowledgeFallbackIndex >= 0 && (
+                              <span className="px-2 py-0.5 rounded-sm text-[10px] font-medium bg-cyan-50 text-cyan-800 border border-cyan-200">
+                                知识提取备用 #{knowledgeFallbackIndex + 1}
                               </span>
                             )}
                           </div>

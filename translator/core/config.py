@@ -179,6 +179,13 @@ def validate_config_data(value: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 f"knowledge_extractor.provider 引用了未定义 provider：{knowledge_provider}"
             )
+        knowledge_fallbacks = knowledge.get("fallback_providers", [])
+        if isinstance(knowledge_fallbacks, list):
+            for fallback_provider in knowledge_fallbacks:
+                if fallback_provider not in providers:
+                    raise ValueError(
+                        f"knowledge_extractor.fallback_providers 引用了未定义 provider：{fallback_provider}"
+                    )
     
     # Validate primary translator
     primary = roles.get("primary_translator")

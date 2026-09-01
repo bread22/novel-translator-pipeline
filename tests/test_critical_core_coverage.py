@@ -64,6 +64,11 @@ def test_config_env_helpers_and_role_validation(tmp_path: Path, monkeypatch) -> 
         with pytest.raises(ValueError):
             config.validate_config_data(candidate)
 
+    candidate = json.loads(json.dumps(base))
+    candidate["knowledge_extractor"]["fallback_providers"] = ["missing"]
+    with pytest.raises(ValueError):
+        config.validate_config_data(candidate)
+
 
 def test_job_control_pause_resume_and_cancel() -> None:
     event = threading.Event()

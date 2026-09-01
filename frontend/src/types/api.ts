@@ -314,8 +314,7 @@ export interface SystemConfig {
   knowledge_extractor?: {
     enabled?: boolean;
     provider?: string;
-    model?: string;
-    credential_ref?: string;
+    fallback_providers?: string[];
     temperature?: number;
     max_output_tokens?: number;
     request_timeout?: number;

@@ -10,6 +10,7 @@
 - `fallback_translators`
 - `reviewer` / `secondary_reviewer`
 - `fallback_reviewers`
+- `knowledge_extractor.provider` / `knowledge_extractor.fallback_providers`
 
 Provider 类型：
 
@@ -38,7 +39,21 @@ Provider 类型：
 
 Reviewer 不会隐式借用翻译 fallback。只有 `fallback_reviewers` 显式配置的后端会参与审阅恢复。双审的 primary/secondary 各自执行并记录角色、candidate index、attempt、chunk、split path 和 timeout。
 
-## 4. 配置示例
+## 4. Knowledge Extractor Fallback
+
+Window Knowledge Extractor 和 Chapter Finalization 共用同一条显式 fallback 链。主 provider 请求异常或返回失败状态时，按 `fallback_providers` 顺序切换；成功结果会记录实际 `provider`、`fallback_index`、`fallback_from` 和 `provider_attempts`。所有 provider 都失败时，窗口结果由流水线保留为 failed，Finalization 则保留候选证据而不提升为 active。
+
+```toml
+[knowledge_extractor]
+enabled = true
+provider = "extractor_primary"
+fallback_providers = ["extractor_fallback_1", "extractor_fallback_2"]
+request_timeout = 300
+```
+
+连接测试也按同一顺序探测，并在返回值的 `attempts` 中保留每个 provider 的结果。
+
+## 5. 配置示例
 
 ```toml
 [roles]
@@ -71,6 +86,12 @@ api_key = "local"
 context_tokens = 8192
 timeout = 600
 
+[knowledge_extractor]
+enabled = true
+provider = "primary"
+fallback_providers = ["fallback_1", "fallback_2"]
+request_timeout = 300
+
 [pipeline]
 primary_batch_max_chars = 1500
 max_provider_split_depth = 2
@@ -81,7 +102,7 @@ health_check_timeout = 120
 
 API key 使用 `$ENV_NAME` 引用，不把真实 secret 写进 `config.toml`。
 
-## 5. 预检
+## 6. 预检
 
 Web Settings 提供 provider preflight；CLI 可直接执行：
 
@@ -91,7 +112,7 @@ python scripts/preflight.py
 
 该命令运行真实健康探测，缺少网络、凭据、binary 或 model 时返回结构化错误。预检失败不修改 manifest、workspace 或队列状态。
 
-## 6. 观测与恢复
+## 7. 观测与恢复
 
 - task status 显示当前 Provider、阶段、attempt 和 message；
 - SSE 发布 phase、batch、fallback、reviewer 与 queue 更新；

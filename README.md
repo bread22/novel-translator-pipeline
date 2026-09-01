@@ -32,7 +32,7 @@
 - 章节审阅按源文字符预算切块，只在自然段边界切分。
 - 每块携带可配置的前后文段落；修复后由 Window Knowledge Extractor 生成临时 rolling context，供后续块的 Reviewer Budgeter 选择。
 - 整章审阅结束后由同一 Extractor 执行 Finalization，只有 active 的新 Glossary/Memory 候选传给下一章。
-- 可启用双 Reviewer 并发审阅、显式 Reviewer fallback、自适应二分重试与前文定向回查。
+- 可启用双 Reviewer 并发审阅、显式 Reviewer/Knowledge Extractor fallback、自适应二分重试与前文定向回查。
 - `checked_ids` 必须覆盖目标段落；自动写回还需通过类别、严重度、置信度、日文假名残留和 no-op 守卫。
 
 ### Glossary Automation v3

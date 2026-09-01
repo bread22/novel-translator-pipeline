@@ -18,6 +18,7 @@ import unicodedata
 from pydantic import BaseModel, ConfigDict, Field
 
 from translator.core.config import load_config
+from translator.core.job_control import JobCancelled
 from translator.core.workspace import BookWorkspace, empty_book_memory, read_json, utc_now, write_json
 from translator.glossary.service import apply_glossary_delta, persist_glossary
 from translator.glossary.taxonomy import CategoryTier, canonical_category, category_tier
@@ -271,6 +272,24 @@ def knowledge_extractor_enabled(config: Mapping[str, Any] | None = None) -> bool
     return bool(_settings(config).get("enabled", False))
 
 
+def knowledge_extractor_provider_names(config: Mapping[str, Any] | None = None) -> list[str]:
+    """Return the configured extractor provider chain in execution order."""
+    settings = _settings(config)
+    primary = str(settings.get("provider", "")).strip()
+    configured_fallbacks = settings.get("fallback_providers", [])
+    if isinstance(configured_fallbacks, str):
+        configured_fallbacks = [configured_fallbacks]
+    if not isinstance(configured_fallbacks, Sequence) or isinstance(configured_fallbacks, (str, bytes)):
+        configured_fallbacks = []
+
+    names: list[str] = []
+    for raw_name in [primary, *configured_fallbacks]:
+        name = str(raw_name).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def _provider(name: str, config: Mapping[str, Any], settings: Mapping[str, Any]) -> Any:
     full_config = config if isinstance(config, Mapping) and "providers" in config else load_config()
     provider_cfg = deepcopy(dict(full_config))
@@ -278,16 +297,79 @@ def _provider(name: str, config: Mapping[str, Any], settings: Mapping[str, Any])
     if name not in providers:
         raise ValueError(f"Knowledge Extractor provider 未配置：{name}")
     selected = dict(providers[name])
-    if settings.get("model"):
-        selected["model"] = str(settings["model"])
-    if settings.get("credential_ref"):
-        selected["api_key"] = str(settings["credential_ref"])
     if "temperature" in settings:
         selected["temperature"] = float(settings["temperature"])
     if "max_output_tokens" in settings:
         selected["max_output_tokens"] = int(settings["max_output_tokens"])
     providers[name] = selected
     return get_provider(name, provider_cfg)
+
+
+def _review_with_fallbacks(
+    kind: str,
+    payload: Mapping[str, Any],
+    schema_path: Path,
+    *,
+    settings: Mapping[str, Any],
+    config: Mapping[str, Any] | None,
+    provider_factory: Callable[[str], Any] | None,
+) -> dict[str, Any]:
+    """Run a Knowledge Extractor request through its explicit provider chain."""
+    provider_names = knowledge_extractor_provider_names(config if config is not None else settings)
+    if not provider_names:
+        raise ValueError("Knowledge Extractor 未配置 provider")
+
+    attempts: list[dict[str, Any]] = []
+    request_timeout = int(settings.get("request_timeout", 300))
+    for provider_index, provider_name in enumerate(provider_names):
+        started = time.monotonic()
+        try:
+            provider = (
+                provider_factory(provider_name)
+                if provider_factory
+                else _provider(provider_name, config or load_config(), settings)
+            )
+            result = provider.review(
+                kind, dict(payload), schema_path,
+                autonomous=False, timeout=request_timeout,
+            )
+            if not isinstance(result, Mapping):
+                raise ValueError("provider 返回结果不是 JSON 对象")
+            if str(result.get("status", "")).strip().casefold() in {"error", "failed", "blocked"}:
+                raise RuntimeError(str(result.get("error") or result.get("message") or "provider 返回失败状态"))
+
+            attempt_record: dict[str, Any] = {
+                "provider": provider_name,
+                "status": "ok",
+                "latency_ms": round((time.monotonic() - started) * 1000, 1),
+            }
+            attempts.append(attempt_record)
+            output = dict(result)
+            output.update({
+                "provider": provider_name,
+                "is_fallback": provider_index > 0,
+                "attempt_count": len(attempts),
+                "provider_attempts": attempts,
+            })
+            if provider_index > 0:
+                output["fallback_from"] = attempts[-2]["provider"]
+                output["fallback_index"] = provider_index
+                output["fallback_reason"] = str(attempts[-2].get("error", "provider failure"))
+            return output
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            attempts.append({
+                "provider": provider_name,
+                "status": "error",
+                "latency_ms": round((time.monotonic() - started) * 1000, 1),
+                "error": str(exc)[:1000],
+            })
+
+    details = "; ".join(
+        f"{item['provider']}: {item.get('error', 'unknown error')}" for item in attempts
+    )
+    raise RuntimeError(f"Knowledge Extractor 所有 provider 均失败：{details}")
 
 
 def run_knowledge_extractor_window(
@@ -303,17 +385,22 @@ def run_knowledge_extractor_window(
         if output_path:
             write_json(output_path, result)
         return result
-    provider_name = str(settings.get("provider", "")).strip()
-    provider = provider_factory(provider_name) if provider_factory else _provider(provider_name, config or load_config(), settings)
-    result = provider.review(
-        "knowledge_window", dict(payload), WINDOW_SCHEMA,
-        autonomous=False, timeout=int(settings.get("request_timeout", 300)),
+    result = _review_with_fallbacks(
+        "knowledge_window", payload, WINDOW_SCHEMA,
+        settings=settings,
+        config=config,
+        provider_factory=provider_factory,
     )
     normalized = normalize_window_output(
         result if isinstance(result, Mapping) else {},
         window_id=str(payload.get("window_id", "window-unknown")),
         items=[item for item in payload.get("items", []) if isinstance(item, Mapping)],
     )
+    normalized.update({
+        key: result[key]
+        for key in ("provider", "is_fallback", "fallback_from", "fallback_index", "fallback_reason", "attempt_count", "provider_attempts")
+        if key in result
+    })
     normalized["status"] = "completed"
     if output_path:
         write_json(output_path, normalized)
@@ -787,13 +874,18 @@ def run_knowledge_finalization(
         if output_path:
             write_json(output_path, result)
         return result
-    provider_name = str(settings.get("provider", "")).strip()
-    provider = provider_factory(provider_name) if provider_factory else _provider(provider_name, config or load_config(), settings)
-    result = provider.review(
-        "knowledge_finalize", dict(payload), FINALIZE_SCHEMA,
-        autonomous=False, timeout=int(settings.get("request_timeout", 300)),
+    result = _review_with_fallbacks(
+        "knowledge_finalize", payload, FINALIZE_SCHEMA,
+        settings=settings,
+        config=config,
+        provider_factory=provider_factory,
     )
     normalized = normalize_finalize_output(result if isinstance(result, Mapping) else {})
+    normalized.update({
+        key: result[key]
+        for key in ("provider", "is_fallback", "fallback_from", "fallback_index", "fallback_reason", "attempt_count", "provider_attempts")
+        if key in result
+    })
     normalized["status"] = "completed"
     if output_path:
         write_json(output_path, normalized)
@@ -802,17 +894,54 @@ def run_knowledge_finalization(
 
 def knowledge_extractor_connection_test(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     settings = _settings(config)
-    provider_name = str(settings.get("provider", "")).strip()
-    if not provider_name:
+    provider_names = knowledge_extractor_provider_names(config)
+    if not provider_names:
         return {"status": "error", "error": "未配置 Knowledge Extractor provider"}
-    started = time.monotonic()
-    try:
-        result = _provider(provider_name, config or load_config(), settings).health_check(
-            timeout=int(settings.get("request_timeout", 300))
-        )
-        return {"status": "ok" if isinstance(result, Mapping) and result.get("status") == "ok" else "error", "provider": provider_name, "latency_ms": round((time.monotonic() - started) * 1000, 1), "result": result}
-    except Exception as exc:
-        return {"status": "error", "provider": provider_name, "latency_ms": round((time.monotonic() - started) * 1000, 1), "error": str(exc)}
+    attempts: list[dict[str, Any]] = []
+    for provider_index, provider_name in enumerate(provider_names):
+        started = time.monotonic()
+        try:
+            result = _provider(provider_name, config or load_config(), settings).health_check(
+                timeout=int(settings.get("request_timeout", 300))
+            )
+            is_ok = isinstance(result, Mapping) and result.get("status") == "ok"
+            attempt = {
+                "provider": provider_name,
+                "status": "ok" if is_ok else "error",
+                "latency_ms": round((time.monotonic() - started) * 1000, 1),
+                "result": result,
+            }
+            if not is_ok:
+                attempt["error"] = str(result.get("error", "健康探测未通过")) if isinstance(result, Mapping) else "健康探测未返回预期响应"
+            attempts.append(attempt)
+            if is_ok:
+                response: dict[str, Any] = {
+                    "status": "ok",
+                    "provider": provider_name,
+                    "latency_ms": attempt["latency_ms"],
+                    "result": result,
+                    "attempts": attempts,
+                    "is_fallback": provider_index > 0,
+                }
+                if provider_index > 0:
+                    response["fallback_from"] = attempts[-2]["provider"]
+                    response["fallback_index"] = provider_index
+                    response["fallback_reason"] = attempts[-2].get("error", "provider health check failed")
+                return response
+        except Exception as exc:
+            attempts.append({
+                "provider": provider_name,
+                "status": "error",
+                "latency_ms": round((time.monotonic() - started) * 1000, 1),
+                "error": str(exc)[:1000],
+            })
+
+    return {
+        "status": "error",
+        "provider": provider_names[0],
+        "attempts": attempts,
+        "error": "所有 Knowledge Extractor provider 健康探测均失败",
+    }
 
 
 def _candidate_store_key(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
@@ -1092,6 +1221,7 @@ __all__ = [
     "build_finalization_payload", "compact_finalization_payload", "finalization_prompt_chars",
     "partition_finalization_candidates",
     "run_knowledge_extractor_window", "run_knowledge_finalization",
-    "knowledge_extractor_enabled", "knowledge_extractor_connection_test", "apply_knowledge_delta",
+    "knowledge_extractor_enabled", "knowledge_extractor_provider_names",
+    "knowledge_extractor_connection_test", "apply_knowledge_delta",
     "normalize_window_output", "normalize_finalize_output", "validate_finalization_coverage",
 ]

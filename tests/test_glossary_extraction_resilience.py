@@ -12,6 +12,7 @@ from translator.review.knowledge_extractor import (
     partition_finalization_candidates,
     run_knowledge_extractor_window,
     run_knowledge_finalization,
+    knowledge_extractor_connection_test,
     validate_finalization_coverage,
 )
 
@@ -134,6 +135,91 @@ def test_knowledge_extractor_window_and_persistence(tmp_path: Path) -> None:
     assert len(glossary["terms"]) == 1
     assert glossary["terms"][0]["source"] == "東都銀行"
     assert glossary["terms"][0]["target"] == "东都银行"
+
+
+def test_knowledge_extractor_window_uses_ordered_fallback(tmp_path: Path) -> None:
+    payload = {
+        "window_id": "c0001:window:0001",
+        "items": [{"id": "p1", "source": "東都銀行", "translated": "东都银行"}],
+    }
+    calls: list[str] = []
+
+    class FailingPrimary:
+        def review(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            calls.append("primary")
+            raise RuntimeError("primary unavailable")
+
+    class WorkingFallback:
+        def review(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            calls.append("fallback")
+            return {"rolling_context_delta": {}, "knowledge_candidates": [], "conflicts": []}
+
+    providers = {"primary": FailingPrimary(), "fallback": WorkingFallback()}
+    result = run_knowledge_extractor_window(
+        payload,
+        provider_factory=lambda name: providers[name],
+        config={
+            "knowledge_extractor": {
+                "enabled": True,
+                "provider": "primary",
+                "fallback_providers": ["fallback"],
+            }
+        },
+    )
+
+    assert calls == ["primary", "fallback"]
+    assert result["status"] == "completed"
+    assert result["provider"] == "fallback"
+    assert result["is_fallback"] is True
+    assert result["fallback_from"] == "primary"
+    assert result["fallback_index"] == 1
+    assert result["provider_attempts"][0]["status"] == "error"
+
+    final_result = run_knowledge_finalization(
+        {"candidates": [], "conflicts": [], "active_glossary": [], "related_memory": []},
+        provider_factory=lambda name: providers[name],
+        config={
+            "knowledge_extractor": {
+                "enabled": True,
+                "provider": "primary",
+                "fallback_providers": ["fallback"],
+            }
+        },
+    )
+    assert final_result["status"] == "completed"
+    assert final_result["provider"] == "fallback"
+    assert final_result["fallback_from"] == "primary"
+
+
+def test_knowledge_extractor_connection_test_uses_fallback(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class HealthProvider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def health_check(self, timeout: int) -> dict[str, Any]:
+            del timeout
+            calls.append(self.name)
+            return {"status": "error", "error": "offline"} if self.name == "primary" else {"status": "ok"}
+
+    monkeypatch.setattr(
+        "translator.review.knowledge_extractor._provider",
+        lambda name, _config, _settings: HealthProvider(name),
+    )
+    result = knowledge_extractor_connection_test({
+        "knowledge_extractor": {
+            "provider": "primary",
+            "fallback_providers": ["fallback"],
+            "request_timeout": 5,
+        }
+    })
+
+    assert calls == ["primary", "fallback"]
+    assert result["status"] == "ok"
+    assert result["provider"] == "fallback"
+    assert result["is_fallback"] is True
+    assert result["fallback_from"] == "primary"
 
 
 def test_cross_window_candidate_aggregation_and_chinese_categories(tmp_path: Path) -> None:
@@ -640,4 +726,3 @@ def test_compact_payload_compresses_rich_candidates_significantly() -> None:
     assert "referenced_glossary_ids" not in compact_doc["candidates"][0]
     # Compact candidate JSON is at least 60% smaller than raw candidate JSON
     assert len(compact_json) < len(raw_json) * 0.4
-

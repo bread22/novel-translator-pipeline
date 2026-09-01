@@ -53,6 +53,10 @@
       "type": "array"
     }
   },
+  "required": [
+    "schema_version",
+    "decisions"
+  ],
   "title": "FinalKnowledgeOutput",
   "type": "object"
 }

@@ -6,9 +6,11 @@ from typing import Any
 
 from translator.core.workspace import BookWorkspace, write_json
 from translator.review.knowledge_extractor import (
+    aggregate_candidates,
     apply_knowledge_delta,
     run_knowledge_extractor_window,
     run_knowledge_finalization,
+    validate_finalization_coverage,
 )
 
 
@@ -226,3 +228,192 @@ def test_cross_window_candidate_aggregation_and_chinese_categories(tmp_path: Pat
     assert glossary_data["terms"][0]["category"] == "person"
     evidence_pids = {item["paragraph_id"] for item in glossary_data["terms"][0]["evidence"]}
     assert evidence_pids == {"c0003-p00002", "c0003-p00108"}
+
+
+def test_finalization_coverage_rejects_empty_partial_unknown_and_duplicate() -> None:
+    candidates = [
+        {"candidate_id": "c1", "alias_candidate_ids": ["alias-1"]},
+        {"candidate_id": "c2", "alias_candidate_ids": []},
+    ]
+    empty = validate_finalization_coverage(candidates, [])
+    assert empty["complete"] is False
+    assert empty["missing_candidate_ids"] == ["c1", "c2"]
+
+    partial = validate_finalization_coverage(
+        candidates, [{"candidate_id": "alias-1", "action": "candidate"}]
+    )
+    assert partial["decisions"][0]["candidate_id"] == "c1"
+    assert partial["missing_candidate_ids"] == ["c2"]
+
+    invalid = validate_finalization_coverage(candidates, [
+        {"candidate_id": "c1", "action": "active"},
+        {"candidate_id": "c1", "action": "candidate"},
+        {"candidate_id": "invented", "action": "discard"},
+    ])
+    assert invalid["decisions"] == []
+    assert invalid["duplicate_candidate_ids"] == ["c1"]
+    assert invalid["unknown_candidate_ids"] == ["invented"]
+    assert invalid["missing_candidate_ids"] == ["c1", "c2"]
+
+
+def test_candidate_and_active_stores_are_idempotent(tmp_path: Path) -> None:
+    workspace = BookWorkspace.at(tmp_path / "output", "idempotent-book")
+
+    def candidate(candidate_id: str, paragraph_id: str) -> dict[str, Any]:
+        return {
+            "candidate_id": candidate_id,
+            "kind": "glossary",
+            "source": "小泉宏美",
+            "target": "小泉宏美",
+            "category": "person",
+            "source_scope": "body",
+            "confidence": 0.96,
+            "source_window": f"window:{paragraph_id}",
+            "source_paragraph_ids": [paragraph_id],
+            "evidence_ids": [paragraph_id],
+            "source_fragment": "小泉宏美",
+            "target_fragment": "小泉宏美",
+        }
+
+    first = candidate("cand-1", "p1")
+    for _ in range(2):
+        apply_knowledge_delta(
+            workspace,
+            "c1",
+            [first],
+            [{"candidate_id": "cand-1", "action": "candidate"}],
+            evidence_texts={"p1": "小泉宏美が来た"},
+        )
+    pending = json.loads(workspace.knowledge_candidates_path.read_text(encoding="utf-8"))
+    assert len(pending["items"]) == 1
+    assert pending["items"][0]["evidence_ids"] == ["p1"]
+
+    second = candidate("cand-2", "p2")
+    aggregated = aggregate_candidates([second], historical_candidates=pending["items"])
+    decision = [{"candidate_id": aggregated[0]["candidate_id"], "action": "active"}]
+    evidence = {"p1": "小泉宏美が来た", "p2": "小泉宏美は答えた"}
+    for _ in range(2):
+        apply_knowledge_delta(workspace, "c2", aggregated, decision, evidence_texts=evidence)
+
+    pending = json.loads(workspace.knowledge_candidates_path.read_text(encoding="utf-8"))
+    glossary = json.loads(workspace.glossary_path.read_text(encoding="utf-8"))
+    assert pending["items"] == []
+    assert len(glossary["terms"]) == 1
+    assert {item["paragraph_id"] for item in glossary["terms"][0]["evidence"]} == {"p1", "p2"}
+
+
+def test_pipeline_finalization_batches_and_retries_missing_decisions(tmp_path: Path, monkeypatch) -> None:
+    from translator.pipeline import chapter_pipeline as pipeline_module
+    from translator.pipeline.chapter_pipeline import IterativePipeline
+
+    workspace = BookWorkspace.at(tmp_path / "output", "batch-book")
+    manifest_path = tmp_path / "manifest.json"
+    paragraphs = [
+        {"id": f"p{index}", "source": f"人物{index}", "translated": f"人物{index}"}
+        for index in range(5)
+    ]
+    manifest_path.write_text(json.dumps({
+        "book": "batch-book",
+        "chapters": [{"id": "c1", "paragraphs": paragraphs}],
+    }, ensure_ascii=False), encoding="utf-8")
+    calls: dict[tuple[str, ...], int] = {}
+
+    def extractor(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        assert kind == "finalize"
+        ids = tuple(str(item["candidate_id"]) for item in payload["candidates"])
+        calls[ids] = calls.get(ids, 0) + 1
+        # Force the coverage validator to retry every multi-item batch.
+        selected = [] if len(ids) > 1 and calls[ids] == 1 else list(ids)
+        return {"decisions": [
+            {"candidate_id": candidate_id, "action": "candidate"} for candidate_id in selected
+        ]}
+
+    pipeline = IterativePipeline(
+        book="batch-book",
+        workspace=workspace,
+        manifest=manifest_path,
+        tool_call=lambda *_args: {"status": "ok"},
+        knowledge_extractor=extractor,
+    )
+    monkeypatch.setattr(pipeline_module, "load_config", lambda: {
+        "knowledge_extractor": {
+            "enabled": True,
+            "finalization_batch_size": 2,
+            "finalization_max_retries": 2,
+            "input_hard_limit_chars": 30_000,
+        }
+    })
+    pipeline._knowledge_candidates["c1"] = [
+        {
+            "candidate_id": f"cand-{index}",
+            "kind": "glossary",
+            "source": f"人物{index}",
+            "target": f"人物{index}",
+            "category": "person",
+            "source_scope": "body",
+            "confidence": 0.95,
+            "source_window": f"c1:window:{index}",
+            "source_paragraph_ids": [f"p{index}"],
+            "evidence_ids": [f"p{index}"],
+            "source_fragment": f"人物{index}",
+            "target_fragment": f"人物{index}",
+        }
+        for index in range(5)
+    ]
+
+    summary = pipeline._finalize_chapter_knowledge("c1", paragraphs)
+    assert summary["status"] == "completed"
+    assert summary["batch_count"] == 3
+    assert summary["missing_decisions"] == 0
+    assert summary["attempt_count"] == 5
+    stored = json.loads(workspace.knowledge_candidates_path.read_text(encoding="utf-8"))
+    assert len(stored["items"]) == 5
+
+
+def test_pipeline_empty_finalization_is_incomplete_after_retries(tmp_path: Path, monkeypatch) -> None:
+    from translator.pipeline import chapter_pipeline as pipeline_module
+    from translator.pipeline.chapter_pipeline import IterativePipeline
+
+    workspace = BookWorkspace.at(tmp_path / "output", "incomplete-book")
+    manifest_path = tmp_path / "manifest.json"
+    paragraph = {"id": "p1", "source": "小泉宏美", "translated": "小泉宏美"}
+    manifest_path.write_text(json.dumps({
+        "book": "incomplete-book",
+        "chapters": [{"id": "c1", "paragraphs": [paragraph]}],
+    }, ensure_ascii=False), encoding="utf-8")
+    pipeline = IterativePipeline(
+        book="incomplete-book",
+        workspace=workspace,
+        manifest=manifest_path,
+        tool_call=lambda *_args: {"status": "ok"},
+        knowledge_extractor=lambda _kind, _payload: {"decisions": []},
+    )
+    monkeypatch.setattr(pipeline_module, "load_config", lambda: {
+        "knowledge_extractor": {
+            "enabled": True,
+            "finalization_batch_size": 12,
+            "finalization_max_retries": 1,
+            "input_hard_limit_chars": 30_000,
+        }
+    })
+    pipeline._knowledge_candidates["c1"] = [{
+        "candidate_id": "cand-1",
+        "kind": "glossary",
+        "source": "小泉宏美",
+        "target": "小泉宏美",
+        "category": "person",
+        "source_scope": "body",
+        "confidence": 0.95,
+        "source_window": "c1:window:1",
+        "source_paragraph_ids": ["p1"],
+        "evidence_ids": ["p1"],
+        "source_fragment": "小泉宏美",
+        "target_fragment": "小泉宏美",
+    }]
+
+    summary = pipeline._finalize_chapter_knowledge("c1", [paragraph])
+    output = json.loads((workspace.reviews_dir / "c1-knowledge-finalize.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "incomplete"
+    assert summary["missing_decisions"] == 1
+    assert summary["attempt_count"] == 2
+    assert output["missing_decision_ids"] == ["cand-1"]

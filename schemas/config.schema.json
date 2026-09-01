@@ -56,7 +56,9 @@
         "temperature": {"type": "number", "minimum": 0, "maximum": 2},
         "max_output_tokens": {"type": "integer", "minimum": 1},
         "request_timeout": {"type": "integer", "minimum": 1},
-        "input_hard_limit_chars": {"type": "integer", "minimum": 1}
+        "input_hard_limit_chars": {"type": "integer", "minimum": 1},
+        "finalization_batch_size": {"type": "integer", "minimum": 1},
+        "finalization_max_retries": {"type": "integer", "minimum": 0}
       }
     },
     "pipeline": {

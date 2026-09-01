@@ -205,6 +205,61 @@ def normalize_finalize_output(payload: Mapping[str, Any] | None) -> dict[str, An
     return FinalKnowledgeOutput.model_validate({"schema_version": "1.0", "decisions": decisions}).model_dump()
 
 
+def validate_finalization_coverage(
+    candidates: Sequence[Mapping[str, Any]],
+    decisions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Accept only unique decisions for the exact candidate IDs in a request."""
+    expected_ids = [
+        str(item.get("candidate_id", "")).strip()
+        for item in candidates if isinstance(item, Mapping) and str(item.get("candidate_id", "")).strip()
+    ]
+    expected = set(expected_ids)
+    alias_to_expected: dict[str, set[str]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        canonical_id = str(candidate.get("candidate_id", "")).strip()
+        for alias in candidate.get("alias_candidate_ids", []):
+            alias = str(alias).strip()
+            if alias:
+                alias_to_expected.setdefault(alias, set()).add(canonical_id)
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    unknown_ids: list[str] = []
+    for raw in decisions:
+        if not isinstance(raw, Mapping):
+            continue
+        item = dict(raw)
+        supplied_id = str(item.get("candidate_id", "")).strip()
+        candidate_id = supplied_id
+        if candidate_id not in expected:
+            matches = set(alias_to_expected.get(supplied_id, set()))
+            matches.update(
+                expected_id for expected_id in expected
+                if expected_id.endswith(f":{supplied_id}") or expected_id.endswith(f"-{supplied_id}")
+            )
+            if len(matches) == 1:
+                candidate_id = next(iter(matches))
+                item["candidate_id"] = candidate_id
+            else:
+                if supplied_id:
+                    unknown_ids.append(supplied_id)
+                continue
+        by_id.setdefault(candidate_id, []).append(item)
+
+    duplicate_ids = sorted(candidate_id for candidate_id, items in by_id.items() if len(items) != 1)
+    accepted = [by_id[candidate_id][0] for candidate_id in expected_ids if len(by_id.get(candidate_id, [])) == 1]
+    accepted_ids = {str(item.get("candidate_id", "")) for item in accepted}
+    missing_ids = [candidate_id for candidate_id in expected_ids if candidate_id not in accepted_ids]
+    return {
+        "decisions": accepted,
+        "missing_candidate_ids": missing_ids,
+        "unknown_candidate_ids": list(dict.fromkeys(unknown_ids)),
+        "duplicate_candidate_ids": duplicate_ids,
+        "complete": not missing_ids and not unknown_ids and not duplicate_ids,
+    }
+
+
 def _settings(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
     source = config if isinstance(config, Mapping) else load_config()
     if "knowledge_extractor" in source:
@@ -351,6 +406,23 @@ def aggregate_candidates(
                 h_eids = [str(e).strip() for e in h.get("evidence_ids", []) if str(e).strip()]
                 existing["source_paragraph_ids"] = list(dict.fromkeys(existing.get("source_paragraph_ids", []) + (h_pids or h_eids)))
                 existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + (h_eids or h_pids)))
+                historical_id = str(h.get("candidate_id", "")).strip()
+                if historical_id and historical_id not in existing.get("alias_candidate_ids", []):
+                    existing.setdefault("alias_candidate_ids", []).append(historical_id)
+                historical_aliases = [
+                    str(value).strip() for value in h.get("alias_candidate_ids", []) if str(value).strip()
+                ]
+                existing["alias_candidate_ids"] = list(dict.fromkeys([
+                    *existing.get("alias_candidate_ids", []), *historical_aliases,
+                ]))
+                current_windows = [
+                    value.strip() for value in str(existing.get("source_window", "")).split(",") if value.strip()
+                ]
+                for value in str(h.get("source_window", "")).split(","):
+                    value = value.strip()
+                    if value and value not in current_windows:
+                        current_windows.append(value)
+                existing["source_window"] = ", ".join(current_windows)
 
     return list(grouped.values())
 
@@ -541,6 +613,114 @@ def knowledge_extractor_connection_test(config: Mapping[str, Any] | None = None)
         return {"status": "error", "provider": provider_name, "latency_ms": round((time.monotonic() - started) * 1000, 1), "error": str(exc)}
 
 
+def _candidate_store_key(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    kind = str(candidate.get("kind", "glossary")).strip().lower()
+    category = canonical_category(candidate.get("category", ""))
+    if kind == "glossary":
+        left = unicodedata.normalize("NFKC", str(candidate.get("source", "")).strip()).casefold()
+        right = unicodedata.normalize("NFKC", str(candidate.get("target", "")).strip()).casefold()
+    else:
+        left = unicodedata.normalize("NFKC", str(candidate.get("key", "")).strip()).casefold()
+        right = unicodedata.normalize("NFKC", str(candidate.get("value", "")).strip()).casefold()
+    if not left and not right:
+        left = str(candidate.get("candidate_id", "")).strip()
+    return kind, category, left, right
+
+
+def _merge_candidate_records(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    merged = {**dict(existing), **dict(incoming)}
+    if existing.get("candidate_id"):
+        merged["candidate_id"] = existing["candidate_id"]
+    for field in ("source_paragraph_ids", "evidence_ids", "alias_candidate_ids"):
+        merged[field] = list(dict.fromkeys([
+            *[str(value) for value in existing.get(field, []) if str(value)],
+            *[str(value) for value in incoming.get(field, []) if str(value)],
+        ]))
+    windows: list[str] = []
+    for raw in (existing.get("source_window", ""), incoming.get("source_window", "")):
+        for value in str(raw).split(","):
+            value = value.strip()
+            if value and value not in windows:
+                windows.append(value)
+    merged["source_window"] = ", ".join(windows)
+    merged["first_seen_chapter"] = str(
+        existing.get("first_seen_chapter") or existing.get("chapter_id") or incoming.get("chapter_id") or ""
+    )
+    merged["last_seen_chapter"] = str(incoming.get("chapter_id") or existing.get("last_seen_chapter") or "")
+    try:
+        merged["confidence"] = max(
+            float(existing.get("confidence", 0) or 0), float(incoming.get("confidence", 0) or 0)
+        )
+    except (TypeError, ValueError):
+        pass
+    return merged
+
+
+def _upsert_candidates(
+    existing: Sequence[Mapping[str, Any]],
+    incoming: Sequence[Mapping[str, Any]],
+    processed: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace processed identities and collapse retries into one pending record."""
+    processed_keys = {_candidate_store_key(item) for item in processed if isinstance(item, Mapping)}
+    incoming_keys = {_candidate_store_key(item) for item in incoming if isinstance(item, Mapping)}
+    retained: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str, str]] = []
+    for raw in existing:
+        if not isinstance(raw, Mapping):
+            continue
+        key = _candidate_store_key(raw)
+        if key in processed_keys and key not in incoming_keys:
+            continue
+        if key not in retained:
+            retained[key] = dict(raw)
+            order.append(key)
+        else:
+            retained[key] = _merge_candidate_records(retained[key], raw)
+    for raw in incoming:
+        if not isinstance(raw, Mapping):
+            continue
+        key = _candidate_store_key(raw)
+        if key not in retained:
+            retained[key] = dict(raw)
+            order.append(key)
+        else:
+            retained[key] = _merge_candidate_records(retained[key], raw)
+    return [retained[key] for key in order]
+
+
+def _conflict_store_key(conflict: Mapping[str, Any]) -> tuple[str, ...]:
+    conflict_id = str(conflict.get("conflict_id", "")).strip()
+    if conflict_id:
+        return ("id", conflict_id)
+    if conflict.get("candidate_id") or conflict.get("source") or conflict.get("target"):
+        return ("candidate", *_candidate_store_key(conflict))
+    return (
+        "value",
+        str(conflict.get("kind", "")).strip().lower(),
+        unicodedata.normalize("NFKC", str(conflict.get("key", "")).strip()).casefold(),
+        unicodedata.normalize("NFKC", str(conflict.get("existing_value", "")).strip()).casefold(),
+        unicodedata.normalize("NFKC", str(conflict.get("proposed_value", "")).strip()).casefold(),
+    )
+
+
+def _upsert_conflicts(
+    existing: Sequence[Mapping[str, Any]], incoming: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    result: dict[tuple[str, ...], dict[str, Any]] = {}
+    order: list[tuple[str, ...]] = []
+    for raw in [*existing, *incoming]:
+        if not isinstance(raw, Mapping):
+            continue
+        key = _conflict_store_key(raw)
+        if key not in result:
+            result[key] = dict(raw)
+            order.append(key)
+        else:
+            result[key] = _merge_candidate_records(result[key], raw)
+    return [result[key] for key in order]
+
+
 def apply_knowledge_delta(
     workspace: BookWorkspace,
     chapter_id: str,
@@ -686,11 +866,13 @@ def apply_knowledge_delta(
             memory, memory_summary = merge_memory_delta(memory, {"add": active_memory, "update": [], "conflicts": []}, chapter_id)
             write_json(memory_path, memory)
         store = read_json(candidate_store_path, {"schema_version": "1.0", "items": []})
-        store["items"] = [*store.get("items", []), *stored_candidates]
+        store["items"] = _upsert_candidates(
+            store.get("items", []), stored_candidates, aggregated_candidates,
+        )
         store["updated_at"] = utc_now()
         write_json(candidate_store_path, store)
         conflict_store = read_json(conflict_store_path, {"schema_version": "1.0", "items": []})
-        conflict_store["items"] = [*conflict_store.get("items", []), *stored_conflicts]
+        conflict_store["items"] = _upsert_conflicts(conflict_store.get("items", []), stored_conflicts)
         conflict_store["updated_at"] = utc_now()
         write_json(conflict_store_path, conflict_store)
     except Exception:
@@ -708,5 +890,5 @@ __all__ = [
     "build_finalization_payload", "finalization_prompt_chars",
     "run_knowledge_extractor_window", "run_knowledge_finalization",
     "knowledge_extractor_enabled", "knowledge_extractor_connection_test", "apply_knowledge_delta",
-    "normalize_window_output", "normalize_finalize_output",
+    "normalize_window_output", "normalize_finalize_output", "validate_finalization_coverage",
 ]

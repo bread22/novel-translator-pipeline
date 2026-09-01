@@ -43,6 +43,7 @@ from translator.pipeline.preflight import PreflightError, run_preflight
 from translator.providers.translator import ProviderTranslator
 from translator.review.context_budget import ReviewContextOverflowError
 from translator.review.knowledge_extractor import (
+    aggregate_candidates,
     apply_knowledge_delta,
     build_finalization_payload,
     finalization_prompt_chars,
@@ -51,6 +52,7 @@ from translator.review.knowledge_extractor import (
     normalize_window_output,
     run_knowledge_extractor_window,
     run_knowledge_finalization,
+    validate_finalization_coverage,
 )
 from translator.review.prescan import deterministic_known_hit_scan
 from translator.review.reviewer import (
@@ -947,12 +949,14 @@ class IterativePipeline:
         if self.knowledge_extractor is None and not knowledge_extractor_enabled(config):
             return {"status": "skipped", "reason": "disabled", "candidates": len(candidates), "active": 0}
 
+        final_candidates: list[dict[str, Any]] = []
+
         def retain_without_promotion(status: str, *, error: str = "") -> dict[str, Any]:
             """Keep extraction evidence auditable when finalization is unavailable."""
             evidence = {str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")}
             try:
                 retained = apply_knowledge_delta(
-                    self.workspace, chapter_id, candidates, {}, conflicts,
+                    self.workspace, chapter_id, final_candidates or candidates, {}, conflicts,
                     evidence_texts=evidence,
                 )
             except Exception as commit_exc:
@@ -976,50 +980,144 @@ class IterativePipeline:
             memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
             candidate_store = read_json(self.workspace.knowledge_candidates_path, {"items": []})
             hard_limit = int(config.get("input_hard_limit_chars", 30_000) or 30_000)
-            payload_limit = hard_limit
-            final_input: dict[str, Any] = {}
-            for _attempt in range(10):
-                final_input = build_finalization_payload(
-                    candidates, conflicts, glossary, memory,
-                    candidate_store=candidate_store,
-                    max_chars=payload_limit,
-                )
-                final_input.update({
-                    "chapter_id": chapter_id,
-                    "candidate_count": len(candidates),
-                    "conflict_count": len(conflicts),
-                })
-                if finalization_prompt_chars(final_input) <= hard_limit:
-                    break
-                payload_limit = max(1, int(payload_limit * 0.8))
-            else:
-                raise ValueError(
-                    f"Knowledge Finalization Prompt exceeds input_hard_limit_chars={hard_limit}"
-                )
+            historical = candidate_store.get("items", []) if isinstance(candidate_store, dict) else []
+            final_candidates = aggregate_candidates(candidates, historical_candidates=historical)
         except JobCancelled:
             raise
         except Exception as exc:
             return retain_without_promotion("failed", error=str(exc))
+
         input_path = self.workspace.reviews_dir / f"{chapter_id}-knowledge-finalize-input.json"
         output_path = self.workspace.reviews_dir / f"{chapter_id}-knowledge-finalize.json"
-        write_json(input_path, final_input)
+        batch_size = max(1, int(config.get("finalization_batch_size", 12) or 12))
+        max_retries = max(0, int(config.get("finalization_max_retries", 2) or 0))
+
+        def build_bounded_payload(batch: list[dict[str, Any]]) -> dict[str, Any]:
+            payload_limit = hard_limit
+            expected_ids = {str(item.get("candidate_id", "")) for item in batch}
+            for _attempt in range(10):
+                payload = build_finalization_payload(
+                    batch, conflicts, glossary, memory,
+                    candidate_store=None,
+                    max_chars=payload_limit,
+                )
+                payload.update({
+                    "chapter_id": chapter_id,
+                    "candidate_count": len(batch),
+                    "conflict_count": len(conflicts),
+                })
+                actual_ids = {str(item.get("candidate_id", "")) for item in payload.get("candidates", [])}
+                if actual_ids == expected_ids and finalization_prompt_chars(payload) <= hard_limit:
+                    return payload
+                payload_limit = max(1, int(payload_limit * 0.8))
+            raise ValueError(
+                f"Knowledge Finalization batch exceeds input_hard_limit_chars={hard_limit}"
+            )
+
+        prepared_batches: list[list[dict[str, Any]]] = []
+
+        def prepare(batch: list[dict[str, Any]]) -> None:
+            if not batch:
+                return
+            try:
+                build_bounded_payload(batch)
+                prepared_batches.append(batch)
+            except ValueError:
+                if len(batch) == 1:
+                    raise
+                midpoint = len(batch) // 2
+                prepare(batch[:midpoint])
+                prepare(batch[midpoint:])
+
         try:
-            if self.knowledge_extractor is not None:
-                try:
-                    finalized = self.knowledge_extractor("finalize", final_input)
-                except TypeError:
-                    finalized = self.knowledge_extractor(final_input)
-                finalized = normalize_finalize_output(finalized if isinstance(finalized, dict) else {})
-                finalized["status"] = "completed"
-                write_json(output_path, finalized)
-            else:
-                finalized = run_knowledge_finalization(final_input, output_path=output_path)
-        except JobCancelled:
-            raise
+            for start in range(0, len(final_candidates), batch_size):
+                prepare(final_candidates[start:start + batch_size])
         except Exception as exc:
-            finalized = {"schema_version": "1.0", "status": "failed", "error": str(exc), "decisions": []}
-            write_json(output_path, finalized)
-        decisions = finalized.get("decisions", []) if isinstance(finalized, dict) else []
+            return retain_without_promotion("failed", error=str(exc))
+
+        write_json(input_path, {
+            "schema_version": "1.0",
+            "chapter_id": chapter_id,
+            "candidate_count": len(final_candidates),
+            "raw_candidate_count": len(candidates),
+            "batch_size": batch_size,
+            "batches": [
+                [str(item.get("candidate_id", "")) for item in batch] for batch in prepared_batches
+            ],
+        })
+
+        decisions: list[dict[str, Any]] = []
+        missing_ids: list[str] = []
+        validation_errors: list[dict[str, Any]] = []
+        total_attempts = 0
+        for batch_index, batch in enumerate(prepared_batches, start=1):
+            pending = list(batch)
+            accepted_for_batch: dict[str, dict[str, Any]] = {}
+            for retry_index in range(max_retries + 1):
+                if not pending:
+                    break
+                total_attempts += 1
+                final_input = build_bounded_payload(pending)
+                attempt_stem = f"{chapter_id}-knowledge-finalize-batch-{batch_index:04d}-attempt-{retry_index + 1:02d}"
+                attempt_input_path = self.workspace.reviews_dir / f"{attempt_stem}-input.json"
+                attempt_output_path = self.workspace.reviews_dir / f"{attempt_stem}.json"
+                write_json(attempt_input_path, final_input)
+                try:
+                    if self.knowledge_extractor is not None:
+                        try:
+                            finalized = self.knowledge_extractor("finalize", final_input)
+                        except TypeError:
+                            finalized = self.knowledge_extractor(final_input)
+                        finalized = normalize_finalize_output(finalized if isinstance(finalized, dict) else {})
+                        finalized["status"] = "completed"
+                        write_json(attempt_output_path, finalized)
+                    else:
+                        finalized = run_knowledge_finalization(final_input, output_path=attempt_output_path)
+                except JobCancelled:
+                    raise
+                except Exception as exc:
+                    validation_errors.append({
+                        "batch": batch_index, "attempt": retry_index + 1, "error": str(exc),
+                    })
+                    continue
+
+                coverage = validate_finalization_coverage(
+                    pending,
+                    finalized.get("decisions", []) if isinstance(finalized, dict) else [],
+                )
+                unknown_ids = coverage["unknown_candidate_ids"]
+                duplicate_ids = coverage["duplicate_candidate_ids"]
+                if unknown_ids or duplicate_ids:
+                    validation_errors.append({
+                        "batch": batch_index,
+                        "attempt": retry_index + 1,
+                        "unknown_candidate_ids": unknown_ids,
+                        "duplicate_candidate_ids": duplicate_ids,
+                    })
+                if unknown_ids:
+                    # A hallucinated ID makes the whole response untrustworthy.
+                    continue
+                for item in coverage["decisions"]:
+                    accepted_for_batch[str(item["candidate_id"])] = item
+                pending_ids = set(coverage["missing_candidate_ids"])
+                pending = [item for item in pending if str(item.get("candidate_id", "")) in pending_ids]
+
+            decisions.extend(accepted_for_batch.values())
+            missing_ids.extend(str(item.get("candidate_id", "")) for item in pending)
+
+        status = "completed" if not missing_ids else "incomplete"
+        finalized = {
+            "schema_version": "1.0",
+            "status": status,
+            "decisions": decisions,
+            "candidate_count": len(final_candidates),
+            "decision_count": len(decisions),
+            "missing_decision_ids": list(dict.fromkeys(missing_ids)),
+            "batch_count": len(prepared_batches),
+            "attempt_count": total_attempts,
+            "validation_errors": validation_errors,
+        }
+        write_json(output_path, finalized)
         decision_map = {
             str(item.get("candidate_id", "")): item
             for item in decisions if isinstance(item, dict) and item.get("candidate_id")
@@ -1031,7 +1129,7 @@ class IterativePipeline:
         }
         try:
             applied = apply_knowledge_delta(
-                self.workspace, chapter_id, candidates, decision_map, conflicts,
+                self.workspace, chapter_id, final_candidates, decision_map, conflicts,
                 evidence_texts=evidence,
             )
             self._save_chapter_state(chapter_id)
@@ -1039,7 +1137,17 @@ class IterativePipeline:
             # Keep review/translation valid even when the final persistence
             # transaction fails; active stores are rolled back by the entry point.
             return {"status": "commit_failed", "error": str(exc), "candidates": len(candidates), "active": 0}
-        return {"status": finalized.get("status", "completed"), "candidates": len(candidates), "conflicts": len(conflicts), "decisions": len(decision_map), **applied}
+        return {
+            "status": finalized.get("status", "completed"),
+            "candidates": len(candidates),
+            "aggregated_candidates": len(final_candidates),
+            "conflicts": len(conflicts),
+            "decisions": len(decision_map),
+            "missing_decisions": len(finalized.get("missing_decision_ids", [])),
+            "batch_count": len(prepared_batches),
+            "attempt_count": total_attempts,
+            **applied,
+        }
 
     def _save_chapter_state(self, chapter_id: str) -> None:
         """Aggregate window rolling context into persistent chapter state summary."""

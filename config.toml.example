@@ -160,6 +160,8 @@ temperature = 0.2
 max_output_tokens = 2048
 request_timeout = 300
 input_hard_limit_chars = 30000
+finalization_batch_size = 12
+finalization_max_retries = 2
 
 [pipeline]
 max_cycles = 1000

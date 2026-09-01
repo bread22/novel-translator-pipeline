@@ -660,12 +660,12 @@ def partition_finalization_candidates(
 
         if kind == "glossary":
             category = canonical_category(candidate.get("category", ""))
-            exact_key = (
+            exact_glossary_key = (
                 _normalized_text(candidate.get("source", "")),
                 _normalized_text(candidate.get("target", "")),
                 category,
             )
-            if exact_key in active_glossary:
+            if exact_glossary_key in active_glossary:
                 action, reason = "active", "matches_active"
             elif not candidate.get("source") or not candidate.get("target"):
                 action, reason = "discard", "invalid_shape"
@@ -674,11 +674,11 @@ def partition_finalization_candidates(
             elif str(candidate.get("source_scope", "body")).strip().lower() != "body":
                 action, reason = "candidate", "non_body_source"
         elif kind == "memory":
-            exact_key = (
+            exact_memory_key = (
                 _normalized_text(candidate.get("key", "")),
                 _normalized_text(candidate.get("value", "")),
             )
-            if exact_key in active_memory:
+            if exact_memory_key in active_memory:
                 action, reason = "active", "matches_active"
             elif not candidate.get("key") or not candidate.get("value"):
                 action, reason = "discard", "invalid_shape"

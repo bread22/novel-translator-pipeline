@@ -388,8 +388,8 @@ class PipelineFunctionTests(unittest.TestCase):
                                 "category": "fact",
                                 "confidence": 0.99,
                                 "source_window": "w1",
-                                "source_paragraph_ids": ["p1"],
-                                "evidence_ids": ["p1"],
+                                "source_paragraph_ids": ["p1", "p2"],
+                                "evidence_ids": ["p1", "p2"],
                                 "source_fragment": "第一段",
                                 "target_fragment": "译文一",
                             }

@@ -567,6 +567,208 @@ def build_finalization_payload(
     return result
 
 
+def _normalized_text(value: Any) -> str:
+    return unicodedata.normalize("NFKC", str(value or "").strip()).casefold()
+
+
+def _evidence_stats(candidate: Mapping[str, Any]) -> tuple[int, int]:
+    evidence_ids = {
+        str(value).strip() for value in candidate.get("evidence_ids", []) if str(value).strip()
+    }
+    paragraph_ids = {
+        str(value).strip() for value in candidate.get("source_paragraph_ids", []) if str(value).strip()
+    }
+    evidence = evidence_ids | paragraph_ids
+    chapters = {
+        str(candidate.get(field, "")).strip()
+        for field in ("first_seen_chapter", "last_seen_chapter", "chapter_id")
+        if str(candidate.get(field, "")).strip()
+    }
+    for raw_window in str(candidate.get("source_window", "")).split(","):
+        window = raw_window.strip()
+        if ":window:" in window:
+            chapters.add(window.split(":window:", 1)[0])
+    for evidence_id in evidence:
+        if "-p" in evidence_id:
+            chapters.add(evidence_id.rsplit("-p", 1)[0])
+    return len(evidence), len(chapters)
+
+
+def _candidate_conflicted(candidate: Mapping[str, Any], conflicts: Sequence[Mapping[str, Any]]) -> bool:
+    candidate_ids = {
+        str(candidate.get("candidate_id", "")).strip(),
+        *[str(value).strip() for value in candidate.get("alias_candidate_ids", []) if str(value).strip()],
+    }
+    candidate_values = {
+        _normalized_text(candidate.get(field, ""))
+        for field in ("source", "target", "key", "value") if candidate.get(field)
+    }
+    for conflict in conflicts:
+        if not isinstance(conflict, Mapping):
+            continue
+        conflict_candidate_id = str(conflict.get("candidate_id", "")).strip()
+        if conflict_candidate_id and conflict_candidate_id in candidate_ids:
+            return True
+        conflict_values = {
+            _normalized_text(conflict.get(field, ""))
+            for field in ("key", "existing_value", "proposed_value") if conflict.get(field)
+        }
+        if candidate_values.intersection(conflict_values):
+            return True
+    return False
+
+
+def partition_finalization_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    conflicts: Sequence[Mapping[str, Any]],
+    glossary: Mapping[str, Any],
+    memory: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve policy-certain candidates in code and return only model-required work."""
+    active_glossary = {
+        (
+            _normalized_text(item.get("source", "")),
+            _normalized_text(item.get("target", "")),
+            canonical_category(item.get("category", "")),
+        )
+        for item in glossary.get("terms", []) if isinstance(item, Mapping)
+        and (
+            str(item.get("status", "active")).lower() in {"active", "locked", "approved"}
+            or bool(item.get("locked"))
+        )
+    }
+    active_memory = {
+        (
+            _normalized_text(item.get("key", "")),
+            _normalized_text(item.get("value", "")),
+        )
+        for item in memory.get("entries", []) if isinstance(item, Mapping)
+        and str(item.get("status", "active")).lower() in {"active", "locked", "approved", ""}
+    }
+
+    deterministic: list[dict[str, Any]] = []
+    model_candidates: list[dict[str, Any]] = []
+    for raw in candidates:
+        if not isinstance(raw, Mapping):
+            continue
+        candidate = dict(raw)
+        candidate_id = str(candidate.get("candidate_id", "")).strip()
+        kind = str(candidate.get("kind", "glossary")).strip().lower()
+        evidence_count, _chapter_count = _evidence_stats(candidate)
+        action = ""
+        reason = ""
+
+        if kind == "glossary":
+            category = canonical_category(candidate.get("category", ""))
+            exact_key = (
+                _normalized_text(candidate.get("source", "")),
+                _normalized_text(candidate.get("target", "")),
+                category,
+            )
+            if exact_key in active_glossary:
+                action, reason = "active", "matches_active"
+            elif not candidate.get("source") or not candidate.get("target"):
+                action, reason = "discard", "invalid_shape"
+            elif category_tier(category) in {None, CategoryTier.BLOCKED}:
+                action, reason = "discard", "blocked_category"
+            elif str(candidate.get("source_scope", "body")).strip().lower() != "body":
+                action, reason = "candidate", "non_body_source"
+        elif kind == "memory":
+            exact_key = (
+                _normalized_text(candidate.get("key", "")),
+                _normalized_text(candidate.get("value", "")),
+            )
+            if exact_key in active_memory:
+                action, reason = "active", "matches_active"
+            elif not candidate.get("key") or not candidate.get("value"):
+                action, reason = "discard", "invalid_shape"
+        else:
+            action, reason = "discard", "invalid_kind"
+
+        if not action and not _candidate_conflicted(candidate, conflicts) and evidence_count < 2:
+            action, reason = "candidate", "insufficient_recurrence"
+        if action:
+            deterministic.append({
+                "candidate_id": candidate_id,
+                "action": action,
+                "reason": reason,
+                "conflict_id": "",
+            })
+        else:
+            model_candidates.append(candidate)
+    return deterministic, model_candidates
+
+
+def compact_finalization_payload(payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Create the minimal provider payload and a short-ID to canonical-ID map."""
+    compact_candidates: list[dict[str, Any]] = []
+    id_map: dict[str, str] = {}
+    canonical_to_short: dict[str, str] = {}
+    for index, raw in enumerate(payload.get("candidates", []), start=1):
+        if not isinstance(raw, Mapping):
+            continue
+        canonical_id = str(raw.get("candidate_id", "")).strip()
+        short_id = f"k{index}"
+        id_map[short_id] = canonical_id
+        canonical_to_short[canonical_id] = short_id
+        evidence_count, chapter_count = _evidence_stats(raw)
+        item: dict[str, Any] = {
+            "candidate_id": short_id,
+            "kind": str(raw.get("kind", "glossary")),
+            "category": str(raw.get("category", "")),
+            "confidence": float(raw.get("confidence", 0) or 0),
+            "evidence_count": evidence_count,
+            "chapter_count": chapter_count,
+        }
+        if item["kind"] == "glossary":
+            item["source"] = str(raw.get("source", ""))[:200]
+            item["target"] = str(raw.get("target", ""))[:200]
+        else:
+            item["key"] = str(raw.get("key", ""))[:200]
+            item["value"] = str(raw.get("value", ""))[:500]
+        compact_candidates.append(item)
+
+    compact_conflicts: list[dict[str, Any]] = []
+    for raw in payload.get("conflicts", []):
+        if not isinstance(raw, Mapping):
+            continue
+        candidate_id = str(raw.get("candidate_id", "")).strip()
+        item = {
+            key: raw[key] for key in (
+                "conflict_id", "kind", "key", "existing_value", "proposed_value"
+            ) if raw.get(key) not in (None, "", [])
+        }
+        if candidate_id in canonical_to_short:
+            item["candidate_id"] = canonical_to_short[candidate_id]
+        compact_conflicts.append(item)
+
+    active_glossary = [
+        {
+            key: raw[key] for key in ("term_id", "source", "target", "category", "status", "locked")
+            if raw.get(key) not in (None, "", [], False)
+        }
+        for raw in payload.get("active_glossary", []) if isinstance(raw, Mapping)
+    ]
+    related_memory = [
+        {
+            key: (str(raw[key])[:500] if key == "value" else raw[key])
+            for key in ("fact_id", "key", "value", "category", "status")
+            if raw.get(key) not in (None, "", [])
+        }
+        for raw in payload.get("related_memory", []) if isinstance(raw, Mapping)
+    ]
+    result = {
+        "schema_version": "1.0",
+        "chapter_id": str(payload.get("chapter_id", "")),
+        "candidate_count": len(compact_candidates),
+        "candidates": compact_candidates,
+        "conflicts": compact_conflicts,
+        "active_glossary": active_glossary,
+        "related_memory": related_memory,
+    }
+    return result, id_map
+
+
 def finalization_prompt_chars(payload: Mapping[str, Any]) -> int:
     """Return the size of the exact fixed finalization prompt sent to a provider."""
     return len(build_review_prompt("knowledge_finalize", dict(payload), FINALIZE_SCHEMA, False))
@@ -887,7 +1089,8 @@ def apply_knowledge_delta(
 
 __all__ = [
     "WindowKnowledgeOutput", "FinalKnowledgeOutput", "aggregate_candidates",
-    "build_finalization_payload", "finalization_prompt_chars",
+    "build_finalization_payload", "compact_finalization_payload", "finalization_prompt_chars",
+    "partition_finalization_candidates",
     "run_knowledge_extractor_window", "run_knowledge_finalization",
     "knowledge_extractor_enabled", "knowledge_extractor_connection_test", "apply_knowledge_delta",
     "normalize_window_output", "normalize_finalize_output", "validate_finalization_coverage",

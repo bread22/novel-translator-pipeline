@@ -46,10 +46,12 @@ from translator.review.knowledge_extractor import (
     aggregate_candidates,
     apply_knowledge_delta,
     build_finalization_payload,
+    compact_finalization_payload,
     finalization_prompt_chars,
     knowledge_extractor_enabled,
     normalize_finalize_output,
     normalize_window_output,
+    partition_finalization_candidates,
     run_knowledge_extractor_window,
     run_knowledge_finalization,
     validate_finalization_coverage,
@@ -982,6 +984,9 @@ class IterativePipeline:
             hard_limit = int(config.get("input_hard_limit_chars", 30_000) or 30_000)
             historical = candidate_store.get("items", []) if isinstance(candidate_store, dict) else []
             final_candidates = aggregate_candidates(candidates, historical_candidates=historical)
+            deterministic_decisions, model_candidates = partition_finalization_candidates(
+                final_candidates, conflicts, glossary, memory,
+            )
         except JobCancelled:
             raise
         except Exception as exc:
@@ -992,27 +997,21 @@ class IterativePipeline:
         batch_size = max(1, int(config.get("finalization_batch_size", 12) or 12))
         max_retries = max(0, int(config.get("finalization_max_retries", 2) or 0))
 
-        def build_bounded_payload(batch: list[dict[str, Any]]) -> dict[str, Any]:
-            payload_limit = hard_limit
-            expected_ids = {str(item.get("candidate_id", "")) for item in batch}
-            for _attempt in range(10):
-                payload = build_finalization_payload(
-                    batch, conflicts, glossary, memory,
-                    candidate_store=None,
-                    max_chars=payload_limit,
-                )
-                payload.update({
-                    "chapter_id": chapter_id,
-                    "candidate_count": len(batch),
-                    "conflict_count": len(conflicts),
-                })
-                actual_ids = {str(item.get("candidate_id", "")) for item in payload.get("candidates", [])}
-                if actual_ids == expected_ids and finalization_prompt_chars(payload) <= hard_limit:
-                    return payload
-                payload_limit = max(1, int(payload_limit * 0.8))
-            raise ValueError(
-                f"Knowledge Finalization batch exceeds input_hard_limit_chars={hard_limit}"
+        def build_bounded_payload(batch: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, str]]:
+            rich_payload = build_finalization_payload(
+                batch, conflicts, glossary, memory,
+                candidate_store=None,
+                max_chars=1_000_000_000,
             )
+            rich_payload.update({
+                "chapter_id": chapter_id,
+                "candidate_count": len(batch),
+                "conflict_count": len(conflicts),
+            })
+            payload, id_map = compact_finalization_payload(rich_payload)
+            if len(id_map) == len(batch) and finalization_prompt_chars(payload) <= hard_limit:
+                return payload, id_map
+            raise ValueError(f"Knowledge Finalization batch exceeds input_hard_limit_chars={hard_limit}")
 
         prepared_batches: list[list[dict[str, Any]]] = []
 
@@ -1030,8 +1029,8 @@ class IterativePipeline:
                 prepare(batch[midpoint:])
 
         try:
-            for start in range(0, len(final_candidates), batch_size):
-                prepare(final_candidates[start:start + batch_size])
+            for start in range(0, len(model_candidates), batch_size):
+                prepare(model_candidates[start:start + batch_size])
         except Exception as exc:
             return retain_without_promotion("failed", error=str(exc))
 
@@ -1040,13 +1039,15 @@ class IterativePipeline:
             "chapter_id": chapter_id,
             "candidate_count": len(final_candidates),
             "raw_candidate_count": len(candidates),
+            "deterministic_decision_count": len(deterministic_decisions),
+            "model_candidate_count": len(model_candidates),
             "batch_size": batch_size,
             "batches": [
                 [str(item.get("candidate_id", "")) for item in batch] for batch in prepared_batches
             ],
         })
 
-        decisions: list[dict[str, Any]] = []
+        decisions: list[dict[str, Any]] = list(deterministic_decisions)
         missing_ids: list[str] = []
         validation_errors: list[dict[str, Any]] = []
         total_attempts = 0
@@ -1057,7 +1058,7 @@ class IterativePipeline:
                 if not pending:
                     break
                 total_attempts += 1
-                final_input = build_bounded_payload(pending)
+                final_input, short_id_map = build_bounded_payload(pending)
                 attempt_stem = f"{chapter_id}-knowledge-finalize-batch-{batch_index:04d}-attempt-{retry_index + 1:02d}"
                 attempt_input_path = self.workspace.reviews_dir / f"{attempt_stem}-input.json"
                 attempt_output_path = self.workspace.reviews_dir / f"{attempt_stem}.json"
@@ -1083,7 +1084,16 @@ class IterativePipeline:
 
                 coverage = validate_finalization_coverage(
                     pending,
-                    finalized.get("decisions", []) if isinstance(finalized, dict) else [],
+                    [
+                        {
+                            **dict(item),
+                            "candidate_id": short_id_map.get(
+                                str(item.get("candidate_id", "")), str(item.get("candidate_id", ""))
+                            ),
+                        }
+                        for item in (finalized.get("decisions", []) if isinstance(finalized, dict) else [])
+                        if isinstance(item, dict)
+                    ],
                 )
                 unknown_ids = coverage["unknown_candidate_ids"]
                 duplicate_ids = coverage["duplicate_candidate_ids"]
@@ -1112,6 +1122,8 @@ class IterativePipeline:
             "decisions": decisions,
             "candidate_count": len(final_candidates),
             "decision_count": len(decisions),
+            "deterministic_decision_count": len(deterministic_decisions),
+            "model_candidate_count": len(model_candidates),
             "missing_decision_ids": list(dict.fromkeys(missing_ids)),
             "batch_count": len(prepared_batches),
             "attempt_count": total_attempts,
@@ -1141,6 +1153,8 @@ class IterativePipeline:
             "status": finalized.get("status", "completed"),
             "candidates": len(candidates),
             "aggregated_candidates": len(final_candidates),
+            "deterministic_decisions": len(deterministic_decisions),
+            "model_candidates": len(model_candidates),
             "conflicts": len(conflicts),
             "decisions": len(decision_map),
             "missing_decisions": len(finalized.get("missing_decision_ids", [])),

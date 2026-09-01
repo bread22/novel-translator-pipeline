@@ -349,12 +349,19 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - context_findings 只报告会影响语义、人物关系、术语或事实判断的客观问题，不报告风格偏好。
 """.strip()
 
-    auto_rule = (
-        "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整段落，不得含多个答案、编辑说明、Markdown、未被原文语境支持的日文或韩文字符，或遮掩符号；原文明确讨论文字、写法、字形或引用内容时，可保留对应假名并附带中文说明。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
-        if autonomous
-        else "只报告明确客观错误；普通润色和同义表达必须 PASS。证据不足时使用 REPORT_ONLY 且 auto_apply=false。"
-    )
+    if kind == "knowledge_finalize":
+        auto_rule = "输入使用短 candidate_id；每个候选恰好输出一次，只需 candidate_id 与 action，reason 非必要时留空。"
+    else:
+        auto_rule = (
+            "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整段落，不得含多个答案、编辑说明、Markdown、未被原文语境支持的日文或韩文字符，或遮掩符号；原文明确讨论文字、写法、字形或引用内容时，可保留对应假名并附带中文说明。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
+            if autonomous
+            else "只报告明确客观错误；普通润色和同义表达必须 PASS。证据不足时使用 REPORT_ONLY 且 auto_apply=false。"
+        )
     schema = schema_path.read_text(encoding="utf-8")
+    input_json = json.dumps(input_payload, ensure_ascii=False)
+    if kind == "knowledge_finalize":
+        schema = json.dumps(json.loads(schema), ensure_ascii=False, separators=(",", ":"))
+        input_json = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))
     role_intro = "资深日译中小说审阅专家" if kind in {"chapter", "global"} else "本书知识提取器"
     return f"""
 你是{role_intro}。只分析输入 JSON，不修改文件，不调用外部工具。
@@ -367,7 +374,7 @@ JSON Schema：
 {schema}
 
 输入 JSON：
-{json.dumps(input_payload, ensure_ascii=False)}
+{input_json}
 """.strip()
 
 

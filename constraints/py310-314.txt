@@ -6,3 +6,5 @@ starlette>=0.41,<1.7
 anyio>=4.6,<4.15
 httpx>=0.27,<0.29
 pydantic>=2.9,<2.14
+opencc-py==1.4.2
+opencc-data==1.4.2

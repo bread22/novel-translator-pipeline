@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.9",
+    "opencc-py==1.4.2",
+    "opencc-data==1.4.2",
     "tomli>=2.0.0; python_version < '3.11'",
     "tomli-w>=1.0.0",
 ]

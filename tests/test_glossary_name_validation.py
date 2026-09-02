@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from translator.glossary.lifecycle import merge_term_candidates
@@ -37,7 +36,7 @@ def test_person_name_strips_honorifics_and_corrects_deterministic_target() -> No
     assert result.candidate.target == "甲绪乙"
 
 
-def test_person_name_unknown_mapping_goes_to_queue(tmp_path: Path) -> None:
+def test_person_name_unknown_mapping_is_nonblocking_and_keeps_model_target(tmp_path: Path) -> None:
     queue = tmp_path / "data" / "name-mapping-review.jsonl"
     glossary, summary = merge_term_candidates(
         empty(),
@@ -53,16 +52,16 @@ def test_person_name_unknown_mapping_goes_to_queue(tmp_path: Path) -> None:
         evidence_texts={"p1": "甲髙乙君出现了"},
         name_mapping_queue_path=queue,
     )
-    assert glossary["terms"] == []
-    assert summary["blocked_by_name"] == 1
-    assert summary["name_review_queued"] == 1
-    record = json.loads(queue.read_text(encoding="utf-8").splitlines()[0])
-    assert record["status"] == "pending"
-    assert record["name_source"] == "甲髙乙"
-    assert record["name_target"] == "甲高乙"
-    assert record["reason"] == "unmapped_character_mismatch"
+    assert len(glossary["terms"]) == 1
+    assert summary["blocked_by_name"] == 0
+    assert summary["name_review_queued"] == 0
+    term = glossary["terms"][0]
+    assert term["target"] == "甲高乙"
+    assert term["normalization_warning"] == "opencc_unmapped"
+    assert term["normalization_diagnostics"] == ["opencc_unmapped"]
+    assert not queue.exists()
 
-    _, replay_summary = merge_term_candidates(
+    replayed, replay_summary = merge_term_candidates(
         empty(),
         [{
             "source": "甲髙乙君",
@@ -76,9 +75,10 @@ def test_person_name_unknown_mapping_goes_to_queue(tmp_path: Path) -> None:
         evidence_texts={"p1": "甲髙乙君出现了"},
         name_mapping_queue_path=queue,
     )
-    assert replay_summary["blocked_by_name"] == 1
+    assert replay_summary["blocked_by_name"] == 0
     assert replay_summary["name_review_queued"] == 0
-    assert len(queue.read_text(encoding="utf-8").splitlines()) == 1
+    assert replayed["terms"][0]["target"] == "甲高乙"
+    assert not queue.exists()
 
 
 def test_person_name_same_characters_pass_with_separate_honorific() -> None:
@@ -89,7 +89,7 @@ def test_person_name_same_characters_pass_with_separate_honorific() -> None:
     assert check.name_target == "丙丁"
 
 
-def test_review_boundary_preserves_ambiguous_name_for_queue(tmp_path: Path) -> None:
+def test_review_boundary_accepts_unmapped_name_with_diagnostic(tmp_path: Path) -> None:
     from translator.core.workspace import BookWorkspace
     from translator.review.knowledge_extractor import apply_knowledge_delta
 
@@ -109,8 +109,10 @@ def test_review_boundary_preserves_ambiguous_name_for_queue(tmp_path: Path) -> N
     }]
     decisions = [{"candidate_id": "c1", "action": "active", "reason": "ok"}]
     summary = apply_knowledge_delta(workspace, "c1", candidates, decisions, evidence_texts={"p1": "甲髙乙君"})
-    assert summary["candidate"] == 1
+    assert summary["active"] == 1
+    assert summary["candidate"] == 0
     assert workspace.knowledge_candidates_path.exists()
+    assert not workspace.name_mapping_review_path.exists()
 
 
 def test_katakana_and_phonetic_names_bypass_kanji_alignment() -> None:

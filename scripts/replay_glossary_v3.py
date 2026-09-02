@@ -26,6 +26,7 @@ from scripts.migrate_knowledge_candidates import migrate as migrate_candidates
 from translator.glossary.service import persist_glossary
 from translator.glossary.taxonomy import category_tier
 from translator.glossary.validation import validate_glossary_document
+from translator.glossary.name_normalizer import normalization_metadata
 
 
 def _as_v3(payload: dict[str, Any]) -> dict[str, Any]:
@@ -92,6 +93,21 @@ def replay_workspace(path: Path, *, apply: bool = False) -> dict[str, Any]:
         ),
         "review_replay": "removed",
         "candidate_queue": candidate_report,
+        "name_normalization": {
+            **normalization_metadata(),
+            "terms_with_diagnostics": sum(
+                1 for item in current.get("terms", [])
+                if isinstance(item, dict) and item.get("normalization_diagnostics")
+            ),
+            "terms_with_warnings": sum(
+                1 for item in current.get("terms", [])
+                if isinstance(item, dict) and item.get("normalization_warning")
+            ),
+            "preferred_selections": sum(
+                1 for item in current.get("terms", [])
+                if isinstance(item, dict) and item.get("selected_candidate")
+            ),
+        },
     }
     if apply:
         backup: Path | None = None

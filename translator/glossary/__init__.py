@@ -2,6 +2,7 @@
 
 from translator.glossary.lifecycle import merge_term_candidates
 from translator.glossary.models import GlossaryCandidate, GlossaryDocument, GlossaryTerm, GlossaryV3
+from translator.glossary.name_normalizer import NameNormalization, normalize_japanese_name
 from translator.glossary.projection import (
     build_translation_term_projection,
     select_relevant_terms,
@@ -24,10 +25,12 @@ __all__ = [
     "GlossaryDocument",
     "GlossaryTerm",
     "GlossaryV3",
+    "NameNormalization",
     "ValidationResult",
     "build_translation_term_projection",
     "canonical_category",
     "merge_term_candidates",
+    "normalize_japanese_name",
     "select_relevant_terms",
     "validate_term_candidate",
 ]

@@ -13,3 +13,10 @@ license text is preserved at `vendor/novel-translator/LICENSE`.
 - Applied integration patches: `6b247658b3d0c0aba7e1379991e54e2bbeece6c3`
   and `67ac8dbb2234f9c95e4581a5bc40a3c28488500f`
 - Baseline checksums: `patches/novel-translator-vendor-baseline.sha256`
+
+## `opencc-py` and `opencc-data`
+
+The name-normalization adapter uses `opencc-py==1.4.2` with its matching
+`opencc-data==1.4.2` package.  Both packages are distributed under the
+Apache License 2.0; their upstream license notices remain part of the
+installed distributions.

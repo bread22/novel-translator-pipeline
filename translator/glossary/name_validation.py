@@ -15,57 +15,8 @@ import threading
 import unicodedata
 from typing import Literal, Sequence
 
+from translator.glossary.name_normalizer import NameNormalization, normalize_japanese_name
 
-# This is intentionally a small, reviewed allowlist. Characters not listed here
-# are preserved only when the generated target keeps the same character.
-JA_TO_ZH_NAME_MAP: dict[str, str] = {
-    "亞": "亚",
-    "壓": "压",
-    "奧": "奥",
-    "會": "会",
-    "學": "学",
-    "宮": "宫",
-    "廣": "广",
-    "國": "国",
-    "櫻": "樱",
-    "慶": "庆",
-    "澤": "泽",
-    "濱": "滨",
-    "灣": "湾",
-    "爲": "为",
-    "眞": "真",
-    "經": "经",
-    "緩": "缓",
-    "緒": "绪",
-    "縣": "县",
-    "縱": "纵",
-    "織": "织",
-    "繪": "绘",
-    "繼": "继",
-    "續": "续",
-    "總": "总",
-    "綠": "绿",
-    "羅": "罗",
-    "臺": "台",
-    "藝": "艺",
-    "觀": "观",
-    "邊": "边",
-    "醫": "医",
-    "鎌": "镰",
-    "關": "关",
-    "雜": "杂",
-    "顯": "显",
-    "髮": "发",
-    "龍": "龙",
-    # Common Japanese shinjitai forms.
-    "竜": "龙",
-    "沢": "泽",
-    "辺": "边",
-    "広": "广",
-    "浜": "滨",
-    "栄": "荣",
-    "黒": "黑",
-}
 
 JP_HONORIFICS: tuple[str, ...] = (
     "先生",
@@ -116,6 +67,12 @@ class NameCheckResult:
     target_honorific: str = ""
     reason: str = ""
     mismatch_positions: tuple[int, ...] = ()
+    normalization_method: str = ""
+    normalization_version: str = ""
+    normalized_candidates: tuple[str, ...] = ()
+    selected_candidate: str = ""
+    normalization_diagnostics: tuple[str, ...] = ()
+    normalization_warning: str = ""
 
 
 def _split_honorific(value: str, suffixes: Sequence[str]) -> tuple[str, str]:
@@ -136,11 +93,22 @@ def _is_cjk_name(value: str) -> bool:
     return bool(_CJK_RE.fullmatch(value))
 
 
+def _normalization_warning(normalization: NameNormalization) -> str:
+    warning_codes = (
+        "opencc_backend_error",
+        "opencc_unmapped",
+        "candidate_overflow",
+        "opencc_version_mismatch",
+    )
+    return next((code for code in warning_codes if code in normalization.diagnostics), "")
+
+
 def check_person_name(source: str, target: str, category: object) -> NameCheckResult | None:
     """Check only the name portion of a person candidate.
 
-    Deterministic character corrections are returned as ``corrected``. Cases
-    that require an unlisted mapping remain ``ambiguous`` for the file queue.
+    OpenCC candidate ambiguity is diagnostic-only. Structural name failures
+    remain ``ambiguous`` for the legacy queue boundary; backend/data failures
+    preserve the model target as an accepted, warning-bearing result.
     """
     canonical_category = str(category or "").strip().casefold()
     if canonical_category not in NAME_CATEGORIES:
@@ -166,12 +134,21 @@ def check_person_name(source: str, target: str, category: object) -> NameCheckRe
         expected_target: str = "",
         reason: str = "",
         mismatch_positions: tuple[int, ...] = (),
+        normalization: NameNormalization | None = None,
+        selected_candidate: str = "",
     ) -> NameCheckResult:
+        warning = _normalization_warning(normalization) if normalization is not None else ""
         return NameCheckResult(
             status=status,
             expected_target=expected_target,
             reason=reason,
             mismatch_positions=mismatch_positions,
+            normalization_method=normalization.method if normalization is not None else "",
+            normalization_version=normalization.data_version if normalization is not None else "",
+            normalized_candidates=normalization.candidates if normalization is not None else (),
+            selected_candidate=selected_candidate or (normalization.preferred if normalization is not None else ""),
+            normalization_diagnostics=normalization.diagnostics if normalization is not None else (),
+            normalization_warning=warning,
             **base,
         )
 
@@ -180,37 +157,54 @@ def check_person_name(source: str, target: str, category: object) -> NameCheckRe
     # The first phase targets kanji names. If the source name contains no CJK kanji,
     # it is a transliterated/phonetic name (katakana/hiragana/latin) and does not use
     # 1:1 character alignment. Return None to let standard glossary validation proceed.
-    if not _CJK_CHAR_RE.search(name_source):
+    if not _CJK_CHAR_RE.search(name_source) or re.search(r"[\u3040-\u309f\u30a0-\u30ff]", name_source):
+        return None
+    # Let the common validator report target script/format errors instead of
+    # turning a malformed target into a mapping-review queue item.
+    if re.search(r"[\u3040-\u309f\u30a0-\u30ff]", name_target):
         return None
     if not _is_cjk_name(name_source) or not _is_cjk_name(name_target):
         return result("ambiguous", reason="name_is_not_cjk_aligned")
     if len(name_source) != len(name_target):
         return result("ambiguous", reason="name_length_mismatch")
 
-    expected_target = "".join(JA_TO_ZH_NAME_MAP.get(char, char) for char in name_source)
-    mismatches = tuple(index for index, (actual, expected) in enumerate(zip(name_target, expected_target)) if actual != expected)
-    if not mismatches:
-        return result("pass", expected_target=expected_target)
-
-    # A mismatch is auto-correctable only when the source character has an
-    # explicit reviewed mapping. Unknown source characters go to the queue.
-    unsafe = tuple(
+    normalization = normalize_japanese_name(name_source)
+    expected_target = normalization.preferred
+    mismatches = tuple(
         index
-        for index in mismatches
-        if name_source[index] not in JA_TO_ZH_NAME_MAP
+        for index, (actual, expected) in enumerate(zip(name_target, expected_target))
+        if actual != expected
     )
-    if unsafe:
+    if name_target in normalization.candidates:
+        reason = "opencc_nonpreferred_candidate" if mismatches else ""
         return result(
-            "ambiguous",
+            "pass",
             expected_target=expected_target,
-            reason="unmapped_character_mismatch",
+            reason=reason,
             mismatch_positions=mismatches,
+            normalization=normalization,
+        )
+
+    # If an unmatched position has no OpenCC data, the backend has no basis to
+    # rewrite the model output. Preserve it and continue with a visible warning
+    # rather than creating a blocking review item.
+    unmapped_mismatch = tuple(index for index in mismatches if index in normalization.unmapped_positions)
+    warning = _normalization_warning(normalization)
+    if unmapped_mismatch or warning in {"opencc_backend_error", "candidate_overflow"}:
+        return result(
+            "pass",
+            expected_target=name_target,
+            reason=warning or "opencc_unmapped",
+            mismatch_positions=mismatches,
+            normalization=normalization,
+            selected_candidate=name_target,
         )
     return result(
         "corrected",
         expected_target=expected_target,
-        reason="deterministic_character_mapping",
+        reason="opencc_preferred_mapping",
         mismatch_positions=mismatches,
+        normalization=normalization,
     )
 
 
@@ -249,6 +243,12 @@ def append_name_mapping_review(
         "target_honorific": check.target_honorific,
         "reason": check.reason,
         "mismatch_positions": list(check.mismatch_positions),
+        "normalization_method": check.normalization_method,
+        "normalization_version": check.normalization_version,
+        "normalized_candidates": list(check.normalized_candidates),
+        "selected_candidate": check.selected_candidate,
+        "normalization_diagnostics": list(check.normalization_diagnostics),
+        "normalization_warning": check.normalization_warning,
         "chapter_id": str(chapter_id),
         "reporter": str(reporter),
         "evidence_ids": [str(value) for value in evidence_ids],

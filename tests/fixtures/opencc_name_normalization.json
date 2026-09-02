@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "backend": {
+    "method": "opencc",
+    "version": "1.4.2",
+    "data_version": "1.4.2"
+  },
+  "cases": [
+    {"source": "朝倉祐未", "preferred": "朝仓祐未"},
+    {"source": "沢", "preferred": "泽"},
+    {"source": "竜", "preferred": "龙"},
+    {"source": "滝沢", "preferred": "泷泽"},
+    {"source": "戸", "preferred": "户"},
+    {"source": "嶋", "preferred": "嶋", "diagnostic": "opencc_unmapped"},
+    {"source": "髙", "preferred": "髙", "diagnostic": "opencc_unmapped"}
+  ]
+}

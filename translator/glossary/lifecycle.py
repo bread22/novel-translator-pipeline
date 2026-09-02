@@ -7,7 +7,7 @@ import unicodedata
 from typing import Any, Iterable, Mapping, Sequence
 
 from translator.glossary.models import GlossaryCandidate
-from translator.glossary.name_validation import append_name_mapping_review
+from translator.glossary.name_validation import NameCheckResult, append_name_mapping_review
 from translator.glossary.resolution import resolve_term_conflict
 from translator.glossary.taxonomy import BODY_SOURCE_SCOPE, CategoryTier, canonical_category, category_tier, has_independent_support
 from translator.glossary.validation import ValidationResult, validate_term_candidate
@@ -158,6 +158,20 @@ def _add_evidence(term: dict[str, Any], evidence: Sequence[Mapping[str, Any]]) -
     return added
 
 
+def _name_diagnostic_fields(check: NameCheckResult | None) -> dict[str, Any]:
+    if check is None or not check.normalization_method:
+        return {}
+    return {
+        "normalization_method": check.normalization_method,
+        "normalization_version": check.normalization_version,
+        "normalized_candidates": list(check.normalized_candidates),
+        "selected_candidate": check.selected_candidate,
+        "normalization_diagnostics": list(check.normalization_diagnostics),
+        "normalization_warning": check.normalization_warning,
+        "mismatch_positions": list(check.mismatch_positions),
+    }
+
+
 def merge_term_candidates(
     glossary: Mapping[str, Any],
     candidates: Iterable[GlossaryCandidate | Mapping[str, Any]],
@@ -216,6 +230,8 @@ def merge_term_candidates(
         "evidence_total": 0, "evidence_valid": 0, "evidence_discarded": 0,
         "conflicted": 0, "disputed": 0, "revised": 0, "retired": 0,
         "name_normalized": 0, "blocked_by_name": 0, "name_review_queued": 0,
+        "name_normalization_diagnostics": 0, "name_normalization_warnings": 0,
+        "name_normalization_ambiguous": 0, "name_normalization_overflow": 0,
         "blocked_by_recurrence": 0,
     }
     for raw in candidates:
@@ -280,8 +296,19 @@ def merge_term_candidates(
         summary["evidence_valid"] += len(validation.evidence_ids)
         summary["evidence_discarded"] += len(validation.discarded_evidence)
         summary["accepted_candidates"] += 1
-        if validation.name_check is not None and validation.name_check.status == "corrected":
-            summary["name_normalized"] += 1
+        name_check = validation.name_check
+        name_fields = _name_diagnostic_fields(name_check)
+        if name_check is not None:
+            if name_check.status == "corrected" or name_check.name_target != name_check.expected_target:
+                summary["name_normalized"] += 1
+            if name_check.normalization_diagnostics:
+                summary["name_normalization_diagnostics"] += 1
+            if name_check.normalization_warning:
+                summary["name_normalization_warnings"] += 1
+            if "opencc_ambiguous" in name_check.normalization_diagnostics:
+                summary["name_normalization_ambiguous"] += 1
+            if "candidate_overflow" in name_check.normalization_diagnostics:
+                summary["name_normalization_overflow"] += 1
         source_normalized = unicodedata.normalize("NFKC", candidate.source).strip()
         source_key = source_normalized.casefold()
         evidence = _proposal_evidence(
@@ -315,6 +342,7 @@ def merge_term_candidates(
                 "updated_at": now,
                 "retired_reason": None,
             }
+            existing.update(name_fields)
             terms.append(existing)
             by_source[source_key] = existing
             summary["added"] += 1
@@ -340,6 +368,7 @@ def merge_term_candidates(
                 "resolution": resolution.status,
                 "created_at": _now(),
             }
+            conflict.update(name_fields)
             duplicate_conflict = any(
                 str(old.get("source_normalized", "")) == source_normalized
                 and str(old.get("proposed_target", "")) == candidate.target
@@ -376,6 +405,7 @@ def merge_term_candidates(
             continue
 
         added_evidence = _add_evidence(existing, evidence)
+        existing.update(name_fields)
         existing["confidence"] = max(float(existing.get("confidence", 0) or 0), candidate.confidence)
         evidence_chapters = [
             str(item.get("chapter_id", "")).strip()

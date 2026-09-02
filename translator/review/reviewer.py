@@ -37,9 +37,11 @@ from translator.review.context_budget import (
 )
 from translator.script_residue import (
     JAPANESE_KANA_REGEX,
+    ScriptResidueFinding,
     has_hangul,
     has_japanese_kana,
     has_target_script_residue,
+    inspect_target_script,
 )
 
 

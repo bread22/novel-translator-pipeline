@@ -70,6 +70,11 @@ from translator.review.reviewer import (
     validate_chapter_review_payload,
     review_report_counts,
 )
+from translator.script_residue import ScriptResidueFinding, inspect_target_script
+from translator.translation_repairs import (
+    REPAIR_RULE_VERSION,
+    apply_deterministic_repairs,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -316,6 +321,8 @@ class IterativePipeline:
         self._knowledge_conflicts: dict[str, list[dict[str, Any]]] = {}
         self._knowledge_windows: dict[str, list[dict[str, Any]]] = {}
         self._deferred_knowledge_windows: dict[str, list[tuple[dict[str, list[dict[str, Any]]], int, int]]] = {}
+        self._translation_recovery: dict[str, dict[str, Any]] = {}
+        self._repair_events: dict[str, list[dict[str, Any]]] = {}
 
     def _checkpoint(self) -> None:
         self.pause_gate.wait(self.cancellation_token)
@@ -350,7 +357,14 @@ class IterativePipeline:
             # Source-copied paragraphs stay pending when the source contains Japanese
             # or Korean script, even if that source discusses a quoted kana object.
             return has_japanese_kana(source) or has_hangul(source)
-        return has_target_script_residue(translated, source=source)
+        if not has_target_script_residue(translated, source=source):
+            return False
+        # A previously written provider result may predate the deterministic
+        # repair stage.  Treat a strictly source-triggered, fully repairable
+        # idiom as recoverable; the chapter path persists the repaired value
+        # before selecting its next translation batch.
+        repaired, repairs = apply_deterministic_repairs(source=source, translated=translated)
+        return not repairs or has_target_script_residue(repaired, source=source)
 
     def _read_translation_policy(self) -> str:
         if self.translation_policy and self.translation_policy.exists():
@@ -374,6 +388,7 @@ class IterativePipeline:
         *,
         attempt_id: str,
         fallback_from: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         path = self.workspace.data_dir / "translation-provenance.json"
         records = read_json(path, {"book": self.book, "items": {}})
@@ -384,7 +399,7 @@ class IterativePipeline:
             paragraph = paragraphs.get(item_id, {})
             source = str(paragraph.get("source", ""))
             translated = str(paragraph.get("translated", ""))
-            items[item_id] = {
+            record: dict[str, Any] = {
                 "attempt_id": attempt_id,
                 "provider": provider,
                 "recovered_at": utc_now(),
@@ -393,6 +408,25 @@ class IterativePipeline:
                 "source_hash": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                 "translation_hash": hashlib.sha256(translated.encode("utf-8")).hexdigest(),
             }
+            if metadata:
+                for key in (
+                    "failure_class",
+                    "repair_rule_version",
+                    "repair_rule_ids",
+                    "repair_attempts",
+                    "residue_tokens",
+                ):
+                    if key in metadata and metadata[key] not in (None, "", [], {}):
+                        value = metadata[key]
+                        if key == "repair_attempts" and isinstance(value, list):
+                            value = [
+                                item for item in value
+                                if isinstance(item, Mapping) and str(item.get("id", "")) == item_id
+                            ]
+                        if key == "residue_tokens" and isinstance(value, Mapping):
+                            value = value.get(item_id, [])
+                        record[key] = value
+            items[item_id] = record
         write_json(path, records)
 
     def _record_provider_attempt(self, attempt: dict[str, Any]) -> None:
@@ -401,6 +435,162 @@ class IterativePipeline:
         diagnostics.setdefault("book", self.book)
         diagnostics.setdefault("attempts", []).append(attempt)
         write_json(path, diagnostics)
+
+    def _record_repair_events(
+        self,
+        chapter_id: str,
+        repair_attempts: list[dict[str, Any]],
+        *,
+        phase: str,
+    ) -> None:
+        if not repair_attempts:
+            return
+        events = self._repair_events.setdefault(chapter_id, [])
+        for repair in repair_attempts:
+            if not isinstance(repair, Mapping):
+                continue
+            events.append({"chapter_id": chapter_id, "phase": phase, **dict(repair)})
+        path = self.workspace.data_dir / "provider-diagnostics.json"
+        diagnostics = read_json(path, {"book": self.book, "attempts": []})
+        diagnostics.setdefault("book", self.book)
+        diagnostics.setdefault("attempts", [])
+        if not isinstance(diagnostics.get("repairs"), list):
+            diagnostics["repairs"] = []
+        diagnostics["repairs"].extend(
+            {"chapter_id": chapter_id, "phase": phase, **dict(item)}
+            for item in repair_attempts if isinstance(item, Mapping)
+        )
+        write_json(path, diagnostics)
+
+    @staticmethod
+    def _serialize_residue_finding(finding: ScriptResidueFinding) -> dict[str, Any]:
+        return {
+            "token": finding.token,
+            "start": finding.start,
+            "end": finding.end,
+            "classification": finding.classification,
+            "source_match": finding.source_match,
+            "context_match": finding.context_match,
+            "source_context_match": finding.source_context_match,
+            "target_context_match": finding.target_context_match,
+            "preserve_policy_enabled": finding.preserve_policy_enabled,
+        }
+
+    def _repair_translated_ids(self, ids: list[str]) -> dict[str, Any]:
+        """Apply source-aware repairs to fresh manifest values and revalidate them."""
+        diagnostics: dict[str, Any] = {
+            "repair_rule_version": REPAIR_RULE_VERSION,
+            "repaired_ids": [],
+            "changed_ids": [],
+            "repair_attempts": [],
+            "repair_rule_ids": [],
+            "residue_tokens": {},
+            "findings": {},
+            "source_copy_ids": [],
+            "remaining": [],
+            "errors": [],
+        }
+        if not ids:
+            return diagnostics
+
+        try:
+            manifest_data = read_json(self.manifest, {})
+            p_map = paragraph_map(manifest_data)
+            changed = False
+            for item_id in ids:
+                paragraph = p_map.get(item_id)
+                if paragraph is None:
+                    continue
+                source = str(paragraph.get("source", ""))
+                before = str(paragraph.get("translated", ""))
+                repaired, repairs = apply_deterministic_repairs(source=source, translated=before)
+                if repaired != before:
+                    paragraph["translated"] = repaired
+                    changed = True
+                    diagnostics["repaired_ids"].append(item_id)
+                    diagnostics["changed_ids"].append(item_id)
+                    before_hash = hashlib.sha256(before.encode("utf-8")).hexdigest()
+                    after_hash = hashlib.sha256(repaired.encode("utf-8")).hexdigest()
+                    for repair in repairs:
+                        repair_data = {
+                            "id": item_id,
+                            "rule_id": repair.rule_id,
+                            "source_match": repair.source_match,
+                            "target_pattern": repair.target_pattern,
+                            "replacement": repair.replacement,
+                            "count": repair.count,
+                            "target_match": repair.target_match,
+                            "target_start": repair.target_start,
+                            "target_end": repair.target_end,
+                            "before_hash": before_hash,
+                            "after_hash": after_hash,
+                        }
+                        diagnostics["repair_attempts"].append(repair_data)
+                        if repair.rule_id not in diagnostics["repair_rule_ids"]:
+                            diagnostics["repair_rule_ids"].append(repair.rule_id)
+            if changed:
+                write_json(self.manifest, manifest_data)
+
+            # Re-open after write so validation observes exactly what the next
+            # recovery path will observe, rather than a stale in-memory object.
+            fresh_map = paragraph_map(read_json(self.manifest, {}))
+            for item_id in ids:
+                paragraph = fresh_map.get(item_id, {})
+                source = str(paragraph.get("source", ""))
+                translated = str(paragraph.get("translated", ""))
+                findings = inspect_target_script(translated, source=source)
+                diagnostics["findings"][item_id] = [
+                    self._serialize_residue_finding(item) for item in findings
+                ]
+                residue = [
+                    item.token for item in findings
+                    if item.classification in {
+                        "target_script_residue", "target_hangul", "source_copy", "ambiguous",
+                    }
+                ]
+                if residue:
+                    diagnostics["residue_tokens"][item_id] = residue
+                if any(item.classification == "source_copy" for item in findings):
+                    diagnostics["source_copy_ids"].append(item_id)
+                if self._paragraph_needs_translation(paragraph):
+                    diagnostics["remaining"].append(item_id)
+        except Exception as exc:  # noqa: BLE001
+            # A diagnostic/repair failure must leave provider recovery intact.
+            diagnostics["errors"].append(str(exc)[:800])
+            diagnostics["remaining"] = list(ids)
+        return diagnostics
+
+    def _translation_failure_class(
+        self,
+        *,
+        attempted_ids: list[str],
+        remaining: set[str],
+        result: Mapping[str, Any] | None,
+        repair_diagnostics: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Classify provider failure separately from output residue."""
+        remaining_ids = set(attempted_ids) & set(remaining)
+        repair_data = repair_diagnostics if isinstance(repair_diagnostics, Mapping) else {}
+        repaired_ids = set(str(item) for item in repair_data.get("repaired_ids", []) if item)
+        if repaired_ids and not remaining_ids:
+            return "deterministic_repair_recovered"
+        provider_reason = provider_failure_reason(dict(result) if isinstance(result, Mapping) else None)
+        # An explicit transport/provider failure keeps the existing split and
+        # fallback routing semantics, even if a previous partial write happens
+        # to leave script residue in the manifest.
+        if remaining_ids and provider_reason not in {"ok", "unknown"}:
+            return provider_reason
+        if remaining_ids:
+            source_copy_ids = set(str(item) for item in repair_data.get("source_copy_ids", []) if item)
+            if source_copy_ids & remaining_ids:
+                return "source_copy"
+            residue_tokens = repair_data.get("residue_tokens", {})
+            if isinstance(residue_tokens, Mapping) and any(
+                str(item_id) in remaining_ids and value for item_id, value in residue_tokens.items()
+            ):
+                return "target_script_residue"
+            return "incomplete_output"
+        return provider_reason if provider_reason != "ok" else "provider_success"
 
     def _emit_translation_attempt(
         self,
@@ -417,6 +607,10 @@ class IterativePipeline:
         fallback_from: str | None = None,
         fallback_index: int | None = None,
         fallback_reason: str | None = None,
+        failure_class: str | None = None,
+        residue_tokens: list[str] | None = None,
+        repair_rule_ids: list[str] | None = None,
+        repair_attempts: list[dict[str, Any]] | None = None,
     ) -> None:
         """Notify the web layer without forwarding provider raw responses or prompts."""
         if self.on_translation_attempt is None:
@@ -444,6 +638,14 @@ class IterativePipeline:
             payload["fallback_index"] = fallback_index
         if fallback_reason:
             payload["fallback_reason"] = fallback_reason
+        if failure_class:
+            payload["failure_class"] = failure_class
+        if residue_tokens:
+            payload["residue_tokens"] = list(dict.fromkeys(str(item) for item in residue_tokens))
+        if repair_rule_ids:
+            payload["repair_rule_ids"] = list(dict.fromkeys(str(item) for item in repair_rule_ids))
+        if repair_attempts:
+            payload["repair_attempts"] = repair_attempts
         for key in ("error", "http_status", "finish_reason", "format", "split"):
             value = result_data.get(key)
             if value not in (None, ""):
@@ -553,17 +755,31 @@ class IterativePipeline:
             primary_translator = self.primary_translator
             result = self._translate_target(primary_translator, ids, source_chars)
             self._record_injected_terms(chapter_id, result)
-            reason = provider_failure_reason(result)
         except JobCancelled:
             raise
         except Exception as exc:  # noqa: BLE001
             result = {"status": "error", "error": str(exc)}
-            reason = provider_failure_reason(result)
+        repair_diagnostics = self._repair_translated_ids(ids)
         remaining = self._chapter_pending_ids(self._chapter(chapter_id))
         recovered_ids = [item_id for item_id in ids if item_id in before_pending and item_id not in remaining]
+        failure_class = self._translation_failure_class(
+            attempted_ids=ids,
+            remaining=remaining,
+            result=result,
+            repair_diagnostics=repair_diagnostics,
+        )
+        provider_reason = provider_failure_reason(result)
+        reason = (
+            "deterministic_repair_recovered"
+            if failure_class == "deterministic_repair_recovered"
+            else failure_class
+            if failure_class in {"target_script_residue", "source_copy", "incomplete_output"}
+            else provider_reason
+        )
         latency_ms = round((time.monotonic() - started) * 1000, 3)
         attempt: dict[str, Any] = {
             "attempt_id": attempt_id,
+            "chapter_id": chapter_id,
             "provider": primary_translator,
             "depth": depth,
             "attempted_ids": ids,
@@ -573,6 +789,11 @@ class IterativePipeline:
             "latency_ms": latency_ms,
             "result": result,
             "reason": reason,
+            "failure_class": failure_class,
+            "repair_rule_version": repair_diagnostics.get("repair_rule_version", REPAIR_RULE_VERSION),
+            "repair_attempts": repair_diagnostics.get("repair_attempts", []),
+            "repair_rule_ids": repair_diagnostics.get("repair_rule_ids", []),
+            "residue_tokens": repair_diagnostics.get("residue_tokens", {}),
             "remaining": sorted(remaining),
         }
         attempts.append(attempt)
@@ -587,9 +808,30 @@ class IterativePipeline:
             reason=reason,
             depth=depth,
             latency_ms=latency_ms,
+            failure_class=failure_class,
+            residue_tokens=[
+                token
+                for item_id, tokens in repair_diagnostics.get("residue_tokens", {}).items()
+                if item_id in ids and isinstance(tokens, list)
+                for token in tokens
+            ],
+            repair_rule_ids=repair_diagnostics.get("repair_rule_ids", []),
+            repair_attempts=repair_diagnostics.get("repair_attempts", []),
         )
         if recovered_ids:
-            self._record_translation_provenance(recovered_ids, primary_translator, reason, attempt_id=attempt_id)
+            self._record_translation_provenance(
+                recovered_ids,
+                primary_translator,
+                reason,
+                attempt_id=attempt_id,
+                metadata={
+                    "failure_class": failure_class,
+                    "repair_rule_version": repair_diagnostics.get("repair_rule_version"),
+                    "repair_rule_ids": repair_diagnostics.get("repair_rule_ids", []),
+                    "repair_attempts": repair_diagnostics.get("repair_attempts", []),
+                    "residue_tokens": repair_diagnostics.get("residue_tokens", {}),
+                },
+            )
         if not (set(ids) & remaining):
             return
         if self.targeted_translator is None:
@@ -640,13 +882,26 @@ class IterativePipeline:
                 raise
             except Exception as exc:  # noqa: BLE001
                 fb_result = {"status": "error", "error": str(exc)}
+            fb_repair_diagnostics = self._repair_translated_ids(attempted_ids)
             self._checkpoint()
             fb_remaining = self._chapter_pending_ids(self._chapter(chapter_id))
             fb_recovered = [item_id for item_id in attempted_ids if item_id not in fb_remaining]
-            fb_reason = f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
+            fb_failure_class = self._translation_failure_class(
+                attempted_ids=attempted_ids,
+                remaining=fb_remaining,
+                result=fb_result,
+                repair_diagnostics=fb_repair_diagnostics,
+            )
+            fb_provider_reason = provider_failure_reason(fb_result)
+            fb_reason = (
+                "deterministic_repair_recovered"
+                if fb_failure_class == "deterministic_repair_recovered"
+                else f"{self.primary_translator}_{reason}_fb{fb_idx+1}"
+            )
             fb_latency_ms = round((time.monotonic() - fb_started) * 1000, 3)
             fb_attempt: dict[str, Any] = {
                 "attempt_id": fb_attempt_id,
+                "chapter_id": chapter_id,
                 "provider": fb_provider,
                 "depth": depth,
                 "attempted_ids": attempted_ids,
@@ -656,6 +911,11 @@ class IterativePipeline:
                 "latency_ms": fb_latency_ms,
                 "result": fb_result,
                 "reason": fb_reason,
+                "failure_class": fb_failure_class,
+                "repair_rule_version": fb_repair_diagnostics.get("repair_rule_version", REPAIR_RULE_VERSION),
+                "repair_attempts": fb_repair_diagnostics.get("repair_attempts", []),
+                "repair_rule_ids": fb_repair_diagnostics.get("repair_rule_ids", []),
+                "residue_tokens": fb_repair_diagnostics.get("residue_tokens", {}),
                 "remaining": sorted(fb_remaining),
             }
             attempts.append(fb_attempt)
@@ -667,12 +927,21 @@ class IterativePipeline:
                 attempted_ids=attempted_ids,
                 recovered_ids=fb_recovered,
                 result=fb_result,
-                reason=provider_failure_reason(fb_result),
+                reason=fb_reason,
                 depth=depth,
                 latency_ms=fb_latency_ms,
                 fallback_from=route_from,
                 fallback_index=fb_idx + 1,
                 fallback_reason=fb_reason,
+                failure_class=fb_failure_class,
+                residue_tokens=[
+                    token
+                    for item_id, tokens in fb_repair_diagnostics.get("residue_tokens", {}).items()
+                    if item_id in attempted_ids and isinstance(tokens, list)
+                    for token in tokens
+                ],
+                repair_rule_ids=fb_repair_diagnostics.get("repair_rule_ids", []),
+                repair_attempts=fb_repair_diagnostics.get("repair_attempts", []),
             )
             if fb_recovered:
                 self._record_translation_provenance(
@@ -681,11 +950,22 @@ class IterativePipeline:
                     fb_reason,
                     attempt_id=fb_attempt_id,
                     fallback_from=self.primary_translator,
+                    metadata={
+                        "failure_class": fb_failure_class,
+                        "repair_rule_version": fb_repair_diagnostics.get("repair_rule_version"),
+                        "repair_rule_ids": fb_repair_diagnostics.get("repair_rule_ids", []),
+                        "repair_attempts": fb_repair_diagnostics.get("repair_attempts", []),
+                        "residue_tokens": fb_repair_diagnostics.get("residue_tokens", {}),
+                    },
                 )
             if not (set(ids) & fb_remaining):
                 break
             route_from = fb_provider
-            route_reason = provider_failure_reason(fb_result) or fb_reason
+            route_reason = (
+                fb_failure_class
+                if fb_failure_class not in {"provider_success", "deterministic_repair_recovered"}
+                else fb_provider_reason or fb_reason
+            )
 
         unresolved_now = set(ids) & self._chapter_pending_ids(self._chapter(chapter_id))
         if unresolved_now and len(fallback_ids) > 1:
@@ -698,7 +978,23 @@ class IterativePipeline:
 
         unresolved = sorted(set(ids) & self._chapter_pending_ids(self._chapter(chapter_id)))
         if unresolved:
-            raise RuntimeError(f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落：{', '.join(unresolved)}")
+            summary = [
+                {
+                    "provider": str(item.get("provider", "")),
+                    "failure_class": str(item.get("failure_class", item.get("reason", "unknown"))),
+                    "residue_tokens": {
+                        str(item_id): tokens
+                        for item_id, tokens in (item.get("residue_tokens", {}) or {}).items()
+                        if str(item_id) in unresolved and tokens
+                    },
+                }
+                for item in attempts
+                if set(str(value) for value in item.get("attempted_ids", [])) & set(unresolved)
+            ]
+            raise RuntimeError(
+                f"所有 fallback ({', '.join(self.fallback_translators)}) 均未完成章节 {chapter_id} 段落："
+                f"{', '.join(unresolved)}；恢复摘要：{json.dumps(summary, ensure_ascii=False, separators=(',', ':'))}"
+            )
         return
 
     def _prescan_chapter(self, chapter_id: str) -> dict[str, Any]:
@@ -737,6 +1033,16 @@ class IterativePipeline:
             except Exception:
                 snapshot = read_json(self.manifest, {})
             write_json(before_path, snapshot)
+        # Resume-safe migration for already written provider output.  Only
+        # source-triggered rules can change a value and the operation is
+        # idempotent, so completed paragraphs are byte-stable after the first
+        # pass.
+        resume_repairs = self._repair_translated_ids([
+            str(item.get("id"))
+            for item in chapter.get("paragraphs", [])
+            if isinstance(item, dict) and item.get("id")
+        ])
+        self._record_repair_events(chapter_id, resume_repairs.get("repair_attempts", []), phase="translation_resume")
         attempts: list[dict[str, Any]] = []
         initial_pending = self._chapter_pending_ids(chapter)
         batches = 0
@@ -763,6 +1069,29 @@ class IterativePipeline:
                     pass
 
         untranslated = self._chapter_pending_ids(self._chapter(chapter_id))
+        failure_class_counts: dict[str, int] = {}
+        recovered_from_repairs: list[str] = []
+        repair_rule_ids: list[str] = []
+        residue_ids: list[str] = []
+        for attempt in attempts:
+            failure_class = str(attempt.get("failure_class", "") or "")
+            if failure_class:
+                failure_class_counts[failure_class] = failure_class_counts.get(failure_class, 0) + 1
+            if failure_class == "deterministic_repair_recovered":
+                recovered_from_repairs.extend(str(item) for item in attempt.get("recovered_ids", []) if item)
+            repair_rule_ids.extend(str(item) for item in attempt.get("repair_rule_ids", []) if item)
+            if failure_class == "target_script_residue":
+                residue_ids.extend(str(item) for item in attempt.get("attempted_ids", []) if item)
+        self._translation_recovery[chapter_id] = {
+            "attempt_count": len(attempts),
+            "recovered_ids": sorted({str(item) for attempt in attempts for item in attempt.get("recovered_ids", []) if item}),
+            "deterministic_repair_recovered_ids": sorted(set(recovered_from_repairs)),
+            "repair_rule_version": REPAIR_RULE_VERSION,
+            "repair_rule_ids": sorted(set(repair_rule_ids)),
+            "failure_class_counts": failure_class_counts,
+            "target_script_residue_ids": sorted(set(residue_ids)),
+            "remaining_ids": sorted(untranslated),
+        }
         if untranslated:
             raise RuntimeError(f"章节 {chapter_id} 在 {batches} 个批次后仍有未翻译段落：{', '.join(sorted(untranslated))}")
         after_path = self.workspace.snapshots_dir / f"{chapter_id}-after.json"
@@ -777,6 +1106,7 @@ class IterativePipeline:
             "translated": len(initial_pending),
             "translated_paragraphs": len(initial_pending),
             "attempts": len(attempts),
+            "recovery_summary": self._translation_recovery.get(chapter_id, {}),
         }
 
     def _repair_remaining_kana(self, chapter_id: str, remaining_kana_ids: list[str]) -> list[str]:
@@ -785,40 +1115,26 @@ class IterativePipeline:
         if not remaining_kana_ids:
             return repaired
 
-        kana_shapes = [
-            (re.compile(r"[“\"「]?コ[”\"」]?の?字形?"), "“凹”字形"),
-            (re.compile(r"[“\"「]?ロ[”\"」]?の?字形?"), "“回”字形"),
-            (re.compile(r"[“\"「]?く[”\"」]?の?字形?"), "“折线”字形"),
-            (re.compile(r"[“\"「]?ヘ[”\"」]?の?字形?"), "“倒V”字形"),
-            (re.compile(r"[“\"「]?八[”\"」]?の?字形?"), "“八”字形"),
-            (re.compile(r"[“\"「]?丁[”\"」]?の?字形?"), "“丁”字形"),
+        # The same registry is used during translation recovery and review
+        # writeback.  This keeps the shape rules source-aware and idempotent.
+        repair_diagnostics = self._repair_translated_ids(remaining_kana_ids)
+        self._record_repair_events(chapter_id, repair_diagnostics.get("repair_attempts", []), phase="review_writeback")
+        remaining_after_shapes = [
+            item_id for item_id in remaining_kana_ids
+            if item_id in set(repair_diagnostics.get("remaining", []))
         ]
-
-        manifest_data = read_json(self.manifest)
-        p_map = paragraph_map(manifest_data)
-
-        # 1. First attempt deterministic shape normalization for common visual Katakana characters
-        remaining_after_shapes: list[str] = []
-        for item_id in remaining_kana_ids:
-            p_data = p_map.get(item_id, {})
-            current_trans = str(p_data.get("translated", ""))
-            cleaned = current_trans
-            for pattern, rep in kana_shapes:
-                cleaned = pattern.sub(rep, cleaned)
-            if cleaned != current_trans and not has_target_script_residue(
-                cleaned, source=str(p_data.get("source", ""))
-            ):
-                p_data["translated"] = cleaned
-                write_json(self.manifest, manifest_data)
-                repaired.append(item_id)
-            else:
-                remaining_after_shapes.append(item_id)
+        repaired.extend(
+            item_id for item_id in remaining_kana_ids
+            if item_id not in remaining_after_shapes
+            and item_id in set(repair_diagnostics.get("repaired_ids", []))
+        )
 
         if not remaining_after_shapes or self.targeted_translator is None:
             return repaired
 
         # 2. Targeted re-translation for any remaining paragraphs
         providers_to_try = [self.primary_translator] + [p for p in self.fallback_translators if p != self.primary_translator]
+        p_map = paragraph_map(read_json(self.manifest, {}))
         for item_id in remaining_after_shapes:
             p_data = p_map.get(item_id, {})
             source_text = str(p_data.get("source", ""))
@@ -832,7 +1148,7 @@ class IterativePipeline:
                         fresh_manifest = read_json(self.manifest)
                         fresh_p_map = paragraph_map(fresh_manifest)
                         new_trans = str(fresh_p_map.get(item_id, {}).get("translated", ""))
-                        if new_trans and not has_target_script_residue(new_trans, source=source_text):
+                        if new_trans and not self._paragraph_needs_translation(fresh_p_map.get(item_id, {})):
                             repaired.append(item_id)
                             break
                 except Exception:
@@ -1459,6 +1775,17 @@ class IterativePipeline:
             "fixes": review["fixes"],
             "term_summary": term_summary,
             "pre_scan": self._prescan_reports.get(chapter_id, {}),
+            "recovery_summary": self._translation_recovery.get(chapter_id, {
+                "attempt_count": 0,
+                "recovered_ids": [],
+                "deterministic_repair_recovered_ids": [],
+                "repair_rule_version": REPAIR_RULE_VERSION,
+                "repair_rule_ids": [],
+                "failure_class_counts": {},
+                "target_script_residue_ids": [],
+                "remaining_ids": [],
+            }),
+            "repair_events": self._repair_events.get(chapter_id, []),
             "knowledge": knowledge_summary,
             "applied": applied_fixes,
             "remaining_kana_ids": remaining_kana,

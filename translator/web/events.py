@@ -163,8 +163,14 @@ def _legacy_translation_events(
             event_data["fallback_reason"] = reason
         if attempt.get("latency_ms") is not None:
             event_data["latency_ms"] = attempt["latency_ms"]
-        for key in ("error", "http_status", "finish_reason", "format", "split"):
+        for key in (
+            "error", "http_status", "finish_reason", "format", "split",
+            "failure_class", "residue_tokens", "repair_rule_ids", "repair_rule_version",
+            "repair_attempts",
+        ):
             value = result.get(key)
+            if value in (None, ""):
+                value = attempt.get(key)
             if value not in (None, ""):
                 event_data[key] = str(value)[:800] if key == "error" else value
 

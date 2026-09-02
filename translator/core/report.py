@@ -4,7 +4,7 @@ from collections import Counter
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from translator.core.config import load_config
 
@@ -95,10 +95,29 @@ def _diagnostic_summary(diagnostics: dict[str, Any], primary: str, _fallback: st
         if reason == "ok":
             continue
         entry = reasons.setdefault(reason, {"attempts": 0, "paragraphs": 0, "paragraph_ids": []})
-        ids = [str(item) for item in attempt.get("ids", [])]
+        ids = [str(item) for item in attempt.get("attempted_ids", attempt.get("ids", []))]
         entry["attempts"] += 1
         entry["paragraphs"] += len(ids)
         entry["paragraph_ids"] = sorted(set(entry["paragraph_ids"]) | set(ids))
+        failure_class = str(attempt.get("failure_class", "")).strip()
+        if failure_class:
+            classes = entry.setdefault("failure_classes", {})
+            classes[failure_class] = int(classes.get(failure_class, 0)) + 1
+        residue_tokens = attempt.get("residue_tokens")
+        if residue_tokens:
+            residue_values: list[Any]
+            if isinstance(residue_tokens, Mapping):
+                residue_values = list(residue_tokens.values())
+            elif isinstance(residue_tokens, list):
+                residue_values = [residue_tokens]
+            else:
+                residue_values = []
+            entry["residue_tokens"] = sorted({
+                str(token)
+                for values in residue_values
+                if isinstance(values, list)
+                for token in values
+            })
     for entry in reasons.values():
         entry["unique_paragraphs"] = len(entry["paragraph_ids"])
         del entry["paragraph_ids"]

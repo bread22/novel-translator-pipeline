@@ -80,6 +80,8 @@ class ProviderTranslator:
                 "你是备用日中小说翻译器。把用户 payload 中每个 source 翻译成自然、忠实的简体中文。"
                 "严格只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。"
                 "不要输出分析、推理、解释、编号或 JSON 之外的文字；保留段落顺序。"
+                "日语惯用语、拟态语和固定字形表达按中文语义翻译；只有 source 明确讨论原文字符时才用引号保留同一个字符并附中文说明。"
+                "输出完成前自检，除显式原文字符引用外不得残留日文假名或韩文字符。"
             )
         policy_rel = self.config.get("paths", {}).get("translation_policy", "docs/prompts/translation-policy.md")
         path = self.novel_root / policy_rel
@@ -129,6 +131,8 @@ class ProviderTranslator:
                     "忠实保留原文事实、动作顺序、视角、语气和信息量，不总结、不删减、不扩写剧情。",
                     "保留段落边界、数字、标点含义、换行意图、HTML 标签、脚注锚点和所有 placeholders。",
                     "同一批次和上下文中的人名、地名、组织名、技能名、称号和代词指代保持一致。",
+                    "日语惯用语、拟态语和固定字形表达优先按中文语义翻译；只有 source 明确讨论原文字符时才保留同一个带引号字符并附中文说明。",
+                    "输出完成前自检：除显式原文字符引用外，不得残留日文假名或韩文字符。",
                     "只输出最终 JSON，不要解释。",
                 ],
             },

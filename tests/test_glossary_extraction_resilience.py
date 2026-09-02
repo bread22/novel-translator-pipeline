@@ -311,10 +311,13 @@ def test_cross_window_candidate_aggregation_and_chinese_categories(tmp_path: Pat
     )
     assert summary["active"] == 1
     glossary_data = json.loads(workspace.glossary_path.read_text(encoding="utf-8"))
-    assert len(glossary_data["terms"]) == 1
-    assert glossary_data["terms"][0]["source"] == "小泉宏美"
-    assert glossary_data["terms"][0]["category"] == "person"
-    evidence_pids = {item["paragraph_id"] for item in glossary_data["terms"][0]["evidence"]}
+    assert len(glossary_data["terms"]) == 2
+    hiromi_term = next(term for term in glossary_data["terms"] if term["source"] == "小泉宏美")
+    tsuji_term = next(term for term in glossary_data["terms"] if term["source"] == "辻裕子")
+    assert hiromi_term["status"] == "active"
+    assert hiromi_term["category"] == "person"
+    assert tsuji_term["status"] == "candidate"
+    evidence_pids = {item["paragraph_id"] for item in hiromi_term["evidence"]}
     assert evidence_pids == {"c0003-p00002", "c0003-p00108"}
 
 
@@ -426,16 +429,19 @@ def test_candidate_and_active_stores_are_idempotent(tmp_path: Path) -> None:
             evidence_texts={"p1": "小泉宏美が来た"},
         )
     pending = json.loads(workspace.knowledge_candidates_path.read_text(encoding="utf-8"))
-    assert len(pending["items"]) == 1
-    assert pending["items"][0]["evidence_ids"] == ["p1"]
+    assert pending["items"] == []
+    first_glossary = json.loads(workspace.glossary_path.read_text(encoding="utf-8"))
+    assert first_glossary["terms"][0]["status"] == "candidate"
+    assert {item["paragraph_id"] for item in first_glossary["terms"][0]["evidence"]} == {"p1"}
 
     second = candidate("cand-2", "p2")
     aggregated = aggregate_candidates([second], historical_candidates=pending["items"])
     deterministic, model_candidates = partition_finalization_candidates(
         aggregated, [], {"terms": []}, {"entries": []},
     )
-    assert deterministic == []
-    assert len(model_candidates) == 1
+    assert deterministic[0]["candidate_id"] == "cand-2"
+    assert deterministic[0]["action"] == "candidate"
+    assert model_candidates == []
     decision = [{"candidate_id": aggregated[0]["candidate_id"], "action": "active"}]
     evidence = {"p1": "小泉宏美が来た", "p2": "小泉宏美は答えた"}
     for _ in range(2):
@@ -660,8 +666,9 @@ def test_zero_model_candidates_skips_provider_calls_completely(tmp_path: Path, m
     actions = {item["candidate_id"]: item["final_action"] for item in stored["items"]}
     reasons = {item["candidate_id"]: item["final_reason"] for item in stored["items"]}
     assert actions == {"single-1": "candidate", "single-2": "candidate", "title-cand": "candidate"}
-    assert reasons["single-1"] == "insufficient_recurrence"
-    assert reasons["title-cand"] == "non_body_source"
+    assert reasons["single-1"] == "source_not_in_evidence:p1"
+    assert reasons["single-2"] == "source_not_in_evidence:p2"
+    assert reasons["title-cand"] == "metadata_source"
 
 
 def test_conflict_bypasses_single_evidence_filter() -> None:

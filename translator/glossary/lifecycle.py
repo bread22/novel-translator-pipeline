@@ -41,6 +41,13 @@ def _evidence_record(chapter_id: str, paragraph_id: str, reporter: str, confiden
     }
 
 
+def _confidence_value(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(value or fallback)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _evidence_key(item: Mapping[str, Any]) -> tuple[str, str, str]:
     return (str(item.get("chapter_id", "")), str(item.get("paragraph_id", "")), str(item.get("reporter", "")))
 
@@ -78,12 +85,49 @@ def _proposal_evidence(
     *,
     chapter_id: str,
     reporters: Sequence[str],
+    raw: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    return [
-        _evidence_record(chapter_id, evidence_id, reporter, candidate.confidence)
-        for evidence_id in candidate.evidence_ids
-        for reporter in reporters
-    ]
+    """Use persisted evidence locations before falling back to this chapter."""
+    raw = raw or {}
+    evidence_ids = [str(item).strip() for item in candidate.evidence_ids if str(item).strip()]
+    raw_values = raw.get("evidence_provenance")
+    if not isinstance(raw_values, list):
+        evidence_values = raw.get("evidence")
+        raw_values = evidence_values if isinstance(evidence_values, list) else []
+    unresolved_values = raw.get("unresolved_evidence_ids")
+    unresolved = {
+        str(item).strip() for item in unresolved_values if str(item).strip()
+    } if isinstance(unresolved_values, list) else set()
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    represented: set[str] = set()
+    for value in raw_values:
+        if not isinstance(value, Mapping):
+            continue
+        paragraph_id = str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+        if paragraph_id not in evidence_ids:
+            continue
+        record = _evidence_record(
+            str(value.get("chapter_id", "")).strip(),
+            paragraph_id,
+            str(value.get("reporter") or (reporters[0] if reporters else "")).strip(),
+            _confidence_value(value.get("confidence", candidate.confidence), candidate.confidence),
+        )
+        key = _evidence_key(record)
+        if key not in seen and key[1]:
+            result.append(record)
+            seen.add(key)
+            represented.add(paragraph_id)
+    for evidence_id in evidence_ids:
+        if evidence_id in represented or evidence_id in unresolved:
+            continue
+        for reporter in reporters:
+            record = _evidence_record(chapter_id, evidence_id, reporter, candidate.confidence)
+            key = _evidence_key(record)
+            if key not in seen and key[1]:
+                result.append(record)
+                seen.add(key)
+    return result
 
 
 def _gate_met(term: Mapping[str, Any], tier: CategoryTier | None) -> bool:
@@ -128,19 +172,39 @@ def merge_term_candidates(
     terms = [_normalize_existing(item) for item in current.get("terms", []) if isinstance(item, Mapping)]
     conflicts = [dict(item) for item in current.get("conflicts", []) if isinstance(item, Mapping)]
     revisions = [dict(item) for item in current.get("revisions", []) if isinstance(item, Mapping)]
-    by_source = {str(item.get("source_normalized")): item for item in terms if item.get("source_normalized")}
+    by_source = {
+        unicodedata.normalize("NFKC", str(item.get("source_normalized"))).strip().casefold(): item
+        for item in terms if item.get("source_normalized")
+    }
     # Reconstruct pending support from durable conflict records so a retry or a
     # later chapter can complete the same resolution without a private counter.
     for conflict in conflicts:
-        source_key = str(conflict.get("source_normalized") or "")
+        source_key = unicodedata.normalize(
+            "NFKC", str(conflict.get("source_normalized") or "")
+        ).strip().casefold()
         term = by_source.get(source_key)
         proposed_target = str(conflict.get("proposed_target") or "")
         if term is None or not proposed_target:
             continue
         support = term.setdefault("conflict_support", {}).setdefault(proposed_target, [])
-        for evidence_id in conflict.get("evidence_ids", []) if isinstance(conflict.get("evidence_ids", []), list) else []:
+        records = conflict.get("evidence_provenance") or conflict.get("evidence")
+        if not isinstance(records, list):
+            records = [
+                _evidence_record(
+                    str(conflict.get("chapter_id", "")), str(evidence_id),
+                    str(conflict.get("reporter", "")), _confidence_value(conflict.get("confidence", 0)),
+                )
+                for evidence_id in conflict.get("evidence_ids", [])
+                if str(evidence_id).strip()
+            ]
+        for raw_record in records:
+            if not isinstance(raw_record, Mapping):
+                continue
             record = _evidence_record(
-                str(conflict.get("chapter_id", "")), str(evidence_id), str(conflict.get("reporter", "")), float(conflict.get("confidence", 0) or 0)
+                str(raw_record.get("chapter_id", "")),
+                str(raw_record.get("paragraph_id") or raw_record.get("evidence_id") or ""),
+                str(raw_record.get("reporter") or conflict.get("reporter", "")),
+                _confidence_value(raw_record.get("confidence", conflict.get("confidence", 0))),
             )
             if _evidence_key(record) not in {_evidence_key(item) for item in support}:
                 support.append(record)
@@ -173,6 +237,19 @@ def merge_term_candidates(
             str(item): candidate.source for item in candidate.evidence_ids
         }
         validation: ValidationResult = validate_term_candidate(candidate, evidence_texts=validation_texts)
+        unresolved = {
+            str(item).strip() for item in raw_dict.get("unresolved_evidence_ids", []) if str(item).strip()
+        } if isinstance(raw_dict.get("unresolved_evidence_ids", []), Sequence) and not isinstance(raw_dict.get("unresolved_evidence_ids"), (str, bytes)) else set()
+        if validation.valid and unresolved:
+            validation = ValidationResult(
+                False,
+                "evidence_provenance_missing:" + ",".join(sorted(unresolved)),
+                validation.category_tier,
+                validation.candidate,
+                validation.evidence_ids,
+                validation.discarded_evidence,
+                validation.name_check,
+            )
         if not validation.valid:
             summary["rejected"] += 1
             summary["evidence_total"] += len(validation.evidence_ids) + len(validation.discarded_evidence)
@@ -206,8 +283,14 @@ def merge_term_candidates(
         if validation.name_check is not None and validation.name_check.status == "corrected":
             summary["name_normalized"] += 1
         source_normalized = unicodedata.normalize("NFKC", candidate.source).strip()
-        evidence = _proposal_evidence(candidate, chapter_id=chapter_id, reporters=reporters)
-        existing = by_source.get(source_normalized)
+        source_key = source_normalized.casefold()
+        evidence = _proposal_evidence(
+            candidate,
+            chapter_id=chapter_id,
+            reporters=reporters,
+            raw=raw_dict,
+        )
+        existing = by_source.get(source_key)
         if existing is None:
             now = _now()
             existing = {
@@ -233,7 +316,7 @@ def merge_term_candidates(
                 "retired_reason": None,
             }
             terms.append(existing)
-            by_source[source_normalized] = existing
+            by_source[source_key] = existing
             summary["added"] += 1
         existing.setdefault("conflict_support", {})
         if str(existing.get("target", "")).strip() != candidate.target:
@@ -252,6 +335,8 @@ def merge_term_candidates(
                 "chapter_id": chapter_id,
                 "reporter": reporter,
                 "evidence_ids": list(candidate.evidence_ids),
+                "evidence": list(conflict_support),
+                "evidence_provenance": list(conflict_support),
                 "resolution": resolution.status,
                 "created_at": _now(),
             }
@@ -292,7 +377,13 @@ def merge_term_candidates(
 
         added_evidence = _add_evidence(existing, evidence)
         existing["confidence"] = max(float(existing.get("confidence", 0) or 0), candidate.confidence)
-        existing["last_seen_chunk"] = chapter_id or existing.get("last_seen_chunk", "")
+        evidence_chapters = [
+            str(item.get("chapter_id", "")).strip()
+            for item in evidence if str(item.get("chapter_id", "")).strip()
+        ]
+        existing["last_seen_chunk"] = (evidence_chapters[-1] if evidence_chapters else chapter_id) or existing.get("last_seen_chunk", "")
+        if not existing.get("first_seen_chunk") and evidence_chapters:
+            existing["first_seen_chunk"] = evidence_chapters[0]
         if candidate.note:
             existing["note"] = candidate.note
         for provenance in reporters:

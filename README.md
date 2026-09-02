@@ -240,6 +240,8 @@ python scripts/migrate_glossary_v3.py --output-root output
 python scripts/migrate_glossary_v3.py --output-root output --apply
 python scripts/replay_glossary_v3.py --output-root output
 python scripts/replay_glossary_v3.py --output-root output --apply
+# 同一命令同时回放 knowledge-candidates.json 的 evidence provenance；单独执行可只迁移候选队列：
+python scripts/migrate_knowledge_candidates.py --output-root output --book BOOK_ID --apply
 python scripts/migrate_memory_v2.py --output-root output
 python scripts/migrate_review_v2.py --output-root output
 python scripts/migrate_queue_state_v2.py --output-root output

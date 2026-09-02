@@ -1,5 +1,16 @@
 {
   "$defs": {
+    "EvidenceProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "chapter_id": {"default": "", "type": "string"},
+        "paragraph_id": {"minLength": 1, "type": "string"},
+        "reporter": {"default": "knowledge_extractor", "type": "string"},
+        "confidence": {"default": 0.0, "maximum": 1.0, "minimum": 0.0, "type": "number"}
+      },
+      "required": ["paragraph_id"],
+      "type": "object"
+    },
     "KnowledgeCandidate": {
       "additionalProperties": false,
       "properties": {
@@ -108,6 +119,11 @@
             "type": "string"
           },
           "title": "Referenced Memory Keys",
+          "type": "array"
+        },
+        "evidence_provenance": {
+          "items": {"$ref": "#/$defs/EvidenceProvenance"},
+          "title": "Evidence Provenance",
           "type": "array"
         }
       },

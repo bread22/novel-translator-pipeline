@@ -30,6 +30,7 @@ from translator.providers.registry import get_provider
 ROOT = Path(__file__).resolve().parents[2]
 WINDOW_SCHEMA = ROOT / "schemas" / "knowledge-extractor-window.schema.json"
 FINALIZE_SCHEMA = ROOT / "schemas" / "knowledge-extractor-finalize.schema.json"
+CANDIDATE_NORMALIZATION_VERSION = "candidate-lifecycle-v1"
 
 
 class _Strict(BaseModel):
@@ -43,6 +44,15 @@ class RollingContextDelta(_Strict):
     relationships: list[str] = Field(default_factory=list)
     important_states: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+class EvidenceProvenance(_Strict):
+    """The durable location of one piece of candidate evidence."""
+
+    chapter_id: str = ""
+    paragraph_id: str = Field(min_length=1)
+    reporter: str = "knowledge_extractor"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class KnowledgeCandidate(_Strict):
@@ -64,6 +74,7 @@ class KnowledgeCandidate(_Strict):
     referenced_glossary_ids: list[str] = Field(default_factory=list)
     referenced_memory_keys: list[str] = Field(default_factory=list)
     alias_candidate_ids: list[str] = Field(default_factory=list)
+    evidence_provenance: list[EvidenceProvenance] = Field(default_factory=list)
 
 
 class KnowledgeConflict(_Strict):
@@ -115,6 +126,13 @@ def _candidate_id(raw: Mapping[str, Any], window_id: str, index: int) -> str:
     return "candidate:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
 
 
+def _confidence_value(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def normalize_window_output(
     payload: Mapping[str, Any] | None,
     *,
@@ -156,7 +174,21 @@ def normalize_window_output(
             continue
         if validated.kind not in {"glossary", "memory"} or not validated.evidence_ids:
             continue
-        candidates.append(validated.model_dump())
+        candidate_data = validated.model_dump()
+        # Bind evidence to the actual window instead of trusting a model to
+        # manufacture chapter provenance.  The resulting records survive in
+        # the pending queue and are later consumed by the glossary lifecycle.
+        chapter_id = window_id.split(":window:", 1)[0] if ":window:" in window_id else ""
+        candidate_data["evidence_provenance"] = [
+            {
+                "chapter_id": chapter_id,
+                "paragraph_id": evidence_id,
+                "reporter": "knowledge_extractor",
+                "confidence": float(candidate_data.get("confidence", 0) or 0),
+            }
+            for evidence_id in candidate_data.get("evidence_ids", [])
+        ]
+        candidates.append(candidate_data)
 
     conflicts: list[dict[str, Any]] = []
     for index, item in enumerate(raw.get("conflicts", []) if isinstance(raw.get("conflicts"), list) else []):
@@ -407,6 +439,107 @@ def run_knowledge_extractor_window(
     return normalized
 
 
+def _provenance_key(item: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("chapter_id", "")).strip(),
+        str(item.get("paragraph_id", "")).strip(),
+        str(item.get("reporter", "")).strip(),
+    )
+
+
+def _chapter_from_window(value: Any) -> str:
+    windows = [part.strip() for part in str(value or "").split(",") if part.strip()]
+    chapters = {
+        window.split(":window:", 1)[0].strip()
+        for window in windows
+        if ":window:" in window and window.split(":window:", 1)[0].strip()
+    }
+    return next(iter(chapters)) if len(chapters) == 1 else ""
+
+
+def _chapter_from_evidence_id(value: str) -> str:
+    # Pipeline paragraph IDs are cXXXX-pYYYY.  Only infer from this explicit
+    # format; arbitrary legacy evidence IDs must remain migration work.
+    if "-p" not in value:
+        return ""
+    chapter, _paragraph = value.rsplit("-p", 1)
+    return chapter if chapter.startswith("c") and chapter[1:] else ""
+
+
+def _candidate_provenance(
+    raw: Mapping[str, Any], evidence_ids: Sequence[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return durable provenance and IDs which still need migration."""
+    values = raw.get("evidence_provenance")
+    if not isinstance(values, list):
+        evidence_values = raw.get("evidence")
+        values = evidence_values if isinstance(evidence_values, list) else []
+    expected = list(dict.fromkeys(str(item).strip() for item in evidence_ids if str(item).strip()))
+    records: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for value in values:
+        if not isinstance(value, Mapping):
+            continue
+        paragraph_id = str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+        if not paragraph_id or paragraph_id not in expected:
+            continue
+        record = {
+            "chapter_id": str(value.get("chapter_id", "")).strip(),
+            "paragraph_id": paragraph_id,
+            "reporter": str(value.get("reporter") or raw.get("reporter") or "knowledge_extractor").strip(),
+            "confidence": _confidence_value(value.get("confidence", raw.get("confidence", 0))),
+        }
+        key = _provenance_key(record)
+        if key[1] and key not in {_provenance_key(item) for item in records}:
+            records.append(record)
+            if record["chapter_id"]:
+                seen_ids.add(paragraph_id)
+
+    fallback_chapter = str(raw.get("chapter_id", "")).strip() or _chapter_from_window(raw.get("source_window"))
+    for evidence_id in expected:
+        if evidence_id in seen_ids:
+            continue
+        chapter_id = fallback_chapter or _chapter_from_evidence_id(evidence_id)
+        if chapter_id:
+            records = [
+                record for record in records
+                if not (record.get("paragraph_id") == evidence_id and not str(record.get("chapter_id", "")).strip())
+            ]
+            record = {
+                "chapter_id": chapter_id,
+                "paragraph_id": evidence_id,
+                "reporter": str(raw.get("reporter") or "knowledge_extractor").strip(),
+                "confidence": _confidence_value(raw.get("confidence", 0)),
+            }
+            if _provenance_key(record) not in {_provenance_key(item) for item in records}:
+                records.append(record)
+            seen_ids.add(evidence_id)
+    unresolved = [evidence_id for evidence_id in expected if evidence_id not in seen_ids]
+    return records, unresolved
+
+
+def _merge_provenance(
+    existing: Sequence[Mapping[str, Any]], incoming: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for value in [*existing, *incoming]:
+        if not isinstance(value, Mapping):
+            continue
+        item = {
+            "chapter_id": str(value.get("chapter_id", "")).strip(),
+            "paragraph_id": str(value.get("paragraph_id", "")).strip(),
+            "reporter": str(value.get("reporter", "knowledge_extractor")).strip(),
+            "confidence": _confidence_value(value.get("confidence", 0)),
+        }
+        key = _provenance_key(item)
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
 def aggregate_candidates(
     candidates: Sequence[Mapping[str, Any]],
     historical_candidates: Sequence[Mapping[str, Any]] | None = None,
@@ -432,6 +565,8 @@ def aggregate_candidates(
         cid = str(c.get("candidate_id", "")).strip()
         pids = [str(p).strip() for p in c.get("source_paragraph_ids", []) if str(p).strip()]
         eids = [str(e).strip() for e in c.get("evidence_ids", []) if str(e).strip()]
+        effective_eids = eids or pids
+        provenance, unresolved = _candidate_provenance(c, effective_eids)
 
         if key not in grouped:
             item = dict(c)
@@ -442,13 +577,33 @@ def aggregate_candidates(
                 if tgt:
                     item["target"] = tgt
             item["source_paragraph_ids"] = list(dict.fromkeys(pids or eids))
-            item["evidence_ids"] = list(dict.fromkeys(eids or pids))
-            item["alias_candidate_ids"] = [cid] if cid else []
+            item["evidence_ids"] = list(dict.fromkeys(effective_eids))
+            item["alias_candidate_ids"] = list(dict.fromkeys(
+                ([cid] if cid else [])
+                + [str(value).strip() for value in c.get("alias_candidate_ids", []) if str(value).strip()]
+            ))
+            item["evidence_provenance"] = provenance
+            item["unresolved_evidence_ids"] = unresolved
+            item["reporters"] = list(dict.fromkeys(
+                [str(value).strip() for value in c.get("reporters", []) if str(value).strip()]
+                + ([str(c.get("reporter")).strip()] if c.get("reporter") else [])
+            ))
             grouped[key] = item
         else:
             existing = grouped[key]
             existing["source_paragraph_ids"] = list(dict.fromkeys(existing.get("source_paragraph_ids", []) + (pids or eids)))
-            existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + (eids or pids)))
+            existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + effective_eids))
+            existing["evidence_provenance"] = _merge_provenance(
+                existing.get("evidence_provenance", []), provenance,
+            )
+            existing["unresolved_evidence_ids"] = list(dict.fromkeys(
+                existing.get("unresolved_evidence_ids", []) + unresolved,
+            ))
+            existing["reporters"] = list(dict.fromkeys(
+                [str(value).strip() for value in existing.get("reporters", []) if str(value).strip()]
+                + [str(value).strip() for value in c.get("reporters", []) if str(value).strip()]
+                + ([str(c.get("reporter")).strip()] if c.get("reporter") else []),
+            ))
             if cid and cid not in existing.get("alias_candidate_ids", []):
                 existing.setdefault("alias_candidate_ids", []).append(cid)
             try:
@@ -487,12 +642,26 @@ def aggregate_candidates(
                 h_cat = canonical_category(h.get("category", ""))
                 h_key = ("memory", h_cat, h_k.casefold(), h_val.casefold())
 
+            h_pids = [str(p).strip() for p in h.get("source_paragraph_ids", []) if str(p).strip()]
+            h_eids = [str(e).strip() for e in h.get("evidence_ids", []) if str(e).strip()]
+            h_effective_eids = h_eids or h_pids
+            h_provenance, h_unresolved = _candidate_provenance(h, h_effective_eids)
+
             if h_key in grouped:
                 existing = grouped[h_key]
-                h_pids = [str(p).strip() for p in h.get("source_paragraph_ids", []) if str(p).strip()]
-                h_eids = [str(e).strip() for e in h.get("evidence_ids", []) if str(e).strip()]
                 existing["source_paragraph_ids"] = list(dict.fromkeys(existing.get("source_paragraph_ids", []) + (h_pids or h_eids)))
-                existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + (h_eids or h_pids)))
+                existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + h_effective_eids))
+                existing["evidence_provenance"] = _merge_provenance(
+                    existing.get("evidence_provenance", []), h_provenance,
+                )
+                existing["unresolved_evidence_ids"] = list(dict.fromkeys(
+                    existing.get("unresolved_evidence_ids", []) + h_unresolved,
+                ))
+                existing["reporters"] = list(dict.fromkeys(
+                    [str(value).strip() for value in existing.get("reporters", []) if str(value).strip()]
+                    + [str(value).strip() for value in h.get("reporters", []) if str(value).strip()]
+                    + ([str(h.get("reporter")).strip()] if h.get("reporter") else []),
+                ))
                 historical_id = str(h.get("candidate_id", "")).strip()
                 if historical_id and historical_id not in existing.get("alias_candidate_ids", []):
                     existing.setdefault("alias_candidate_ids", []).append(historical_id)
@@ -510,8 +679,42 @@ def aggregate_candidates(
                     if value and value not in current_windows:
                         current_windows.append(value)
                 existing["source_window"] = ", ".join(current_windows)
+            else:
+                item = dict(h)
+                if h_kind == "glossary":
+                    item["category"] = h_cat
+                    if h_src:
+                        item["source"] = h_src
+                    if h_tgt:
+                        item["target"] = h_tgt
+                item["source_paragraph_ids"] = list(dict.fromkeys(h_pids or h_effective_eids))
+                item["evidence_ids"] = list(dict.fromkeys(h_effective_eids))
+                item["evidence_provenance"] = h_provenance
+                item["unresolved_evidence_ids"] = h_unresolved
+                item["alias_candidate_ids"] = list(dict.fromkeys(
+                    [str(h.get("candidate_id", "")).strip()] if str(h.get("candidate_id", "")).strip() else []
+                    + [str(value).strip() for value in h.get("alias_candidate_ids", []) if str(value).strip()]
+                ))
+                item["reporters"] = list(dict.fromkeys(
+                    [str(value).strip() for value in h.get("reporters", []) if str(value).strip()]
+                    + ([str(h.get("reporter")).strip()] if h.get("reporter") else [])
+                ))
+                grouped[h_key] = item
 
-    return list(grouped.values())
+    result = list(grouped.values())
+    for item in result:
+        evidence_ids = [
+            str(value).strip() for value in item.get("evidence_ids", []) if str(value).strip()
+        ]
+        reliable_ids = {
+            str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+            for value in item.get("evidence_provenance", [])
+            if isinstance(value, Mapping) and str(value.get("chapter_id", "")).strip()
+        }
+        item["unresolved_evidence_ids"] = [
+            evidence_id for evidence_id in evidence_ids if evidence_id not in reliable_ids
+        ]
+    return result
 
 
 def build_finalization_payload(
@@ -599,6 +802,7 @@ def build_finalization_payload(
             str(key): candidate[key] for key in (
                 "candidate_id", "kind", "source", "target", "category", "key", "value", "note",
                 "confidence", "source_window", "source_paragraph_ids", "evidence_ids",
+                "evidence_provenance", "unresolved_evidence_ids",
                 "source_fragment", "target_fragment", "referenced_glossary_ids", "referenced_memory_keys",
             ) if key in candidate
         }
@@ -659,6 +863,17 @@ def _normalized_text(value: Any) -> str:
 
 
 def _evidence_stats(candidate: Mapping[str, Any]) -> tuple[int, int]:
+    provenance = candidate.get("evidence_provenance")
+    if not isinstance(provenance, list):
+        evidence_values = candidate.get("evidence")
+        provenance = evidence_values if isinstance(evidence_values, list) else []
+    provenance_keys = {
+        _provenance_key(item) for item in provenance
+        if isinstance(item, Mapping) and _provenance_key(item)[1]
+    }
+    if provenance_keys:
+        chapters = {chapter for chapter, _paragraph, _reporter in provenance_keys if chapter}
+        return len(provenance_keys), len(chapters)
     evidence_ids = {
         str(value).strip() for value in candidate.get("evidence_ids", []) if str(value).strip()
     }
@@ -756,7 +971,11 @@ def partition_finalization_candidates(
                 action, reason = "active", "matches_active"
             elif not candidate.get("source") or not candidate.get("target"):
                 action, reason = "discard", "invalid_shape"
-            elif category_tier(category) in {None, CategoryTier.BLOCKED}:
+            elif category_tier(category) is None:
+                # Unknown taxonomy needs a diagnostic Finalization decision and
+                # ultimately remains pending if it is not corrected.
+                action, reason = "", "unknown_category"
+            elif category_tier(category) is CategoryTier.BLOCKED:
                 action, reason = "discard", "blocked_category"
             elif str(candidate.get("source_scope", "body")).strip().lower() != "body":
                 action, reason = "candidate", "non_body_source"
@@ -967,6 +1186,28 @@ def _merge_candidate_records(existing: Mapping[str, Any], incoming: Mapping[str,
             *[str(value) for value in existing.get(field, []) if str(value)],
             *[str(value) for value in incoming.get(field, []) if str(value)],
         ]))
+    merged["evidence_provenance"] = _merge_provenance(
+        existing.get("evidence_provenance", []), incoming.get("evidence_provenance", []),
+    )
+    evidence_values = [
+        value for value in [*existing.get("evidence", []), *incoming.get("evidence", [])]
+        if isinstance(value, Mapping)
+    ]
+    if evidence_values:
+        merged["evidence"] = _merge_provenance([], evidence_values)
+    resolved_ids = {
+        str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+        for value in merged["evidence_provenance"]
+        if str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+    }
+    merged["unresolved_evidence_ids"] = list(dict.fromkeys(
+        str(value).strip()
+        for value in [
+            *existing.get("unresolved_evidence_ids", []),
+            *incoming.get("unresolved_evidence_ids", []),
+        ]
+        if str(value).strip() and str(value).strip() not in resolved_ids
+    ))
     windows: list[str] = []
     for raw in (existing.get("source_window", ""), incoming.get("source_window", "")):
         for value in str(raw).split(","):
@@ -978,6 +1219,17 @@ def _merge_candidate_records(existing: Mapping[str, Any], incoming: Mapping[str,
         existing.get("first_seen_chapter") or existing.get("chapter_id") or incoming.get("chapter_id") or ""
     )
     merged["last_seen_chapter"] = str(incoming.get("chapter_id") or existing.get("last_seen_chapter") or "")
+    merged["last_reviewed_chapter"] = str(
+        incoming.get("last_reviewed_chapter") or incoming.get("chapter_id")
+        or existing.get("last_reviewed_chapter") or ""
+    )
+    try:
+        merged["attempt_count"] = max(
+            int(existing.get("attempt_count", 0) or 0),
+            int(incoming.get("attempt_count", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        pass
     try:
         merged["confidence"] = max(
             float(existing.get("confidence", 0) or 0), float(incoming.get("confidence", 0) or 0)
@@ -1067,7 +1319,59 @@ def apply_knowledge_delta(
     else:
         decision_by_id = {str(key): dict(value) for key, value in (decisions or {}).items() if isinstance(value, Mapping)}
 
-    aggregated_candidates = aggregate_candidates(candidates)
+    candidate_store_path = workspace.knowledge_candidates_path
+    candidate_store = read_json(candidate_store_path, {"schema_version": "1.0", "items": []})
+    historical_candidates = (
+        candidate_store.get("items", [])
+        if isinstance(candidate_store, Mapping) and isinstance(candidate_store.get("items", []), list)
+        else []
+    )
+
+    # Window normalization normally supplies provenance.  The small fallback
+    # below also covers direct callers and older review artifacts while keeping
+    # already-unresolved historical IDs in the migration queue.
+    prepared_candidates: list[dict[str, Any]] = []
+    for raw in candidates:
+        if not isinstance(raw, Mapping):
+            continue
+        candidate = dict(raw)
+        if str(candidate.get("kind", "glossary")).strip().lower() == "glossary":
+            evidence_ids = [
+                str(value).strip() for value in candidate.get("evidence_ids", []) if str(value).strip()
+            ]
+            values = candidate.get("evidence_provenance")
+            if not isinstance(values, list):
+                evidence_values = candidate.get("evidence")
+                values = evidence_values if isinstance(evidence_values, list) else []
+            provenance = [dict(value) for value in values if isinstance(value, Mapping)]
+            represented = {
+                str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+                for value in provenance
+                if str(value.get("paragraph_id") or value.get("evidence_id") or "").strip()
+            }
+            unresolved_values = candidate.get("unresolved_evidence_ids")
+            unresolved = {
+                str(value).strip() for value in unresolved_values if str(value).strip()
+            } if isinstance(unresolved_values, list) else set()
+            for evidence_id in evidence_ids:
+                if evidence_id in represented or evidence_id in unresolved:
+                    continue
+                provenance.append({
+                    "chapter_id": chapter_id,
+                    "paragraph_id": evidence_id,
+                    "reporter": "knowledge_extractor",
+                    "confidence": _confidence_value(candidate.get("confidence", 0)),
+                })
+            candidate["evidence_provenance"] = provenance
+            candidate["unresolved_evidence_ids"] = sorted(
+                unresolved - {str(value.get("paragraph_id") or value.get("evidence_id") or "").strip() for value in provenance}
+            )
+        prepared_candidates.append(candidate)
+
+    aggregated_candidates = aggregate_candidates(
+        prepared_candidates,
+        historical_candidates=historical_candidates,
+    )
 
     decision_by_term: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for d_cid, d_item in decision_by_id.items():
@@ -1089,21 +1393,23 @@ def apply_knowledge_delta(
                     cat = canonical_category(raw.get("category", ""))
                     decision_by_term[(kind, cat, k.casefold(), val.casefold())] = d_item
 
-    candidate_store_path = workspace.knowledge_candidates_path
     conflict_store_path = workspace.knowledge_conflicts_path
     glossary_path = workspace.glossary_path
     memory_path = workspace.book_memory_path
     paths = [candidate_store_path, conflict_store_path, glossary_path, memory_path, workspace.novel_translator_terms_path]
     originals = {path: path.read_bytes() if path.exists() else None for path in paths}
     evidence = dict(evidence_texts or {})
-    active_glossary_raw: list[dict[str, Any]] = []
+    glossary_updates: list[dict[str, Any]] = []
     active_memory: list[dict[str, Any]] = []
     stored_candidates: list[dict[str, Any]] = []
     stored_conflicts = [
         {**dict(item), "chapter_id": chapter_id}
         for item in (conflicts or []) if isinstance(item, Mapping)
     ]
-    summary = {"active": 0, "candidate": 0, "conflict": len(stored_conflicts), "discard": 0, "omitted": 0}
+    summary: dict[str, Any] = {
+        "active": 0, "candidate": 0, "conflict": len(stored_conflicts),
+        "discard": 0, "omitted": 0, "pending": 0,
+    }
 
     def _get_decision(candidate: dict[str, Any]) -> dict[str, Any] | None:
         cid = str(candidate.get("candidate_id", "")).strip()
@@ -1134,52 +1440,105 @@ def apply_knowledge_delta(
             action = str((decision or {}).get("action", "candidate"))
             if action not in {"active", "candidate", "conflict", "discard"}:
                 action = "candidate"
+            pending_reason = ""
             if decision is None:
                 summary["omitted"] += 1
-            if action == "active":
+                pending_reason = "missing_finalization_decision"
+
+            if decision is not None and action in {"active", "candidate"}:
                 if candidate.get("kind") == "glossary":
-                    category = canonical_category(candidate.get("category", ""))
-                    if category_tier(category) is None:
-                        category = "system_term"
-                    candidate["category"] = category
-                    if (
-                        str(candidate.get("source", "")).strip()
-                        and str(candidate.get("target", "")).strip()
-                        and category_tier(category) in {CategoryTier.DIRECT_ALLOWED, CategoryTier.GATED_ALLOWED}
-                    ):
-                        validation = validate_term_candidate(
-                            {key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope") if key in candidate},
-                            evidence_texts=evidence,
-                        )
-                        if validation.valid and validation.candidate is not None:
-                            candidate.update(validation.candidate.model_dump())
-                            active_glossary_raw.append({key: candidate[key] for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope") if key in candidate})
-                        else:
-                            action = "candidate"
+                    unresolved_ids = [
+                        str(value).strip() for value in candidate.get("unresolved_evidence_ids", [])
+                        if str(value).strip()
+                    ]
+                    if unresolved_ids:
+                        pending_reason = "evidence_provenance_missing:" + ",".join(sorted(set(unresolved_ids)))
                     else:
-                        action = "candidate"
-                elif candidate.get("kind") == "memory":
-                    if str(candidate.get("key", "")).strip() and str(candidate.get("value", "")).strip() and float(candidate.get("confidence", 0) or 0) >= 0.9:
+                        payload: dict[str, Any] = {
+                            key: candidate[key]
+                            for key in ("source", "target", "category", "confidence", "evidence_ids", "note", "source_scope")
+                            if key in candidate
+                        }
+                        validation = validate_term_candidate(payload, evidence_texts=evidence)
+                        if validation.valid and validation.candidate is not None:
+                            update = validation.candidate.model_dump()
+                            update["evidence_provenance"] = [
+                                dict(value) for value in candidate.get("evidence_provenance", [])
+                                if isinstance(value, Mapping)
+                            ]
+                            update["reporters"] = list(dict.fromkeys(
+                                [str(value).strip() for value in candidate.get("reporters", []) if str(value).strip()]
+                                + ["knowledge_extractor"],
+                            ))
+                            glossary_updates.append(update)
+                        else:
+                            pending_reason = validation.reason or "candidate_validation_failed"
+                elif action == "active" and candidate.get("kind") == "memory":
+                    try:
+                        memory_confidence = float(candidate.get("confidence", 0) or 0)
+                    except (TypeError, ValueError):
+                        memory_confidence = 0.0
+                    if str(candidate.get("key", "")).strip() and str(candidate.get("value", "")).strip() and memory_confidence >= 0.9:
                         active_memory.append({key: candidate[key] for key in ("key", "value", "category", "confidence", "note") if key in candidate})
                     else:
-                        action = "candidate"
-                else:
-                    action = "candidate"
-            record = {**candidate, "chapter_id": chapter_id, "final_action": action, "final_reason": str((decision or {}).get("reason", ""))}
-            if action == "candidate":
+                        pending_reason = "memory_validation_failed"
+                elif candidate.get("kind") == "memory":
+                    pending_reason = "memory_candidate_pending"
+                elif candidate.get("kind") != "memory":
+                    pending_reason = "unknown_candidate_kind"
+
+            if pending_reason:
+                action = "candidate"
+            final_reason = pending_reason or str((decision or {}).get("reason", ""))
+            record = {
+                **candidate,
+                "chapter_id": chapter_id,
+                "last_reviewed_chapter": chapter_id,
+                "final_action": action,
+                "final_reason": final_reason,
+            }
+            if action == "candidate" and (decision is None or pending_reason):
+                try:
+                    attempt_count = max(1, int(candidate.get("attempt_count", 0) or 0) + 1)
+                except (TypeError, ValueError):
+                    attempt_count = 1
+                record.update({
+                    "status": "pending",
+                    "queue_reason": final_reason or "pending_review",
+                    "attempt_count": attempt_count,
+                    "first_seen_chapter": str(candidate.get("first_seen_chapter") or candidate.get("chapter_id") or chapter_id),
+                    "normalization_version": CANDIDATE_NORMALIZATION_VERSION,
+                    "evidence": [
+                        dict(value) for value in candidate.get("evidence_provenance", [])
+                        if isinstance(value, Mapping)
+                    ],
+                })
                 stored_candidates.append(record)
             elif action == "conflict":
                 stored_conflicts.append({**record, "conflict_id": str((decision or {}).get("conflict_id", ""))})
             summary[action] = int(summary.get(action, 0)) + 1
+            if action == "candidate" and (decision is None or pending_reason):
+                summary["pending"] += 1
 
         active_glossary_map: dict[tuple[str, str, str], dict[str, Any]] = {}
-        for term in active_glossary_raw:
-            g_key = (term["source"], term["target"], term["category"])
+        for term in glossary_updates:
+            g_key = (
+                unicodedata.normalize("NFKC", str(term.get("source", "")).strip()).casefold(),
+                unicodedata.normalize("NFKC", str(term.get("target", "")).strip()).casefold(),
+                canonical_category(term.get("category", "")),
+            )
             if g_key not in active_glossary_map:
                 active_glossary_map[g_key] = dict(term)
             else:
                 existing = active_glossary_map[g_key]
                 existing["evidence_ids"] = list(dict.fromkeys(existing.get("evidence_ids", []) + term.get("evidence_ids", [])))
+                existing["evidence_provenance"] = [
+                    *existing.get("evidence_provenance", []),
+                    *term.get("evidence_provenance", []),
+                ]
+                existing["reporters"] = list(dict.fromkeys(
+                    existing.get("reporters", []) + term.get("reporters", []),
+                ))
                 if float(term.get("confidence", 0) or 0) > float(existing.get("confidence", 0) or 0):
                     existing["confidence"] = term.get("confidence", 0)
         active_glossary = list(active_glossary_map.values())
@@ -1196,12 +1555,21 @@ def apply_knowledge_delta(
             from translator.core.workspace import merge_memory_delta
             memory, memory_summary = merge_memory_delta(memory, {"add": active_memory, "update": [], "conflicts": []}, chapter_id)
             write_json(memory_path, memory)
-        store = read_json(candidate_store_path, {"schema_version": "1.0", "items": []})
+        store = candidate_store if isinstance(candidate_store, Mapping) else {"schema_version": "1.0", "items": []}
+        store = dict(store)
         store["items"] = _upsert_candidates(
             store.get("items", []), stored_candidates, aggregated_candidates,
         )
         store["updated_at"] = utc_now()
         write_json(candidate_store_path, store)
+        reason_counts: dict[str, int] = {}
+        for item in store["items"]:
+            if not isinstance(item, Mapping):
+                continue
+            reason = str(item.get("queue_reason") or item.get("final_reason") or "pending_review").strip()
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        summary["pending_queue_count"] = len(store["items"])
+        summary["pending_reason_counts"] = dict(sorted(reason_counts.items()))
         conflict_store = read_json(conflict_store_path, {"schema_version": "1.0", "items": []})
         conflict_store["items"] = _upsert_conflicts(conflict_store.get("items", []), stored_conflicts)
         conflict_store["updated_at"] = utc_now()
@@ -1213,11 +1581,13 @@ def apply_knowledge_delta(
             else:
                 path.write_bytes(content)
         raise
+    summary["glossary_summary"] = glossary_summary if 'glossary_summary' in locals() else {}
+    summary["promoted"] = int(summary["glossary_summary"].get("activated", 0) or 0)
     return summary
 
 
 __all__ = [
-    "WindowKnowledgeOutput", "FinalKnowledgeOutput", "aggregate_candidates",
+    "EvidenceProvenance", "WindowKnowledgeOutput", "FinalKnowledgeOutput", "aggregate_candidates",
     "build_finalization_payload", "compact_finalization_payload", "finalization_prompt_chars",
     "partition_finalization_candidates",
     "run_knowledge_extractor_window", "run_knowledge_finalization",

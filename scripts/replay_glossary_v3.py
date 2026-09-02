@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.migrate_glossary_v3 import STATUSES, migrate_term
+from scripts.migrate_knowledge_candidates import migrate as migrate_candidates
 from translator.glossary.service import persist_glossary
 from translator.glossary.taxonomy import category_tier
 from translator.glossary.validation import validate_glossary_document
@@ -55,8 +56,17 @@ def _as_v3(payload: dict[str, Any]) -> dict[str, Any]:
 def replay_workspace(path: Path, *, apply: bool = False) -> dict[str, Any]:
     """Report or apply only the glossary-v2-to-v3 migration for one workspace."""
     glossary_path = path / "data" / "glossary.json"
+    candidate_path = path / "data" / "knowledge-candidates.json"
+    candidate_report = migrate_candidates(candidate_path, apply=apply) if candidate_path.is_file() else {
+        "status": "skipped", "reason": "missing_candidate_queue",
+    }
     if not glossary_path.is_file():
-        return {"workspace": str(path), "status": "skipped", "reason": "missing_glossary"}
+        return {
+            "workspace": str(path),
+            "status": "skipped" if candidate_report.get("status") == "skipped" else "ok",
+            "reason": "missing_glossary",
+            "candidate_queue": candidate_report,
+        }
 
     original = glossary_path.read_bytes()
     glossary = json.loads(original)
@@ -81,11 +91,14 @@ def replay_workspace(path: Path, *, apply: bool = False) -> dict[str, Any]:
             if isinstance(item, dict) and item.get("status") == "active"
         ),
         "review_replay": "removed",
+        "candidate_queue": candidate_report,
     }
-    if apply and report["changed"]:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup = glossary_path.with_name(f"{glossary_path.name}.replay-{timestamp}.bak")
-        backup.write_bytes(original)
+    if apply:
+        backup: Path | None = None
+        if report["changed"]:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup = glossary_path.with_name(f"{glossary_path.name}.replay-{timestamp}.bak")
+            backup.write_bytes(original)
         persist_glossary(type("ReplayWorkspace", (), {
             "glossary_path": glossary_path,
             "novel_translator_terms_path": path / "data" / "novel-translator-terms.json",
@@ -95,7 +108,7 @@ def replay_workspace(path: Path, *, apply: bool = False) -> dict[str, Any]:
         if errors:
             glossary_path.write_bytes(original)
             raise ValueError("glossary reopen validation failed: " + ", ".join(errors))
-        report["backup"] = str(backup)
+        report["backup"] = str(backup) if backup else None
         report["reopen_validated"] = True
     else:
         report["backup"] = None

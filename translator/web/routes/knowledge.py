@@ -11,6 +11,7 @@ from translator.core.config import load_config
 from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, json_file_lock, read_json, utc_now, write_json
 from translator.glossary.lifecycle import stable_term_id
+from translator.glossary.service import persist_glossary
 from translator.glossary.taxonomy import canonical_category, category_tier, CategoryTier
 from translator.pipeline.chapter_pipeline import manifest_path
 from translator.review.models import normalize_review_for_display
@@ -26,6 +27,7 @@ from translator.web.models import (
     GlossaryCreateRequest,
     GlossaryItem,
     GlossaryResponse,
+    PendingQueueResponse,
 )
 
 
@@ -105,10 +107,22 @@ def get_workspace_for_book(book_id: str) -> BookWorkspace:
     return BookWorkspace.at(output_root, title)
 
 
+def _pending_queue(workspace: BookWorkspace) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    data = read_json(workspace.knowledge_candidates_path, default={})
+    raw_items = data.get("items", []) if isinstance(data, dict) else []
+    items = [dict(item) for item in raw_items if isinstance(item, dict)]
+    reason_counts: dict[str, int] = {}
+    for item in items:
+        reason = str(item.get("queue_reason") or item.get("final_reason") or "pending_review").strip()
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return items, dict(sorted(reason_counts.items()))
+
+
 @router.get("/{book_id}/glossary", response_model=GlossaryResponse)
 def get_glossary(book_id: str) -> GlossaryResponse:
     workspace = get_workspace_for_book(book_id)
     glossary_data = read_json(workspace.glossary_path, default={"terms": [], "conflicts": []})
+    pending_items, pending_reason_counts = _pending_queue(workspace)
 
     items = []
     for t in glossary_data.get("terms", []):
@@ -119,6 +133,21 @@ def get_glossary(book_id: str) -> GlossaryResponse:
         terms=items,
         conflicts=glossary_data.get("conflicts", []),
         updated_at=glossary_data.get("updated_at"),
+        pending_items=pending_items,
+        pending_count=len(pending_items),
+        pending_reason_counts=pending_reason_counts,
+    )
+
+
+@router.get("/{book_id}/pending", response_model=PendingQueueResponse)
+def get_pending_queue(book_id: str) -> PendingQueueResponse:
+    workspace = get_workspace_for_book(book_id)
+    items, reason_counts = _pending_queue(workspace)
+    return PendingQueueResponse(
+        book_id=book_id,
+        items=items,
+        count=len(items),
+        reason_counts=reason_counts,
     )
 
 
@@ -156,7 +185,9 @@ def update_glossary(book_id: str, request: GlossaryCreateRequest) -> GlossaryRes
         glossary_data["schema_version"] = "3.0"
         glossary_data.setdefault("revisions", [])
         glossary_data["updated_at"] = utc_now()
-        write_json(workspace.glossary_path, glossary_data)
+        # The glossary is authoritative; always rebuild the disposable
+        # translator projection from it rather than editing the projection.
+        persist_glossary(workspace, glossary_data)
 
     return get_glossary(book_id)
 
@@ -171,7 +202,7 @@ def delete_glossary_term(book_id: str, source: str) -> GlossaryResponse:
         if len(glossary_data["terms"]) == before:
             raise HTTPException(status_code=404, detail=f"未找到术语: {source}")
         glossary_data["updated_at"] = utc_now()
-        write_json(workspace.glossary_path, glossary_data)
+        persist_glossary(workspace, glossary_data)
     return get_glossary(book_id)
 
 

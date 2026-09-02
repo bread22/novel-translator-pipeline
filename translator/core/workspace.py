@@ -255,6 +255,13 @@ class BookWorkspace:
                 # creates the v2 backup and verifies the reopened v3 document.
                 from scripts.migrate_glossary_v3 import migrate
                 migrate(self.glossary_path, apply=True)
+        if not self.novel_translator_terms_path.exists():
+            # The translator file is a disposable projection.  Rebuild it from
+            # the authority whenever an older workspace has no projection.
+            from translator.glossary.service import persist_glossary
+            persist_glossary(self, read_json(self.glossary_path, {
+                "schema_version": "3.0", "book": book_id, "terms": [], "conflicts": [], "revisions": [],
+            }))
         if not self.progress_path.exists():
             write_json(
                 self.progress_path,

@@ -62,6 +62,9 @@ def validate_term_candidate(
         return ValidationResult(False, "missing_confidence")
     # Review compatibility metadata is not part of the candidate contract.
     raw = {key: value for key, value in raw.items() if key in {"source", "target", "category", "confidence", "evidence_ids", "note", "source_scope"}}
+    raw["category"] = canonical_category(raw.get("category", ""))
+    if category_tier(raw["category"]) is None:
+        return ValidationResult(False, "unknown_category")
     try:
         model = GlossaryCandidate.model_validate(raw)
     except Exception as exc:

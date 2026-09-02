@@ -64,6 +64,7 @@ LEGACY_CATEGORY_ALIASES: Final[dict[str, str]] = {
     "places": "location",
     "title": "work_title",
     "family_name": "person_alias",
+    "person_name": "person",
     "medical": "medical_procedure",
     "item": "artifact_name",
     "occupation": "occupation_generic",

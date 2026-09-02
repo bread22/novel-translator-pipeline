@@ -21,6 +21,8 @@ interface KnowledgeViewProps {
 export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
   const [activeTab, setActiveTab] = useState<'glossary' | 'characters' | 'world' | 'timeline' | 'reports'>('reports');
   const [glossaryTerms, setGlossaryTerms] = useState<GlossaryItem[]>([]);
+  const [pendingItems, setPendingItems] = useState<Array<Record<string, unknown>>>([]);
+  const [pendingReasonCounts, setPendingReasonCounts] = useState<Record<string, number>>({});
   const [memory, setMemory] = useState<BookMemoryResponse | null>(null);
   const [reports, setReports] = useState<ChapterReviewReport[]>([]);
   const [search, setSearch] = useState('');
@@ -40,6 +42,8 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
     const controller = new AbortController();
     const sequence = ++requestSequence.current;
     setGlossaryTerms([]);
+    setPendingItems([]);
+    setPendingReasonCounts({});
     setMemory(null);
     setReports([]);
     setLoadError(null);
@@ -61,6 +65,8 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
       const errors: string[] = [];
       if (glossaryRes.status === 'fulfilled') {
         setGlossaryTerms(glossaryRes.value.terms || []);
+        setPendingItems(glossaryRes.value.pending_items || []);
+        setPendingReasonCounts(glossaryRes.value.pending_reason_counts || {});
       } else {
         errors.push(`术语表：${glossaryRes.reason instanceof Error ? glossaryRes.reason.message : '加载失败'}`);
       }
@@ -117,13 +123,25 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
     );
   }
 
-  const filteredTerms = glossaryTerms.filter(
-    (t) =>
-      (statusFilter === 'all' || (t.status || 'active') === statusFilter) &&
-      t.source.toLowerCase().includes(search.toLowerCase()) ||
-      (statusFilter === 'all' || (t.status || 'active') === statusFilter) &&
-      t.target.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredTerms = glossaryTerms.filter((t) => {
+    const matchesStatus = statusFilter === 'all' || (t.status || 'active') === statusFilter;
+    const query = search.toLowerCase();
+    return matchesStatus && (
+      t.source.toLowerCase().includes(query) || t.target.toLowerCase().includes(query)
+    );
+  });
+  const activeCount = glossaryTerms.filter((term) => (term.status || 'active') === 'active').length;
+  const candidateCount = glossaryTerms.filter((term) => term.status === 'candidate').length;
+  const pendingFirstChapters = pendingItems
+    .map((item) => typeof item.first_seen_chapter === 'string' ? item.first_seen_chapter.trim() : '')
+    .filter(Boolean)
+    .sort();
+  const pendingLastChapters = pendingItems
+    .map((item) => typeof item.last_reviewed_chapter === 'string' ? item.last_reviewed_chapter.trim() : '')
+    .filter(Boolean)
+    .sort();
+  const firstPendingChapter = pendingFirstChapters[0] || '—';
+  const lastPendingChapter = pendingLastChapters[pendingLastChapters.length - 1] || '—';
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16">
@@ -153,7 +171,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
             }`}
           >
             <Tag className="w-3.5 h-3.5" />
-            术语表 ({glossaryTerms.length})
+            术语表 ({glossaryTerms.length}) · 候选 {candidateCount}
           </button>
           <button
             onClick={() => setActiveTab('characters')}
@@ -229,6 +247,28 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
               <Plus className="w-4 h-4" />
               添加自定义术语
             </button>
+          </div>
+
+          <div className="border border-blue-200 bg-blue-50/50 rounded-sm px-4 py-3 text-xs text-[#4A4A4A]" aria-label="术语生命周期统计">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono">
+              <span>active {activeCount}</span>
+              <span>candidate {candidateCount}</span>
+              <span className="text-amber-800">待处理队列 {pendingItems.length}</span>
+              <span>首次章节 {firstPendingChapter}</span>
+              <span>最后章节 {lastPendingChapter}</span>
+            </div>
+            <p className="mt-1 text-[11px] text-[#666666]">
+              candidate 会继续累计正文证据；待处理项目仍待 Finalization 或映射审核，不会进入翻译投影。
+            </p>
+            {pendingItems.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5" aria-label="待处理原因分布">
+                {Object.entries(pendingReasonCounts).map(([reason, count]) => (
+                  <span key={reason} className="px-2 py-0.5 rounded-sm bg-white border border-amber-200 text-amber-800 text-[10px] font-mono">
+                    {reason} · {count}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Glossary Table */}

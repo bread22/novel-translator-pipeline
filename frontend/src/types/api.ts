@@ -142,6 +142,16 @@ export interface GlossaryResponse {
   terms: GlossaryItem[];
   conflicts: any[];
   updated_at?: string | null;
+  pending_items?: Array<Record<string, unknown>>;
+  pending_count?: number;
+  pending_reason_counts?: Record<string, number>;
+}
+
+export interface PendingQueueResponse {
+  book_id: string;
+  items: Array<Record<string, unknown>>;
+  count: number;
+  reason_counts: Record<string, number>;
 }
 
 export interface BookMemoryResponse {
@@ -226,6 +236,8 @@ export interface ChapterReviewReport {
     candidate?: number;
     conflict?: number;
     discard?: number;
+    pending_queue_count?: number;
+    pending_reason_counts?: Record<string, number>;
     window_count?: number;
     window_candidate_count?: number;
     window_conflict_count?: number;

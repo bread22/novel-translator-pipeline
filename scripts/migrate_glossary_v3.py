@@ -11,8 +11,9 @@ import shutil
 from typing import Any
 import unicodedata
 
-from translator.core.workspace import utc_now, write_json
+from translator.core.workspace import utc_now
 from translator.glossary.lifecycle import stable_term_id
+from translator.glossary.service import persist_glossary
 from translator.glossary.taxonomy import BODY_SOURCE_SCOPE, BLOCKED, DIRECT_ALLOWED, GATED_ALLOWED, canonical_category, category_tier
 from translator.glossary.validation import TARGET_FORBIDDEN_RE, KANA_RE, validate_glossary_document
 
@@ -153,7 +154,10 @@ def migrate(path: Path, *, apply: bool = False) -> dict[str, Any]:
     }
     if apply and before_hash != after_hash:
         shutil.copy2(path, backup)
-        write_json(path, updated)
+        persist_glossary(type("MigrationWorkspace", (), {
+            "glossary_path": path,
+            "novel_translator_terms_path": path.parent / "novel-translator-terms.json",
+        })(), updated)
         reopened = json.loads(path.read_text(encoding="utf-8"))
         errors = validate_glossary_document(reopened)
         if errors:

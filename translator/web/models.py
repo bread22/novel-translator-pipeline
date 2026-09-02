@@ -174,6 +174,16 @@ class GlossaryResponse(BaseModel):
     terms: list[GlossaryItem]
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: str | None = None
+    pending_items: list[dict[str, Any]] = Field(default_factory=list)
+    pending_count: int = 0
+    pending_reason_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class PendingQueueResponse(BaseModel):
+    book_id: str
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+    reason_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class GlossaryCreateRequest(BaseModel):

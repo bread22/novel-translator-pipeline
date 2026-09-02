@@ -6,6 +6,7 @@ import {
   ChapterSummary,
   GlossaryItem,
   GlossaryResponse,
+  PendingQueueResponse,
   PipelineStartRequest,
   PreflightResponse,
   PromptItem,
@@ -208,6 +209,7 @@ export const api = {
 
   // Knowledge & Memory
   getGlossary: (bookId: string, options?: RequestOptions) => request<GlossaryResponse>(`/knowledge/${bookId}/glossary`, undefined, options),
+  getPendingQueue: (bookId: string, options?: RequestOptions) => request<PendingQueueResponse>(`/knowledge/${bookId}/pending`, undefined, options),
   updateGlossary: (bookId: string, terms: GlossaryItem[]) =>
     request<GlossaryResponse>(`/knowledge/${bookId}/glossary`, {
       method: 'POST',

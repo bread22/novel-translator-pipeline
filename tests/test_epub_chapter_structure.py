@@ -27,6 +27,7 @@ def write_monolithic_epub(path: Path) -> None:
 <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
 </container>""",
         )
+
         archive.writestr(
             "OEBPS/content.opf",
             """<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
@@ -56,6 +57,70 @@ def write_monolithic_epub(path: Path) -> None:
 <navPoint><navLabel><text>第三章 转折</text></navLabel><content src="text00002.html#missing-3"/></navPoint>
 <navPoint><navLabel><text>第四章 终章</text></navLabel><content src="text00002.html#missing-4"/></navPoint>
 </navMap></ncx>""",
+        )
+
+
+def write_decorated_split_epub(path: Path) -> None:
+    numbers = ("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
+    body_one = [
+        f'<p id="chapter-{index}">【第{number}章 标题{index}】</p><p>第{number}章正文。</p>'
+        for index, number in enumerate(numbers[:6], start=1)
+    ]
+    body_two = [
+        "<p>上一逻辑章节在物理切分点后的续文。</p>",
+        *[
+            f'<p id="chapter-{index}">【第{number}章 标题{index}】</p><p>第{number}章正文。</p>'
+            for index, number in enumerate(numbers[6:], start=7)
+        ],
+    ]
+    body_two_text = "".join(body_two)
+    nav_points = "".join(
+        f'<navPoint><navLabel><text>第{number}章 标题{index}</text></navLabel>'
+        f'<content src="text/part0002_split_{0 if index <= 6 else 1:03d}.html#chapter-{index}"/></navPoint>'
+        for index, number in enumerate(numbers, start=1)
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        archive.writestr(
+            "META-INF/container.xml",
+            """<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>""",
+        )
+        archive.writestr(
+            "OEBPS/content.opf",
+            """<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Decorated Split Fixture</dc:title></metadata>
+<manifest>
+<item id="cover" href="cover.html" media-type="application/xhtml+xml"/>
+<item id="toc-page" href="toc-page.html" media-type="application/xhtml+xml"/>
+<item id="body-one" href="text/part0002_split_000.html" media-type="application/xhtml+xml"/>
+<item id="body-two" href="text/part0002_split_001.html" media-type="application/xhtml+xml"/>
+<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+</manifest>
+<spine toc="ncx"><itemref idref="cover"/><itemref idref="toc-page"/><itemref idref="body-one"/><itemref idref="body-two"/></spine>
+</package>""",
+        )
+        archive.writestr("OEBPS/cover.html", "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>封面内容。</p></body></html>")
+        archive.writestr(
+            "OEBPS/toc-page.html",
+            "<html xmlns='http://www.w3.org/1999/xhtml'><body>"
+            + "".join(f"<p>第{number}章 标题{index}</p>" for index, number in enumerate(numbers, start=1))
+            + "</body></html>",
+        )
+        archive.writestr(
+            "OEBPS/text/part0002_split_000.html",
+            "<html xmlns='http://www.w3.org/1999/xhtml'><body>" + "".join(body_one) + "</body></html>",
+        )
+        archive.writestr(
+            "OEBPS/text/part0002_split_001.html",
+            "<html xmlns='http://www.w3.org/1999/xhtml'><body>" + body_two_text + "</body></html>",
+        )
+        archive.writestr(
+            "OEBPS/toc.ncx",
+            '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>'
+            + nav_points
+            + "</navMap></ncx>",
         )
 
 
@@ -181,3 +246,96 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
     output_validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
     assert output_validation["summary"]["toc_broken_links"] == 0
     assert output_validation["errors"] == []
+
+
+def test_decorated_split_epub_uses_toc_fragments_and_attaches_leading_continuation(tmp_path: Path) -> None:
+    epub = tmp_path / "decorated-split.epub"
+    write_decorated_split_epub(epub)
+    runtime = _api_root(tmp_path)
+
+    result = call_novel_translator(
+        "add-book",
+        "--path",
+        str(epub),
+        "--title",
+        "Decorated Split Fixture",
+        "--id",
+        "decorated-split-fixture",
+        novel_root=runtime,
+    )
+
+    assert result["summary"]["chapters"] == 12  # cover, TOC, ten logical chapters
+    manifest_path = runtime / "data" / "books" / "decorated-split-fixture" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body = [chapter for chapter in manifest["chapters"] if chapter["role"] == "chapter"]
+    assert len(body) == 10
+    assert [chapter["title"] for chapter in body] == [f"【第{number}章 标题{index}】" for index, number in enumerate(("一", "二", "三", "四", "五", "六", "七", "八", "九", "十"), start=1)]
+    assert {paragraph["source"] for paragraph in body[5]["paragraphs"]} >= {"上一逻辑章节在物理切分点后的续文。"}
+    assert "上一逻辑章节在物理切分点后的续文。" not in {paragraph["source"] for paragraph in body[6]["paragraphs"]}
+    assert {
+        item["metadata"]["epub"]["chapter_path"]
+        for item in body[5]["paragraphs"][-1:]
+    } == {"OEBPS/text/part0002_split_001.html"}
+    assert manifest["metadata"]["epub"]["logical_chapter_paths"][body[5]["id"]] == [
+        "OEBPS/text/part0002_split_000.html",
+        "OEBPS/text/part0002_split_001.html",
+    ]
+    split_diagnostics = manifest["metadata"]["epub"]["chapter_split_diagnostics"]
+    second = next(item for item in split_diagnostics if item["path"] == "OEBPS/text/part0002_split_001.html")
+    assert second["toc_used"] is True
+    assert second["fragment_resolved_count"] == 4
+    assert second["continued_into"] == body[5]["id"]
+
+
+def test_cross_file_decorated_chapters_export_by_paragraph_path_and_repair_ncx(tmp_path: Path) -> None:
+    epub = tmp_path / "decorated-split.epub"
+    write_decorated_split_epub(epub)
+    runtime = _api_root(tmp_path)
+    call_novel_translator(
+        "add-book",
+        "--path",
+        str(epub),
+        "--title",
+        "Decorated Split Fixture",
+        "--id",
+        "decorated-split-fixture",
+        novel_root=runtime,
+    )
+    manifest_path = runtime / "data" / "books" / "decorated-split-fixture" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body = [chapter for chapter in manifest["chapters"] if chapter["role"] == "chapter"]
+    body[5]["paragraphs"][0]["translated"] = "第六章译文"
+    continuation = next(
+        paragraph for paragraph in body[5]["paragraphs"] if paragraph["source"] == "上一逻辑章节在物理切分点后的续文。"
+    )
+    continuation["translated"] = "续文译文。"
+    body[6]["paragraphs"][0]["translated"] = "第七章译文"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    output = tmp_path / "decorated-translated.epub"
+    exported = call_novel_translator(
+        "export",
+        "--book",
+        "decorated-split-fixture",
+        "--format",
+        "epub",
+        "--output",
+        str(output),
+        "--monolingual",
+        novel_root=runtime,
+    )
+    assert exported["summary"]["format"] == "epub"
+    with zipfile.ZipFile(output) as archive:
+        first = archive.read("OEBPS/text/part0002_split_000.html").decode("utf-8")
+        second = archive.read("OEBPS/text/part0002_split_001.html").decode("utf-8")
+        toc = archive.read("OEBPS/toc.ncx").decode("utf-8")
+    assert "第六章译文" in first
+    assert "续文译文。" in second
+    assert "第七章译文" in second
+    assert "id=\"chapter-0006\"" in first
+    assert "id=\"chapter-0007\"" in second
+    assert "text/part0002_split_000.html#chapter-0006" in toc
+    assert "text/part0002_split_001.html#chapter-0007" in toc
+    validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
+    assert validation["summary"]["toc_broken_links"] == 0
+    assert validation["errors"] == []

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from xml.etree import ElementTree as ET
@@ -54,6 +54,31 @@ class _ChapterMarker:
     number: int
     suffix: str
     tag: str
+
+
+@dataclass(frozen=True)
+class _NavigationTarget:
+    label: str
+    path: str
+    fragment: str = ""
+    navigation_path: str = ""
+    ordinal: int = 0
+    node_index: int | None = None
+    resolution: str = "unresolved"
+    resolved_fragment: str = ""
+
+
+@dataclass
+class _ChapterParseResult:
+    chapters: list[Chapter]
+    warning_count: int
+    ignored_nodes: list[int]
+    leading_nodes: list[_EpubNode] = field(default_factory=list)
+    first_marker_number: int | None = None
+    first_marker_node_index: int | None = None
+    markers: list[_ChapterMarker] = field(default_factory=list)
+    toc_used: bool = False
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def load_source_book(path: Path, title: str | None = None, epub_config: EpubConfig | None = None) -> Book:
@@ -114,9 +139,10 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
         chapters: list[Chapter] = []
         ignored_nodes: dict[str, list[int]] = {}
         spine_documents: list[dict[str, Any]] = []
+        inspection["details"]["chapter_split_diagnostics"] = []
         chapter_index = 1
         spine_items = _spine_items(opf, opf_path, config)
-        navigation_labels = [label for labels in navigation.values() for label in labels]
+        navigation_labels = [target.label for targets in navigation.values() for target in targets]
         for spine_position, spine_item in enumerate(spine_items):
             if spine_item.path not in archive.namelist():
                 continue
@@ -139,21 +165,45 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
                     "role": role,
                 }
             )
-            parsed, warning_count, ignored = _parse_epub_chapters(
+            parsed_result = _parse_epub_chapters_result(
                 data,
                 chapter_index,
                 spine_item.path,
                 config,
-                navigation_titles=navigation.get(spine_item.path, ()),
+                navigation_targets=navigation.get(spine_item.path, ()),
                 document_role=role,
             )
+            warning_count = parsed_result.warning_count
+            ignored = parsed_result.ignored_nodes
             if ignored:
                 ignored_nodes[spine_item.path] = ignored
-            for chapter in parsed:
+            previous = next(
+                (chapter for chapter in reversed(chapters) if chapter.role == "chapter" and chapter.paragraphs),
+                None,
+            )
+            continuation = _attach_leading_nodes(
+                parsed_result,
+                previous,
+                role=role,
+                navigation_targets=navigation.get(spine_item.path, ()),
+            )
+            if continuation:
+                warning_count += continuation
+            for warning in (
+                parsed_result.diagnostics.get("toc_fallback_warning", ""),
+                parsed_result.diagnostics.get("continuation_warning", ""),
+            ):
+                if warning and warning not in inspection["warnings"]:
+                    inspection["warnings"].append(warning)
+            for chapter in parsed_result.chapters:
                 if chapter.paragraphs:
                     chapters.append(chapter)
                     chapter_index += 1
             inspection["summary"]["warning_count"] += warning_count
+            if parsed_result.diagnostics:
+                parsed_result.diagnostics.setdefault("continued_into", "")
+                inspection["details"].setdefault("chapter_split_diagnostics", []).append(parsed_result.diagnostics)
+        _renumber_epub_chapters(chapters)
         inspection["details"]["ignored_nodes"] = ignored_nodes
         inspection["details"]["spine_documents"] = spine_documents
     return Book(
@@ -172,6 +222,8 @@ def load_epub_book(path: Path, title: str | None = None, epub_config: EpubConfig
                 "warnings": inspection["warnings"],
                 "ignored_nodes": ignored_nodes,
                 "spine_documents": inspection["details"].get("spine_documents", []),
+                "chapter_split_diagnostics": inspection["details"].get("chapter_split_diagnostics", []),
+                "logical_chapter_paths": _logical_chapter_paths(chapters),
             }
         },
     )
@@ -205,7 +257,8 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
         parser_mode = _select_parser_mode(config)
         warning_count = 0
         spine_documents: list[dict[str, Any]] = []
-        navigation_labels = [label for labels in navigation.values() for label in labels]
+        navigation_labels = [target.label for targets in navigation.values() for target in targets]
+        navigation_diagnostics: list[dict[str, Any]] = []
         for spine_position, spine_item in enumerate(spine_items):
             if spine_item.path not in names:
                 warnings.append(f"spine 文件不存在：{spine_item.path}")
@@ -234,13 +287,15 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
                 data,
                 spine_item.path,
                 config,
-                navigation_titles=navigation.get(spine_item.path, ()),
+                navigation_targets=navigation.get(spine_item.path, ()),
                 document_role=role,
             )
             chapter_stats.append(stats)
             duplicate_counter.update(stats["texts"])
             image_alt_title_count += int(stats.get("image_alt_title_count", 0))
             warning_count += len(stats["warnings"])
+            if stats.get("navigation_diagnostics"):
+                navigation_diagnostics.append(stats["navigation_diagnostics"])
         duplicate_text_count = sum(1 for _, count in duplicate_counter.items() if count > 1)
         if duplicate_text_count and config.warn_on_duplicate_source:
             warnings.append(f"存在 {duplicate_text_count} 组重复原文，导出将依赖节点定位回写")
@@ -269,6 +324,7 @@ def inspect_epub(path: Path, epub_config: EpubConfig | None = None) -> dict:
             ],
             "navigation_chapter_paths": sorted(navigation_paths),
             "spine_documents": spine_documents,
+            "chapter_split_diagnostics": navigation_diagnostics,
         }
     status = "warning" if warnings else "ok"
     return {
@@ -730,18 +786,20 @@ def _navigation_chapters(
     archive: zipfile.ZipFile,
     opf: ET.Element,
     opf_path: str,
-) -> dict[str, list[str]]:
-    """Return navigation labels grouped by their target XHTML path.
+) -> dict[str, list[_NavigationTarget]]:
+    """Return ordered navigation targets grouped by their target XHTML path.
 
     A number of EPUB producers emit a perfectly usable NCX whose fragment
     targets were never written into the XHTML.  The path portion is still
     useful for selecting the real chapter document, while the labels provide
     an additional signal for distinguishing headings from stray body text.
+    Fragment resolution is deliberately deferred until the target document is
+    parsed because the translatable-node list depends on its document role.
     """
     manifest = _opf_manifest_items(opf)
     candidates = [_find_toc_path(opf, manifest, opf_path)]
     candidates.append(_find_nav_path(manifest, opf_path))
-    result: dict[str, list[str]] = {}
+    result: dict[str, list[_NavigationTarget]] = {}
     for navigation_path in dict.fromkeys(path for path in candidates if path):
         if navigation_path not in archive.namelist():
             continue
@@ -763,8 +821,18 @@ def _navigation_chapters(
                     "",
                 )
                 if label and content:
-                    target = _norm_zip_path(posixpath.join(base, _link_path(html.unescape(content))))
-                    result.setdefault(target, []).append(label)
+                    target_value = html.unescape(content)
+                    path_part, separator, fragment = target_value.partition("#")
+                    target = _norm_zip_path(posixpath.join(base, _link_path(path_part)))
+                    result.setdefault(target, []).append(
+                        _NavigationTarget(
+                            label=label,
+                            path=target,
+                            fragment=unquote(fragment) if separator else "",
+                            navigation_path=navigation_path,
+                            ordinal=sum(len(items) for items in result.values()),
+                        )
+                    )
         else:
             for anchor in root.iter():
                 if _local_name(anchor.tag) != "a":
@@ -772,13 +840,27 @@ def _navigation_chapters(
                 href = anchor.attrib.get("href", "")
                 label = _element_text(anchor)
                 if href and label and not _external_link(href):
-                    target = _norm_zip_path(posixpath.join(base, _link_path(html.unescape(href))))
-                    result.setdefault(target, []).append(label)
+                    target_value = html.unescape(href)
+                    path_part, separator, fragment = target_value.partition("#")
+                    target = _norm_zip_path(posixpath.join(base, _link_path(path_part)))
+                    result.setdefault(target, []).append(
+                        _NavigationTarget(
+                            label=label,
+                            path=target,
+                            fragment=unquote(fragment) if separator else "",
+                            navigation_path=navigation_path,
+                            ordinal=sum(len(items) for items in result.values()),
+                        )
+                    )
         if result:
             # Prefer the first valid navigation document (normally NCX) so a
             # generic EPUB3 nav cannot add unrelated links to the chapter map.
             break
     return result
+
+
+def _navigation_titles(targets: Sequence[_NavigationTarget]) -> tuple[str, ...]:
+    return tuple(target.label for target in targets if target.label)
 
 
 def _is_html_item(item: dict[str, str]) -> bool:
@@ -802,6 +884,27 @@ _CHAPTER_MARKER_RE = re.compile(
     r"(?P<unit>章|話|節|部)(?P<suffix>.*)$"
 )
 
+_DECORATOR_PAIRS = (
+    ("【", "】"),
+    ("［", "］"),
+    ("[", "]"),
+    ("（", "）"),
+    ("(", ")"),
+    ("「", "」"),
+    ("『", "』"),
+)
+
+
+def _strip_outer_chapter_decorators(text: str) -> tuple[str, str]:
+    """Return normalized matching text and the balanced outer pair, if any."""
+    normalized = _normalize_text(text)
+    for left, right in _DECORATOR_PAIRS:
+        if normalized.startswith(left) and normalized.endswith(right) and len(normalized) >= len(left) + len(right):
+            inner = normalized[len(left) : len(normalized) - len(right)]
+            if inner:
+                return inner, left + right
+    return normalized, ""
+
 
 def _parse_chapter_number(value: str) -> int | None:
     value = value.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
@@ -824,7 +927,8 @@ def _parse_chapter_number(value: str) -> int | None:
 
 def _chapter_marker(text: str, tag: str, node_index: int) -> _ChapterMarker | None:
     normalized = _normalize_text(text)
-    match = _CHAPTER_MARKER_RE.match(normalized)
+    matching_text, _ = _strip_outer_chapter_decorators(normalized)
+    match = _CHAPTER_MARKER_RE.match(matching_text)
     if not match:
         return None
     number = _parse_chapter_number(match.group("number"))
@@ -835,7 +939,8 @@ def _chapter_marker(text: str, tag: str, node_index: int) -> _ChapterMarker | No
 
 
 def _normalized_label(value: str) -> str:
-    return re.sub(r"\s+", "", _normalize_text(value)).casefold()
+    matching_text, _ = _strip_outer_chapter_decorators(value)
+    return re.sub(r"\s+", "", matching_text).casefold()
 
 
 def _marker_matches_navigation(marker: _ChapterMarker, navigation_titles: Sequence[str]) -> bool:
@@ -887,7 +992,7 @@ def _select_chapter_markers(
     return accepted, ignored, warnings
 
 
-def _build_epub_chapters(
+def _build_epub_chapters_result(
     nodes: Sequence[_EpubNode],
     index: int,
     source_path: str,
@@ -895,21 +1000,53 @@ def _build_epub_chapters(
     parser_name: str,
     navigation_titles: Sequence[str] = (),
     document_role: str = "chapter",
-) -> tuple[list[Chapter], int, list[int]]:
+    chapter_starts: Sequence[tuple[int, str, int | None]] | None = None,
+    toc_used: bool = False,
+) -> _ChapterParseResult:
     split_chapters = document_role == "chapter"
     if split_chapters:
-        markers, ignored, warning_count = _select_chapter_markers(nodes, navigation_titles)
+        regex_markers, ignored, warning_count = _select_chapter_markers(nodes, navigation_titles)
     else:
         # Front matter, cover, TOC, and colophon are translatable documents,
         # but chapter markers inside them are labels or links rather than
         # body chapter boundaries.
-        markers, ignored, warning_count = [], set(), 0
-    if len(markers) >= 2:
+        regex_markers, ignored, warning_count = [], set(), 0
+    markers = regex_markers
+    first_marker_node_index: int | None = None
+    first_marker_number: int | None = None
+    if chapter_starts:
+        # Keep nodes before the first TOC target in the first generated
+        # chapter.  The loader can then attach that prefix to the preceding
+        # logical chapter when the spine split happened mid-chapter.
+        valid_starts = [item for item in chapter_starts if 0 <= item[0] < len(nodes)]
+        first_marker_node_index = valid_starts[0][0] if valid_starts else None
+        first_marker_number = valid_starts[0][2] if valid_starts else None
+        starts = [0] + [item[0] for item in valid_starts[1:]]
+        titles = [item[1] for item in valid_starts]
+        markers = []
+        for offset, start in enumerate(starts):
+            marker_node_index = first_marker_node_index if offset == 0 else start
+            body_marker = next((marker for marker in regex_markers if marker.node_index == marker_node_index), None)
+            if body_marker is not None:
+                titles[offset] = body_marker.title
+                markers.append(body_marker)
+            else:
+                label_marker = _chapter_marker(titles[offset], "nav", offset)
+                if label_marker is not None:
+                    markers.append(replace(label_marker, node_index=marker_node_index))
+                else:
+                    markers.append(_ChapterMarker(marker_node_index, titles[offset], valid_starts[offset][2] or 0, "", ""))
+    elif len(markers) >= 2:
         starts = [0] + [marker.node_index for marker in markers[1:]]
         titles = [marker.title for marker in markers]
+        first_marker_node_index = markers[0].node_index
+        first_marker_number = markers[0].number
     else:
         starts = [0]
         titles = [markers[0].title if markers else (default_title or _DOCUMENT_ROLE_LABELS.get(document_role, "Chapter"))]
+        if markers:
+            first_marker_node_index = markers[0].node_index
+            first_marker_number = markers[0].number
 
     chapters: list[Chapter] = []
     for offset, start in enumerate(starts):
@@ -950,7 +1087,264 @@ def _build_epub_chapters(
             )
             paragraph_index += 1
         chapters.append(chapter)
-    return chapters, warning_count, sorted(ignored)
+    return _ChapterParseResult(
+        chapters=chapters,
+        warning_count=warning_count,
+        ignored_nodes=sorted(ignored),
+        leading_nodes=list(nodes[:first_marker_node_index]) if first_marker_node_index else [],
+        first_marker_number=first_marker_number,
+        first_marker_node_index=first_marker_node_index,
+        markers=markers,
+        toc_used=toc_used,
+    )
+
+
+def _build_epub_chapters(
+    nodes: Sequence[_EpubNode],
+    index: int,
+    source_path: str,
+    default_title: str,
+    parser_name: str,
+    navigation_titles: Sequence[str] = (),
+    document_role: str = "chapter",
+) -> tuple[list[Chapter], int, list[int]]:
+    """Backward-compatible tuple wrapper around the richer parse result."""
+    result = _build_epub_chapters_result(
+        nodes,
+        index,
+        source_path,
+        default_title,
+        parser_name,
+        navigation_titles,
+        document_role,
+    )
+    return result.chapters, result.warning_count, result.ignored_nodes
+
+
+def _resolve_navigation_targets(
+    targets: Sequence[_NavigationTarget],
+    root: Any,
+    nodes: Sequence[Any],
+) -> list[_NavigationTarget]:
+    if not targets:
+        return []
+    if isinstance(root, ET.Element):
+        elements = list(root.iter())
+    else:
+        elements = list(root.find_all(True))
+    element_positions = {id(element): position for position, element in enumerate(elements)}
+    node_positions = {id(node): position for position, node in enumerate(nodes)}
+    resolved: list[_NavigationTarget] = []
+    for target in targets:
+        if not target.fragment:
+            resolved.append(replace(target, resolution="file"))
+            continue
+        fragment = unquote(html.unescape(target.fragment))
+        anchor = next(
+            (
+                element
+                for element in elements
+                if fragment
+                in {
+                    html.unescape(str(element.attrib.get("id", "")))
+                    if isinstance(root, ET.Element)
+                    else html.unescape(str(element.attrs.get("id", ""))),
+                    html.unescape(str(element.attrib.get("name", "")))
+                    if isinstance(root, ET.Element)
+                    else html.unescape(str(element.attrs.get("name", ""))),
+                }
+            ),
+            None,
+        )
+        if anchor is None:
+            resolved.append(replace(target, resolution="fragment-missing", resolved_fragment=fragment))
+            continue
+        node_index = node_positions.get(id(anchor))
+        resolution = "fragment"
+        if node_index is None:
+            ancestors = [
+                (node_positions[id(node)], node)
+                for node in nodes
+                if id(node) in node_positions and _is_descendant(anchor, node, root_is_xml=isinstance(root, ET.Element))
+            ]
+            if ancestors:
+                node_index = max(ancestors)[0]
+                resolution = "fragment-ancestor"
+        if node_index is None:
+            descendants = [
+                (node_positions[id(node)], node)
+                for node in nodes
+                if id(node) in node_positions and _is_descendant(node, anchor, root_is_xml=isinstance(root, ET.Element))
+            ]
+            if descendants:
+                node_index = min(descendants)[0]
+                resolution = "fragment-descendant"
+        if node_index is None:
+            anchor_position = element_positions.get(id(anchor), -1)
+            following = [
+                (position, id(node))
+                for position, node in enumerate(nodes)
+                if element_positions.get(id(node), -1) > anchor_position
+            ]
+            if following:
+                node_index = min(following)[0]
+                resolution = "fragment-next"
+        if node_index is None:
+            resolved.append(replace(target, resolution="fragment-unmapped", resolved_fragment=fragment))
+        else:
+            resolved.append(
+                replace(
+                    target,
+                    node_index=node_index,
+                    resolution=resolution,
+                    resolved_fragment=fragment,
+                )
+            )
+    return resolved
+
+
+def _is_descendant(node: Any, ancestor: Any, *, root_is_xml: bool) -> bool:
+    if root_is_xml:
+        return any(child is node for child in ancestor.iter())
+    return node is ancestor or ancestor in getattr(node, "parents", ())
+
+
+def _toc_chapter_starts(
+    nodes: Sequence[_EpubNode],
+    targets: Sequence[_NavigationTarget],
+    *,
+    document_role: str,
+) -> tuple[list[tuple[int, str, int | None]] | None, list[_NavigationTarget], int, dict[str, Any]]:
+    """Build chapter starts from resolved TOC targets, or request regex fallback."""
+    if document_role != "chapter" or not targets:
+        return None, list(targets), 0, {}
+    fragment_targets = [target for target in targets if target.fragment]
+    resolved_targets = list(targets)
+    diagnostics: dict[str, Any] = {
+        "toc_target_count": len(targets),
+        "fragment_count": len(fragment_targets),
+        "fragment_resolved_count": sum(target.node_index is not None for target in fragment_targets),
+        "target_resolutions": [
+            {
+                "label": target.label,
+                "path": target.path,
+                "fragment": target.fragment,
+                "resolved_fragment": target.resolved_fragment,
+                "node_index": target.node_index,
+                "resolution": target.resolution,
+                "ordinal": target.ordinal,
+            }
+            for target in resolved_targets
+        ],
+    }
+    if not fragment_targets or any(target.node_index is None for target in fragment_targets):
+        return None, resolved_targets, len(fragment_targets), diagnostics
+
+    starts: list[tuple[int, str, int | None]] = []
+    previous_index = -1
+    for target in fragment_targets:
+        assert target.node_index is not None
+        body_marker = _chapter_marker(nodes[target.node_index].text, nodes[target.node_index].tag, target.node_index)
+        label_marker = _chapter_marker(target.label, "nav", target.ordinal)
+        marker = body_marker or label_marker
+        if marker is None:
+            return None, resolved_targets, 1, diagnostics
+        if target.node_index <= previous_index:
+            return None, resolved_targets, 1, diagnostics
+        previous_index = target.node_index
+        starts.append((target.node_index, body_marker.title if body_marker else target.label, marker.number))
+    if not starts:
+        return None, resolved_targets, 0, diagnostics
+    return starts, resolved_targets, 0, diagnostics
+
+
+def _parse_epub_chapters_result(
+    data: bytes,
+    index: int,
+    source_path: str,
+    config: EpubConfig,
+    navigation_titles: Sequence[str] = (),
+    document_role: str = "chapter",
+    navigation_targets: Sequence[_NavigationTarget] = (),
+) -> _ChapterParseResult:
+    parser_name = "stdlib"
+    try:
+        root = ET.fromstring(data)
+        nodes = [
+            _EpubNode(
+                text=_element_text(element),
+                tag=_local_name(element.tag),
+                node_id=element.attrib.get("id", ""),
+                node_class=element.attrib.get("class", ""),
+                risks=_element_risks(element),
+            )
+            for element in _translatable_elements(root, document_role=document_role)
+        ]
+    except ET.ParseError:
+        soup = _soup(data)
+        if soup is None:
+            raise
+        parser_name = "soup"
+        nodes = [
+            _EpubNode(
+                text=_normalize_text(node.get_text(" ")),
+                tag=str(getattr(node, "name", "")),
+                node_id=str(node.attrs.get("id", "")),
+                node_class=" ".join(node.attrs.get("class", [])) if isinstance(node.attrs.get("class"), list) else str(node.attrs.get("class", "")),
+                risks=_soup_node_risks(node),
+            )
+            for node in _soup_translatable_nodes(soup, document_role=document_role)
+        ]
+        root = soup
+
+    resolved_targets = _resolve_navigation_targets(navigation_targets, root, _translatable_elements(root, document_role=document_role) if isinstance(root, ET.Element) else _soup_translatable_nodes(root, document_role=document_role))
+    toc_starts, resolved_targets, toc_warning_count, toc_diagnostics = _toc_chapter_starts(
+        nodes,
+        resolved_targets,
+        document_role=document_role,
+    )
+    titles = _navigation_titles(resolved_targets)
+    default_title = (
+        _document_title(root, document_role, index)
+        if isinstance(root, ET.Element)
+        else _normalize_text(root.find(["h1", "h2"]).get_text(" "))
+        if root.find(["h1", "h2"])
+        else _DOCUMENT_ROLE_LABELS.get(document_role, f"Chapter {index}")
+    )
+    result = _build_epub_chapters_result(
+        nodes,
+        index,
+        source_path,
+        default_title,
+        parser_name,
+        titles or navigation_titles,
+        document_role,
+        chapter_starts=toc_starts,
+        toc_used=toc_starts is not None,
+    )
+    result.warning_count += toc_warning_count
+    if parser_name == "soup":
+        result.warning_count += 1
+    result.diagnostics = {
+        "path": source_path,
+        "document_role": document_role,
+        "toc_used": result.toc_used,
+        "toc_target_count": int(toc_diagnostics.get("toc_target_count", 0)),
+        "fragment_count": int(toc_diagnostics.get("fragment_count", 0)),
+        "fragment_resolved_count": int(toc_diagnostics.get("fragment_resolved_count", 0)),
+        "regex_fallback_candidate_count": len(
+            [marker for node_index, node in enumerate(nodes) if (marker := _chapter_marker(node.text, node.tag, node_index)) is not None]
+        ),
+        "accepted_marker_count": len(result.markers),
+        "ignored_node_count": len(result.ignored_nodes),
+        "leading_nodes": len(result.leading_nodes),
+        "first_marker_number": result.first_marker_number,
+        "first_marker_node_index": result.first_marker_node_index,
+        "target_resolutions": toc_diagnostics.get("target_resolutions", []),
+    }
+    if toc_warning_count:
+        result.diagnostics["toc_fallback_warning"] = "部分 TOC fragment 无法映射到正文节点，已回退到正文标记"
+    return result
 
 
 def _parse_epub_chapters(
@@ -961,54 +1355,80 @@ def _parse_epub_chapters(
     navigation_titles: Sequence[str] = (),
     document_role: str = "chapter",
 ) -> tuple[list[Chapter], int, list[int]]:
-    try:
-        root = ET.fromstring(data)
-    except ET.ParseError:
-        soup = _soup(data)
-        if soup is not None:
-            nodes = [
-                _EpubNode(
-                    text=_normalize_text(node.get_text(" ")),
-                    tag=str(getattr(node, "name", "")),
-                    node_id=str(node.attrs.get("id", "")),
-                    node_class=" ".join(node.attrs.get("class", [])) if isinstance(node.attrs.get("class"), list) else str(node.attrs.get("class", "")),
-                    risks=_soup_node_risks(node),
-                )
-                for node in _soup_translatable_nodes(soup, document_role=document_role)
-            ]
-            title_node = soup.find(["h1", "h2"])
-            title = _normalize_text(title_node.get_text(" ")) if title_node else _DOCUMENT_ROLE_LABELS.get(document_role, f"Chapter {index}")
-            chapters, warning_count, ignored = _build_epub_chapters(
-                nodes,
-                index,
-                source_path,
-                title,
-                "soup",
-                navigation_titles,
-                document_role,
-            )
-            return chapters, warning_count + 1, ignored
-        raise
-
-    nodes = [
-        _EpubNode(
-            text=_element_text(element),
-            tag=_local_name(element.tag),
-            node_id=element.attrib.get("id", ""),
-            node_class=element.attrib.get("class", ""),
-            risks=_element_risks(element),
-        )
-        for element in _translatable_elements(root, document_role=document_role)
-    ]
-    return _build_epub_chapters(
-        nodes,
+    result = _parse_epub_chapters_result(
+        data,
         index,
         source_path,
-        _document_title(root, document_role, index),
-        "stdlib",
-        navigation_titles,
-        document_role,
+        config,
+        navigation_titles=navigation_titles,
+        document_role=document_role,
     )
+    return result.chapters, result.warning_count, result.ignored_nodes
+
+
+def _attach_leading_nodes(
+    result: _ChapterParseResult,
+    previous: Chapter | None,
+    *,
+    role: str,
+    navigation_targets: Sequence[_NavigationTarget],
+) -> int:
+    """Attach a split document prefix to the preceding logical chapter.
+
+    A non-zero first marker is not sufficient by itself: the navigation entry
+    for that marker must also be present.  Without that evidence the prefix
+    stays in the current physical document and a diagnostic warning records
+    the conservative decision.
+    """
+    first_marker_node = result.first_marker_node_index
+    if role != "chapter" or first_marker_node is None or first_marker_node <= 0 or not result.chapters:
+        return 0
+    navigation_numbers = {
+        marker.number
+        for target in navigation_targets
+        if (marker := _chapter_marker(target.label, "nav", target.ordinal)) is not None
+    }
+    has_continuation_evidence = previous is not None and result.first_marker_number in navigation_numbers
+    first_chapter = result.chapters[0]
+    leading = [
+        paragraph
+        for paragraph in first_chapter.paragraphs
+        if int(paragraph.metadata.get("epub", {}).get("node_index", -1)) < first_marker_node
+    ]
+    if not leading:
+        return 0
+    if has_continuation_evidence:
+        first_chapter.paragraphs = [paragraph for paragraph in first_chapter.paragraphs if paragraph not in leading]
+        previous.paragraphs.extend(leading)
+        result.diagnostics["continued_into"] = previous.id
+        result.diagnostics["leading_nodes"] = len(leading)
+        return 0
+    result.diagnostics["continuation_warning"] = "首个章节标记前存在未确认续文，已保守保留在当前物理文件"
+    return 1
+
+
+def _renumber_epub_chapters(chapters: Sequence[Chapter]) -> None:
+    for chapter_index, chapter in enumerate(chapters, start=1):
+        chapter.id = f"c{chapter_index:04d}"
+        chapter.index = chapter_index
+        for paragraph_index, paragraph in enumerate(chapter.paragraphs, start=1):
+            paragraph.chapter_id = chapter.id
+            paragraph.index = paragraph_index
+            paragraph.id = f"{chapter.id}-p{paragraph_index:05d}"
+
+
+def _logical_chapter_paths(chapters: Sequence[Chapter]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for chapter in chapters:
+        paths: list[str] = []
+        for paragraph in chapter.paragraphs:
+            path = str(paragraph.metadata.get("epub", {}).get("chapter_path", ""))
+            if path and path not in paths:
+                paths.append(path)
+        if not paths and chapter.source_path:
+            paths.append(chapter.source_path)
+        result[chapter.id] = paths
+    return result
 
 
 def _parse_epub_chapter(
@@ -1188,26 +1608,49 @@ def export_txt(book: Book, output: Path, bilingual: bool = False) -> None:
     output.write_text("\n".join(chunks).rstrip() + "\n", encoding="utf-8")
 
 
-def _chapter_anchor_map(chapters_by_path: Mapping[str, Sequence[Chapter]]) -> dict[str, list[tuple[int, str]]]:
+def _chapter_anchor_map(
+    chapters_by_path: Mapping[str, Sequence[Chapter]],
+    all_chapters: Sequence[Chapter] | None = None,
+) -> dict[str, list[tuple[int, str]]]:
+    """Map each physical document to globally stable logical chapter anchors."""
     result: dict[str, list[tuple[int, str]]] = {}
-    for source_path, chapters in chapters_by_path.items():
-        body_chapter_index = 0
-        for chapter in chapters:
-            if chapter.role != "chapter" or not chapter.paragraphs:
-                continue
-            body_chapter_index += 1
-            marker = next(
-                (paragraph for paragraph in chapter.paragraphs if _normalize_text(paragraph.source) == _normalize_text(chapter.title)),
-                chapter.paragraphs[0],
-            )
-            locator = marker.metadata.get("epub", {})
-            if "node_index" not in locator:
-                continue
-            try:
-                node_index = int(locator["node_index"])
-            except (TypeError, ValueError):
-                continue
-            result.setdefault(source_path, []).append((node_index, f"chapter-{body_chapter_index:04d}"))
+    if all_chapters is None:
+        seen: set[str] = set()
+        ordered: list[Chapter] = []
+        for chapters in chapters_by_path.values():
+            for chapter in chapters:
+                if chapter.id not in seen:
+                    seen.add(chapter.id)
+                    ordered.append(chapter)
+        all_chapters = ordered
+    body_chapter_index = 0
+    for chapter in all_chapters:
+        if chapter.role != "chapter" or not chapter.paragraphs:
+            continue
+        body_chapter_index += 1
+        marker = next(
+            (
+                paragraph
+                for paragraph in chapter.paragraphs
+                if _normalized_label(paragraph.source) == _normalized_label(chapter.title)
+                or _chapter_marker(
+                    paragraph.source,
+                    str(paragraph.metadata.get("epub", {}).get("node_tag", "")),
+                    int(paragraph.metadata.get("epub", {}).get("node_index", -1)),
+                )
+                is not None
+            ),
+            chapter.paragraphs[0],
+        )
+        marker_path = str(marker.metadata.get("epub", {}).get("chapter_path", chapter.source_path))
+        if marker_path not in chapters_by_path:
+            continue
+        locator = marker.metadata.get("epub", {})
+        try:
+            node_index = int(locator["node_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        result.setdefault(marker_path, []).append((node_index, f"chapter-{body_chapter_index:04d}"))
     return result
 
 
@@ -1249,9 +1692,17 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
     warnings: list[str] = []
     chapters_by_path: dict[str, list[Chapter]] = {}
     for chapter in book.chapters:
-        chapters_by_path.setdefault(chapter.source_path, []).append(chapter)
+        paths = {
+            str(paragraph.metadata.get("epub", {}).get("chapter_path", ""))
+            for paragraph in chapter.paragraphs
+            if paragraph.metadata.get("epub", {}).get("chapter_path")
+        }
+        if not paths and chapter.source_path:
+            paths.add(chapter.source_path)
+        for source_path in paths:
+            chapters_by_path.setdefault(source_path, []).append(chapter)
     ignored_nodes_by_path = book.metadata.get("epub", {}).get("ignored_nodes", {})
-    anchor_map_by_path = _chapter_anchor_map(chapters_by_path)
+    anchor_map_by_path = _chapter_anchor_map(chapters_by_path, book.chapters)
     title_translations = _chapter_title_translations(book)
     source = Path(book.source_file)
     with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(output, "w") as dst:
@@ -1282,6 +1733,7 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
                         config,
                         bilingual=bilingual,
                         document_role=document_role,
+                        source_path=info.filename,
                     )
                     warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
                 if title_translations:
@@ -1299,6 +1751,7 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
                         ignored_nodes=ignored_nodes_by_path.get(info.filename, ()),
                         chapter_anchor_ids=dict(anchor_map_by_path.get(info.filename, ())),
                         document_role=document_role,
+                        source_path=info.filename,
                     )
                     warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
             _write_epub_member(dst, info, data)
@@ -1393,6 +1846,7 @@ def _replace_chapters_by_locator(
     ignored_nodes: Sequence[int] = (),
     chapter_anchor_ids: Mapping[int, str] | None = None,
     document_role: str = "chapter",
+    source_path: str = "",
 ) -> tuple[bytes, list[str]]:
     warnings: list[str] = []
     try:
@@ -1405,17 +1859,27 @@ def _replace_chapters_by_locator(
             bilingual=bilingual,
             ignored_nodes=ignored_nodes,
             document_role=document_role,
+            source_path=source_path,
         )
         if soup_result is not None:
             return soup_result
         return data, ["章节 XML 无法解析，且增强解析器不可用，已保留原文"]
     nodes = _translatable_elements(root, document_role=document_role)
-    paragraphs = [paragraph for chapter in chapters for paragraph in chapter.paragraphs]
+    paragraphs = [
+        paragraph
+        for chapter in chapters
+        for paragraph in chapter.paragraphs
+        if not source_path or str(paragraph.metadata.get("epub", {}).get("chapter_path", chapter.source_path)) == source_path
+    ]
     for paragraph in paragraphs:
         if not paragraph.translated:
             continue
         locator = paragraph.metadata.get("epub", {})
-        node_index = int(locator.get("node_index", paragraph.index - 1))
+        try:
+            node_index = int(locator.get("node_index", paragraph.index - 1))
+        except (TypeError, ValueError):
+            warnings.append(f"{paragraph.id} 节点定位字段无效，已保留原文")
+            continue
         if node_index < 0 or node_index >= len(nodes):
             warnings.append(f"{paragraph.id} 节点定位失效，已保留原文")
             continue
@@ -1454,18 +1918,28 @@ def _replace_chapters_by_locator_with_soup(
     ignored_nodes: Sequence[int] = (),
     chapter_anchor_ids: Mapping[int, str] | None = None,
     document_role: str = "chapter",
+    source_path: str = "",
 ) -> tuple[bytes, list[str]] | None:
     soup = _soup(data)
     if soup is None:
         return None
     warnings: list[str] = []
     nodes = _soup_translatable_nodes(soup, document_role=document_role)
-    paragraphs = [paragraph for chapter in chapters for paragraph in chapter.paragraphs]
+    paragraphs = [
+        paragraph
+        for chapter in chapters
+        for paragraph in chapter.paragraphs
+        if not source_path or str(paragraph.metadata.get("epub", {}).get("chapter_path", chapter.source_path)) == source_path
+    ]
     for paragraph in paragraphs:
         if not paragraph.translated:
             continue
         locator = paragraph.metadata.get("epub", {})
-        node_index = int(locator.get("node_index", paragraph.index - 1))
+        try:
+            node_index = int(locator.get("node_index", paragraph.index - 1))
+        except (TypeError, ValueError):
+            warnings.append(f"{paragraph.id} 节点定位字段无效，已保留原文")
+            continue
         if node_index < 0 or node_index >= len(nodes):
             warnings.append(f"{paragraph.id} 节点定位失效，已保留原文")
             continue
@@ -1520,6 +1994,7 @@ def _inspect_chapter_bytes(
     config: EpubConfig,
     navigation_titles: Sequence[str] = (),
     document_role: str = "chapter",
+    navigation_targets: Sequence[_NavigationTarget] = (),
 ) -> dict:
     warnings: list[str] = []
     used_fallback_parser = False
@@ -1555,6 +2030,7 @@ def _inspect_chapter_bytes(
                 "texts": [],
             }
         used_fallback_parser = True
+        root = soup
         nodes = _soup_translatable_nodes(soup, document_role=document_role)
         risks = [_soup_node_risks(node) for node in nodes]
         texts = [_normalize_text(node.get_text(" ")) for node in nodes]
@@ -1589,9 +2065,15 @@ def _inspect_chapter_bytes(
         for index, (node, text) in enumerate(zip(nodes, texts))
         if text
     ]
+    resolved_targets = _resolve_navigation_targets(navigation_targets, root, nodes)
+    toc_starts, resolved_targets, toc_warning_count, navigation_diagnostics = _toc_chapter_starts(
+        records,
+        resolved_targets,
+        document_role=document_role,
+    )
     if document_role == "chapter":
-        markers, ignored, marker_warning_count = _select_chapter_markers(records, navigation_titles)
-        detected_chapter_count = len(markers)
+        markers, ignored, marker_warning_count = _select_chapter_markers(records, _navigation_titles(resolved_targets) or navigation_titles)
+        detected_chapter_count = len(toc_starts) if toc_starts is not None else len(markers)
         if detected_chapter_count < 2:
             detected_chapter_count = 1
     else:
@@ -1600,6 +2082,10 @@ def _inspect_chapter_bytes(
     risk_count = sum(1 for item in risks if item)
     if ruby_count and config.warn_on_ruby:
         warnings.append(f"包含 {ruby_count} 个 ruby 节点，导出后建议人工复核")
+    if toc_warning_count:
+        warnings.append("部分 TOC fragment 无法映射到正文节点，已回退到正文标记")
+    first_marker_node = toc_starts[0][0] if toc_starts else markers[0].node_index if markers else None
+    first_marker_number = toc_starts[0][2] if toc_starts else markers[0].number if markers else None
     return {
         "path": path,
         "document_role": document_role,
@@ -1608,6 +2094,24 @@ def _inspect_chapter_bytes(
         "detected_chapter_count": detected_chapter_count,
         "ignored_structural_node_count": len(ignored),
         "marker_warning_count": marker_warning_count,
+        "toc_fallback_warning_count": toc_warning_count,
+        "navigation_diagnostics": {
+            "path": path,
+            "document_role": document_role,
+            "toc_used": toc_starts is not None,
+            "toc_target_count": int(navigation_diagnostics.get("toc_target_count", 0)),
+            "fragment_count": int(navigation_diagnostics.get("fragment_count", 0)),
+            "fragment_resolved_count": int(navigation_diagnostics.get("fragment_resolved_count", 0)),
+            "regex_fallback_candidate_count": len(
+                [marker for node_index, node in enumerate(records) if (marker := _chapter_marker(node.text, node.tag, node_index)) is not None]
+            ),
+            "accepted_marker_count": len(markers) if document_role == "chapter" else 0,
+            "ignored_node_count": len(ignored),
+            "leading_nodes": len(records[:first_marker_node]) if first_marker_node else 0,
+            "first_marker_number": first_marker_number,
+            "first_marker_node_index": first_marker_node,
+            "target_resolutions": navigation_diagnostics.get("target_resolutions", []),
+        },
         "ruby_count": ruby_count,
         "link_count": link_count,
         "footnote_link_count": footnote_link_count,
@@ -1676,18 +2180,25 @@ def _text_hash(text: str) -> str:
 
 def _chapter_title_translations(book: Book) -> dict[str, str]:
     mapping: dict[str, str] = {}
+
+    def add_mapping(source: str, translated: str) -> None:
+        if not source:
+            return
+        mapping[source] = translated
+        mapping[_normalized_label(source)] = translated
+
     for chapter in book.chapters:
         if chapter.paragraphs and chapter.paragraphs[0].translated:
             first = chapter.paragraphs[0]
             # EPUB TOC entries often use the file-level chapter title while the
             # visible translated heading is the first paragraph in the file.
             # Map both forms so navigation text follows the translated heading.
-            mapping[chapter.title] = first.translated
-            mapping[first.source] = first.translated
+            add_mapping(chapter.title, first.translated)
+            add_mapping(first.source, first.translated)
         for paragraph in chapter.paragraphs:
             epub = paragraph.metadata.get("epub", {})
             if epub.get("node_tag") in {"h1", "h2", "h3", "h4", "h5", "h6"} and paragraph.translated:
-                mapping[paragraph.source] = paragraph.translated
+                add_mapping(paragraph.source, paragraph.translated)
     return mapping
 
 
@@ -1701,16 +2212,18 @@ def _replace_navigation_text(data: bytes, title_translations: dict[str, str]) ->
         changed = 0
         for node in soup.find_all(["a", "span", "text"]):
             text = _normalize_text(node.get_text(" "))
-            if text in title_translations:
+            translated = title_translations.get(text) or title_translations.get(_normalized_label(text))
+            if translated:
                 node.clear()
-                node.string = title_translations[text]
+                node.string = translated
                 changed += 1
         return str(soup).encode("utf-8"), [] if changed else []
     changed = 0
     for element in root.iter():
         text = _element_text(element)
-        if text in title_translations and not list(element):
-            element.text = title_translations[text]
+        translated = title_translations.get(text) or title_translations.get(_normalized_label(text))
+        if translated and not list(element):
+            element.text = translated
             changed += 1
     return _serialize_xml(root), [] if changed else []
 

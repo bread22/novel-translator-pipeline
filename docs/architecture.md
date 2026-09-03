@@ -1,4 +1,4 @@
-# Novel Translator Pipeline v0.4.0 架构
+# Novel Translator Pipeline v0.5.0 架构
 
 > 当前实现说明。发行包只包含现行架构文档，不包含内部阶段提案。
 

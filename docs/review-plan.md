@@ -1,6 +1,6 @@
 # 章节一致性审阅与长程记忆机制
 
-> v0.4.0 当前行为；实现位于 `translator/review/` 与 `translator/pipeline/chapter_pipeline.py`。
+> v0.5.0 当前行为；实现位于 `translator/review/` 与 `translator/pipeline/chapter_pipeline.py`。
 
 ## 1. 目标
 

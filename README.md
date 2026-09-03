@@ -1,7 +1,7 @@
 # Novel Translator Studio (Novel Translator Pipeline)
 
 [![CI](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/bread22/novel-translator-pipeline/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](CHANGELOG.md)
 [![Python 3.10–3.14](https://img.shields.io/badge/python-3.10%E2%80%933.14-blue.svg)](https://www.python.org/downloads/)
 [![Node 20](https://img.shields.io/badge/node-20-339933.svg)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/react-19-61dafb.svg)](https://react.dev/)
@@ -9,7 +9,7 @@
 
 **Novel Translator Studio** 是面向日文轻小说与网络小说的 AI 翻译、双审阅、术语治理和 EPUB 交付流水线。项目以 [`OYcedar/novel-translator`](https://github.com/OYcedar/novel-translator) 作为书籍注册与导出运行时，在本仓库内统一实现 Provider 路由、`JobManager` 队列、章节流水线、Glossary v3、长程记忆、FastAPI/SSE 服务和 React 工作台。
 
-当前稳定版本：**[v0.4.0](https://github.com/bread22/novel-translator-pipeline/releases/tag/v0.4.0)**。
+当前稳定版本：**[v0.5.0](https://github.com/bread22/novel-translator-pipeline/releases/tag/v0.5.0)**。
 
 ## 核心能力
 
@@ -68,7 +68,7 @@ SSE 用于通知和事件显示，REST snapshot 是最终状态校准来源。�
 整包包含已验证的 `frontend/dist`，运行时不需要 Node：
 
 ```bash
-VERSION=0.4.0
+VERSION=0.5.0
 curl -LO "https://github.com/bread22/novel-translator-pipeline/releases/download/v${VERSION}/novel-translator-pipeline-${VERSION}.tar.gz"
 curl -LO "https://github.com/bread22/novel-translator-pipeline/releases/download/v${VERSION}/SHA256SUMS-${VERSION}.txt"
 sha256sum -c SHA256SUMS-${VERSION}.txt --ignore-missing

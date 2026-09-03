@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-09-02
+
+### Added
+- 引入可持久化的 Knowledge Extractor 候选生命周期，支持窗口级提取、章节终结判定、证据溯源、冲突和回填迁移。
+- 为 Glossary 增加 OpenCC 人名校验、分类别名归一化、跨章节证据范围和候选晋级治理。
+- 集成 vendored Novel Translator Python API，并支持完整 EPUB spine、装饰型跨文件章节和文档角色识别。
+- 增加审阅备用端配置、翻译 fallback 事件、上下文假名保留和残留假名自动修复路径。
+
+### Changed
+- Knowledge、Glossary、Review、Provider 和章节流水线统一使用可回放的结构化状态与诊断，提升长任务恢复和失败路由的一致性。
+- EPUB 章节拆分、导航修复、元数据识别与导出流程改为覆盖完整文档结构，避免仅处理正文章节。
+- 本地运行时从 vendored CLI 模块收敛到 Python API，并清理不再使用的源输入和模块。
+- 更新配置模板、Provider fallback 文档、提示词、第三方声明和发布证据流程。
+
+### Quality
+- 补充 Knowledge 生命周期、Glossary v3/OpenCC、审阅写回门控、Provider 重试、EPUB 结构、API 契约和前后端回归覆盖。
+- 发布前置门禁继续覆盖 Python 3.10–3.14、TypeScript、lint、构建产物、OpenAPI、配置 dry-run、迁移 dry-run 与完整 release evidence。
+
 ## [0.4.0] - 2026-08-29
 
 ### Added

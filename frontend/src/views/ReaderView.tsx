@@ -76,7 +76,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
       }
     })();
     return () => controller.abort();
-  }, [book]);
+  }, [book?.id]);
 
   const loadChapterDetail = async (bookId: string, chapterId: string) => {
     detailAbort.current?.abort();

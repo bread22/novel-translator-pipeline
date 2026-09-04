@@ -59,21 +59,20 @@ function loadPersistedEvents(): Record<string, StreamEvent[]> {
 }
 
 function persistEvents(eventsByBook: Record<string, StreamEvent[]>): void {
-  const snapshot = Object.fromEntries(
-    Object.entries(eventsByBook).map(([bookId, events]) => [
-      bookId,
-      mergeEventHistory(events),
-    ]),
-  ) as Record<string, StreamEvent[]>;
+  try {
+    localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(eventsByBook));
+  } catch (err) {
+    const snapshot = Object.fromEntries(
+      Object.entries(eventsByBook).map(([bookId, events]) => [
+        bookId,
+        mergeEventHistory(events),
+      ]),
+    ) as Record<string, StreamEvent[]>;
 
-  // Keep the newest events when a browser's localStorage quota is already full.
-  // The server history remains the durable source and will hydrate this cache later.
-  let remainingEvents = Object.values(snapshot).reduce((total, events) => total + events.length, 0);
-  while (remainingEvents >= 0) {
-    try {
-      localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(snapshot));
-      return;
-    } catch (err) {
+    // Keep the newest events when a browser's localStorage quota is already full.
+    // The server history remains the durable source and will hydrate this cache later.
+    let remainingEvents = Object.values(snapshot).reduce((total, events) => total + events.length, 0);
+    while (remainingEvents >= 0) {
       const largestBook = Object.entries(snapshot)
         .filter(([, events]) => events.length > 0)
         .sort(([, left], [, right]) => right.length - left.length)[0];
@@ -83,6 +82,12 @@ function persistEvents(eventsByBook: Record<string, StreamEvent[]>): void {
       }
       snapshot[largestBook[0]] = snapshot[largestBook[0]].slice(1);
       remainingEvents -= 1;
+      try {
+        localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(snapshot));
+        return;
+      } catch {
+        // continue pruning
+      }
     }
   }
 }
@@ -144,6 +149,17 @@ export const App: React.FC = () => {
     }
   }, [requestCache]);
 
+  // Debounced Refresh Books
+  const refreshBooksTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedRefreshBooks = useCallback(() => {
+    if (refreshBooksTimeoutRef.current) {
+      clearTimeout(refreshBooksTimeoutRef.current);
+    }
+    refreshBooksTimeoutRef.current = setTimeout(() => {
+      refreshBooks();
+    }, 600);
+  }, [refreshBooks]);
+
   // Refresh active task status
   const refreshTask = useCallback(async () => {
     if (!selectedBookId) return;
@@ -166,6 +182,24 @@ export const App: React.FC = () => {
       console.error('Failed to fetch queue:', err);
     }
   }, [requestCache]);
+
+  // Debounced Refresh Queue
+  const refreshQueueTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedRefreshQueue = useCallback(() => {
+    if (refreshQueueTimeoutRef.current) {
+      clearTimeout(refreshQueueTimeoutRef.current);
+    }
+    refreshQueueTimeoutRef.current = setTimeout(() => {
+      refreshQueue();
+    }, 600);
+  }, [refreshQueue]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshBooksTimeoutRef.current) clearTimeout(refreshBooksTimeoutRef.current);
+      if (refreshQueueTimeoutRef.current) clearTimeout(refreshQueueTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     Promise.allSettled([refreshBooks(), refreshQueue()]).finally(() => setIsInitialLoading(false));
@@ -242,10 +276,10 @@ export const App: React.FC = () => {
       if (evt.event === 'queue_updated' && evt.data && typeof evt.data === 'object') {
         queueRevision.current += 1;
         dispatchServer({ type: 'queue', value: evt.data as QueueStatusResponse });
-        refreshBooks();
+        debouncedRefreshBooks();
       } else if (evt.event.startsWith('queue_')) {
-        refreshQueue();
-        refreshBooks();
+        debouncedRefreshQueue();
+        debouncedRefreshBooks();
       }
 
       // 2. Direct activeTask state update from event payload if present
@@ -275,8 +309,18 @@ export const App: React.FC = () => {
             .then((value) => dispatchServer({ type: 'task', value }))
             .catch(() => dispatchServer({ type: 'task', value: null }));
         }
-        refreshBooks();
-        refreshQueue();
+        const boundaryEvents = [
+          'chapter_started',
+          'chapter_completed',
+          'pipeline_completed',
+          'pipeline_paused',
+          'pipeline_resumed',
+          'pipeline_stopped',
+        ];
+        if (boundaryEvents.includes(evt.event)) {
+          debouncedRefreshBooks();
+          debouncedRefreshQueue();
+        }
       }
     }, (state) => {
       setSseState(state);
@@ -295,7 +339,7 @@ export const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, [refreshBooks, refreshQueue, requestCache]);
+  }, [refreshBooks, refreshQueue, debouncedRefreshBooks, debouncedRefreshQueue, requestCache]);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
 

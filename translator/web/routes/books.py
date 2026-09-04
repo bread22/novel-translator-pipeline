@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
 import os
@@ -52,19 +53,56 @@ def get_provenance_and_diagnostics(workspace: BookWorkspace) -> tuple[dict[str, 
     return provenance, diagnostics
 
 
+_EPUB_VALIDITY_CACHE: dict[tuple[Path, int, int], bool] = {}
+_EPUB_VALIDITY_CACHE_LOCK = threading.Lock()
+
+
 def _has_valid_epub(path: Path) -> bool:
-    if not path.is_file() or path.stat().st_size == 0 or not zipfile.is_zipfile(path):
-        return False
     try:
-        with zipfile.ZipFile(path) as archive:
-            return archive.testzip() is None and "META-INF/container.xml" in archive.namelist()
+        if not path.is_file():
+            return False
+        st = path.stat()
+        if st.st_size == 0:
+            return False
+        cache_key = (path.resolve(), st.st_mtime_ns, st.st_size)
+        with _EPUB_VALIDITY_CACHE_LOCK:
+            if cache_key in _EPUB_VALIDITY_CACHE:
+                return _EPUB_VALIDITY_CACHE[cache_key]
+
+        if not zipfile.is_zipfile(path):
+            valid = False
+        else:
+            with zipfile.ZipFile(path) as archive:
+                valid = "META-INF/container.xml" in archive.namelist()
+
+        with _EPUB_VALIDITY_CACHE_LOCK:
+            if len(_EPUB_VALIDITY_CACHE) > 500:
+                _EPUB_VALIDITY_CACHE.clear()
+            _EPUB_VALIDITY_CACHE[cache_key] = valid
+        return valid
     except (OSError, zipfile.BadZipFile):
         return False
 
 
-def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) -> BookSummary:
-    title = manifest.get("title", book_id)
-    source_type = manifest.get("source_type", "epub")
+@dataclass(frozen=True)
+class _ManifestMetrics:
+    title: str
+    source_type: str
+    total_chapters: int
+    total_paras: int
+    translated_paras: int
+    translated_chaps: int
+    created_at: str | None
+    updated_at: str | None
+
+
+_MANIFEST_CACHE: dict[tuple[Path, int, int], _ManifestMetrics] = {}
+_MANIFEST_CACHE_LOCK = threading.Lock()
+
+
+def _metrics_from_manifest_dict(book_id: str, manifest: dict[str, Any]) -> _ManifestMetrics:
+    title = str(manifest.get("title", book_id))
+    source_type = str(manifest.get("source_type", "epub"))
     chapters = manifest.get("chapters", [])
     total_chapters = len(chapters)
 
@@ -80,11 +118,46 @@ def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) ->
         if len(ch_paras) > 0 and ch_translated == len(ch_paras):
             translated_chaps += 1
 
-    progress = round(translated_paras / max(1, total_paras), 3) if total_paras > 0 else 0.0
+    return _ManifestMetrics(
+        title=title,
+        source_type=source_type,
+        total_chapters=total_chapters,
+        total_paras=total_paras,
+        translated_paras=translated_paras,
+        translated_chaps=translated_chaps,
+        created_at=manifest.get("created_at"),
+        updated_at=manifest.get("updated_at"),
+    )
 
-    workspace = BookWorkspace.at(output_root, title)
+
+def _get_manifest_metrics(manifest_file: Path) -> _ManifestMetrics | None:
+    try:
+        st = manifest_file.stat()
+        key = (manifest_file.resolve(), st.st_mtime_ns, st.st_size)
+        with _MANIFEST_CACHE_LOCK:
+            if key in _MANIFEST_CACHE:
+                return _MANIFEST_CACHE[key]
+
+        manifest = read_json(manifest_file, default=None)
+        if not manifest or not isinstance(manifest, dict):
+            return None
+
+        metrics = _metrics_from_manifest_dict(manifest_file.parent.name, manifest)
+        with _MANIFEST_CACHE_LOCK:
+            if len(_MANIFEST_CACHE) > 500:
+                _MANIFEST_CACHE.clear()
+            _MANIFEST_CACHE[key] = metrics
+        return metrics
+    except Exception:
+        return None
+
+
+def summarize_book_from_metrics(book_id: str, metrics: _ManifestMetrics, output_root: Path) -> BookSummary:
+    progress = round(metrics.translated_paras / max(1, metrics.total_paras), 3) if metrics.total_paras > 0 else 0.0
+
+    workspace = BookWorkspace.at(output_root, metrics.title)
     has_output_epub = _has_valid_epub(workspace.epub_path)
-    status = "completed" if (total_paras > 0 and translated_paras == total_paras) else "pending"
+    status = "completed" if (metrics.total_paras > 0 and metrics.translated_paras == metrics.total_paras) else "pending"
     active_task = job_manager.get_task(book_id)
     if active_task:
         if active_task.status == "paused":
@@ -96,19 +169,24 @@ def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) ->
 
     return BookSummary(
         id=book_id,
-        name=title,
-        source_type=source_type,
-        total_chapters=total_chapters,
-        translated_chapters=translated_chaps,
-        total_paragraphs=total_paras,
-        translated_paragraphs=translated_paras,
+        name=metrics.title,
+        source_type=metrics.source_type,
+        total_chapters=metrics.total_chapters,
+        translated_chapters=metrics.translated_chaps,
+        total_paragraphs=metrics.total_paras,
+        translated_paragraphs=metrics.translated_paras,
         progress_percentage=progress,
         status=status,
         has_output_epub=has_output_epub,
         epub_download_url=f"/api/v1/books/{book_id}/download" if has_output_epub else None,
-        created_at=manifest.get("created_at"),
-        updated_at=manifest.get("updated_at"),
+        created_at=metrics.created_at,
+        updated_at=metrics.updated_at,
     )
+
+
+def summarize_book(book_id: str, manifest: dict[str, Any], output_root: Path) -> BookSummary:
+    metrics = _metrics_from_manifest_dict(book_id, manifest)
+    return summarize_book_from_metrics(book_id, metrics, output_root)
 
 
 @router.get("", response_model=list[BookSummary])
@@ -121,9 +199,9 @@ def list_books() -> list[BookSummary]:
     summaries = []
     for manifest_file in sorted(books_dir.glob("*/manifest.json")):
         book_id = manifest_file.parent.name
-        manifest = read_json(manifest_file, default=None)
-        if manifest:
-            summaries.append(summarize_book(book_id, manifest, output_root))
+        metrics = _get_manifest_metrics(manifest_file)
+        if metrics:
+            summaries.append(summarize_book_from_metrics(book_id, metrics, output_root))
     return summaries
 
 

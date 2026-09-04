@@ -51,7 +51,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
     setIsLoading(true);
     void loadData(book.id, controller.signal, sequence);
     return () => controller.abort();
-  }, [book]);
+  }, [book?.id]);
 
   const loadData = async (bookId: string, signal: AbortSignal, sequence: number) => {
     try {

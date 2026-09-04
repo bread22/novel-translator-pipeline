@@ -138,3 +138,80 @@ def test_residue_routes_to_fallback_with_structured_failure_class() -> None:
         assert attempts[0]["residue_tokens"] == {"p1": ["かな"]}
         assert attempts[1]["recovered_ids"] == ["p1"]
 
+
+def test_shape_metaphor_repairs_handle_hiragana_quotes_and_outer_quotes() -> None:
+    source = "下から美登利が腰を弾ませ、五体を「へ」の字に軋ませて躍動した。"
+    cases = [
+        "下身呈「へ」字形拱起躬动。",
+        "五体弯成“へ”字形。",
+        "五体弯成了“へ字形”。",
+        "五体呈“へ”の字。",
+        "五体呈“ヘ”字形。",
+    ]
+    for target in cases:
+        repaired, records = apply_deterministic_repairs(source=source, translated=target)
+        assert "“倒V”字形" in repaired
+        assert "へ" not in repaired and "ヘ" not in repaired
+        assert [r.rule_id for r in records] == ["jp_shape_he_001"]
+        assert not has_target_script_residue(repaired, source=source)
+        # Idempotence: repairing again produces no changes
+        assert apply_deterministic_repairs(source=source, translated=repaired) == (repaired, ())
+
+    # Other shape metaphors with quotes in source and target
+    other_shapes = [
+        ("「く」の字に曲がった体", "身体呈“く”字形弯曲", "“折线”字形", "jp_shape_kuno_001"),
+        ("「コ」の字型に配置された机", "桌子呈「コ」字形摆放", "“凹”字形", "jp_shape_kono_001"),
+        ("「ロ」の字に囲まれた中庭", "呈“ロ”字形围绕的中庭", "“回”字形", "jp_shape_ro_001"),
+        ("「八」の字に開いた眉", "眉毛呈八の字展开", "“八”字形", "jp_shape_hachi_001"),
+        ("「丁」の字に交わる道", "呈丁の字交会的道路", "“丁”字形", "jp_shape_tei_001"),
+    ]
+    for src, tgt, expected_shape, rule_id in other_shapes:
+        repaired, records = apply_deterministic_repairs(source=src, translated=tgt)
+        assert expected_shape in repaired
+        assert [r.rule_id for r in records] == [rule_id]
+        assert not has_target_script_residue(repaired, source=src)
+
+
+def test_linguistic_and_etymological_quotes_classified_as_explicit_reference() -> None:
+    source = (
+        "「くじり」という言葉の正確な意味は、いまだに彼にはわからない。"
+        "女のオナニーのことを江戸時代に「くじる」といったことなど若い令二が知るわけもなかった。"
+    )
+
+    # 1. Standard quoted term/etymology translation
+    target_quoted = (
+        "“くじり”这个词的准确含义，他至今仍不明白。"
+        "关于把女人的自慰在江户时代称作“くじる”之类的事，年轻的令二根本无从知晓。"
+    )
+    findings = inspect_target_script(target_quoted, source=source)
+    assert len(findings) == 2
+    assert [f.token for f in findings] == ["くじり", "くじる"]
+    assert all(f.classification == "explicit_source_reference" for f in findings)
+    assert all(f.context_match == "word_reference" for f in findings)
+    assert not has_target_script_residue(target_quoted, source=source)
+
+    # 2. Parenthetical annotation translation
+    target_annotated = (
+        "“挖弄（くじり）”这个词的准确含义，他至今仍不明白。"
+        "关于把女人的自慰在江户时代称作“挖（くじる）”之类的事，年轻的令二根本无从知晓。"
+    )
+    findings_ann = inspect_target_script(target_annotated, source=source)
+    assert len(findings_ann) == 2
+    assert all(f.classification == "explicit_source_reference" for f in findings_ann)
+    assert not has_target_script_residue(target_annotated, source=source)
+
+    # 3. Negative cases: unquoted residue is still rejected
+    unquoted = "くじり 这个词的含义他不清楚。"
+    assert has_target_script_residue(unquoted, source=source)
+
+    # 4. Negative cases: untranslated dialogue is still rejected
+    dialogue_source = "「ちょっと待って」と彼女は叫んだ。"
+    dialogue_target = "她喊着「ちょっと待って」。"
+    assert has_target_script_residue(dialogue_target, source=dialogue_source)
+
+    # 5. Negative cases: sound effects are still rejected
+    onomatopoeia_source = "ベッドが「ギシギシ」と音を立てた。"
+    onomatopoeia_target = "床发出了“ギシギシ”的声响。"
+    assert has_target_script_residue(onomatopoeia_target, source=onomatopoeia_source)
+
+

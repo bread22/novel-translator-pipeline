@@ -15,7 +15,8 @@ HANGUL_RUN_REGEX = re.compile(r"[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\
 # Compatibility constant.  The inspector below uses narrower quote-aware
 # checks, so adding a word here does not create a global allow-list.
 KANA_REFERENCE_CONTEXT_REGEX = re.compile(
-    r"(?:原文|假名|平假名|片假名|变体假名|日文(?:字|文字)?|写着|写作|写成|写的是|读作|读音|发音|表记|书写|字形|字样|字般|文字|二字|三字|四字|字体|符号)"
+    r"(?:原文|假名|平假名|片假名|变体假名|日文(?:字|文字)?|写着|写作|写成|写的是|读作|读音|发音|表记|书写|字形|字样|字般|文字|二字|三字|四字|字体|符号|"
+    r"词|这个词|此词|一词|词语|词汇|称作|称为|叫做|叫作|意思|含义)"
 )
 
 ResidueClassification = Literal[
@@ -49,14 +50,29 @@ _QUOTE_PAIRS = (
     ("‘", "’"),
     ('"', '"'),
     ("'", "'"),
+    ("（", "）"),
+    ("(", ")"),
+    ("【", "】"),
 )
 _SOURCE_CONTEXT_TERMS = re.compile(
-    r"(?:原文|原字|文字|字形|字样|字体|假名|平假名|片假名|变体假名|日文(?:字|文字)?|表记|书写|書|描|えが|写)"
+    r"(?:原文|原字|文字|字形|字样|字体|假名|平假名|片假名|变体假名|日文(?:字|文字)?|表记|书写|書|描|えが|写|"
+    r"言葉|ことば|コトバ|語(?:源|彙|義)?|用語|熟語|呼称|呼(?:ぶ|ばれ|ばれる|んだ|び|名)|"
+    r"言(?:う|い|った|われる|われ)|という|といった|名付|名づけ|命名|由来|意味|意義|定義|"
+    r"古語|俗語|隠語|方言|スラング|符丁|俚語|いわゆる|所謂)"
 )
 _TARGET_CONTEXT_TERMS = re.compile(
-    r"(?:原文|原字|文字|字形|字样|字体|字|假名|平假名|片假名|变体假名|日文(?:字|文字)?|表记|书写|写着|写作|写成|写的是|读作|读音|发音|符号)"
+    r"(?:原文|原字|文字|字形|字样|字体|字|假名|平假名|片假名|变体假名|日文(?:字|文字)?|日语|表记|书写|写着|写作|写成|写的是|读作|读音|发音|符号|"
+    r"词|这个词|此词|一词|词语|词汇|单词|词条|词义|词源|"
+    r"称作|称为|叫做|叫作|称呼|被称为|被称作|俗称|统称|简称|名称|"
+    r"古语|俗语|俚语|隐语|行话|暗语|黑话|方言|成语|惯用语|语源|语义|语意|"
+    r"意思|含义|涵义|指代|指的是|意指|所谓|释义|说法|俗说|"
+    r"翻译|译作|译为|译成|译意)"
 )
 _SHAPE_CONTEXT_TERMS = re.compile(r"(?:字形|字样|字体|文字|[一二三四五六七八九十百千]字|个字|这个字|此字)")
+_WORD_CONTEXT_TERMS = re.compile(
+    r"(?:言葉|ことば|コトバ|語|用語|熟語|呼称|呼(?:ぶ|ばれ|ばれる|んだ)|言(?:う|い|った|われる|われ)|という|といった|"
+    r"词|这个词|此词|一词|词语|词汇|单词|词条|词义|词源|称作|称为|叫做|叫作|称呼|俗称|古语|俗语|俚语|隐语|行话|暗语|黑话|方言|意思|含义|涵义|说法)"
+)
 
 
 def has_japanese_kana(text: str) -> bool:
@@ -73,11 +89,13 @@ def _quoted_context(text: str, token: str, *, source: bool) -> str | None:
     for opening, closing in _QUOTE_PAIRS:
         pattern = re.compile(re.escape(opening) + re.escape(token) + re.escape(closing))
         for match in pattern.finditer(text):
-            window = text[max(0, match.start() - 20):min(len(text), match.end() + 20)]
+            window = text[max(0, match.start() - 25):min(len(text), match.end() + 25)]
             if not terms.search(window):
                 continue
             if _SHAPE_CONTEXT_TERMS.search(window):
                 return "shape_reference"
+            if _WORD_CONTEXT_TERMS.search(window):
+                return "word_reference"
             return "character_reference"
     return None
 

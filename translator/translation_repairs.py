@@ -6,7 +6,7 @@ import unicodedata
 from typing import Callable
 
 
-REPAIR_RULE_VERSION = "1.0"
+REPAIR_RULE_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,10 @@ def _idiom_replacement(match: re.Match[str]) -> str:
     return f"{lead}画圈"
 
 
+_OPEN_QUOTES = r"[“\"「『‘']"
+_CLOSE_QUOTES = r"[”\"」』’']"
+
+
 REPAIR_RULES: tuple[_RepairRule, ...] = (
     _RepairRule(
         "jp_idiom_nonliteral_001",
@@ -50,38 +54,38 @@ REPAIR_RULES: tuple[_RepairRule, ...] = (
     # shared by translation and review recovery.
     _RepairRule(
         "jp_shape_kono_001",
-        re.compile(r"コの字(?:形)?"),
-        re.compile(r"[“\"「]?コ[”\"」]?の?字形?"),
+        re.compile(r"[「『“\"‘']?\s*コ\s*[」』”\"’']?\s*の字(?:形)?"),
+        re.compile(rf"{_OPEN_QUOTES}?\s*コ\s*{_CLOSE_QUOTES}?\s*の?\s*字形?{_CLOSE_QUOTES}?"),
         "“凹”字形",
     ),
     _RepairRule(
         "jp_shape_ro_001",
-        re.compile(r"ロの字(?:形)?"),
-        re.compile(r"[“\"「]?ロ[”\"」]?の?字形?"),
+        re.compile(r"[「『“\"‘']?\s*ロ\s*[」』”\"’']?\s*の字(?:形)?"),
+        re.compile(rf"{_OPEN_QUOTES}?\s*ロ\s*{_CLOSE_QUOTES}?\s*の?\s*字形?{_CLOSE_QUOTES}?"),
         "“回”字形",
     ),
     _RepairRule(
         "jp_shape_kuno_001",
-        re.compile(r"くの字(?:形)?"),
-        re.compile(r"[“\"「]?く[”\"」]?の?字形?"),
+        re.compile(r"[「『“\"‘']?\s*[くク]\s*[」』”\"’']?\s*の字(?:形)?"),
+        re.compile(rf"{_OPEN_QUOTES}?\s*[くク]\s*{_CLOSE_QUOTES}?\s*の?\s*字形?{_CLOSE_QUOTES}?"),
         "“折线”字形",
     ),
     _RepairRule(
         "jp_shape_he_001",
-        re.compile(r"ヘの字(?:形)?"),
-        re.compile(r"[“\"「]?ヘ[”\"」]?の?字形?"),
+        re.compile(r"[「『“\"‘']?\s*[へヘ]\s*[」』”\"’']?\s*の字(?:形)?"),
+        re.compile(rf"{_OPEN_QUOTES}?\s*[へヘ]\s*{_CLOSE_QUOTES}?\s*の?\s*字形?{_CLOSE_QUOTES}?"),
         "“倒V”字形",
     ),
     _RepairRule(
         "jp_shape_hachi_001",
-        re.compile(r"八の字(?:形)?"),
-        re.compile(r"[“\"「]?八[”\"」]?の?字形?"),
+        re.compile(r"[「『“\"‘']?\s*八\s*[」』”\"’']?\s*の字(?:形)?"),
+        re.compile(rf"{_OPEN_QUOTES}?\s*八\s*{_CLOSE_QUOTES}?\s*の?\s*字形?{_CLOSE_QUOTES}?"),
         "“八”字形",
     ),
     _RepairRule(
         "jp_shape_tei_001",
-        re.compile(r"丁の字(?:形)?"),
-        re.compile(r"[“\"「]?丁[”\"」]?の?字形?"),
+        re.compile(r"[「『“\"‘']?\s*丁\s*[」』”\"’']?\s*の字(?:形)?"),
+        re.compile(rf"{_OPEN_QUOTES}?\s*丁\s*{_CLOSE_QUOTES}?\s*の?\s*字形?{_CLOSE_QUOTES}?"),
         "“丁”字形",
     ),
 )

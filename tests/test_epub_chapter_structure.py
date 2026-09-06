@@ -60,7 +60,7 @@ def write_monolithic_epub(path: Path) -> None:
         )
 
 
-def write_decorated_split_epub(path: Path) -> None:
+def write_decorated_split_epub(path: Path, *, first_without_fragment: bool = False) -> None:
     numbers = ("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
     body_one = [
         f'<p id="chapter-{index}">【第{number}章 标题{index}】</p><p>第{number}章正文。</p>'
@@ -76,7 +76,7 @@ def write_decorated_split_epub(path: Path) -> None:
     body_two_text = "".join(body_two)
     nav_points = "".join(
         f'<navPoint><navLabel><text>第{number}章 标题{index}</text></navLabel>'
-        f'<content src="text/part0002_split_{0 if index <= 6 else 1:03d}.html#chapter-{index}"/></navPoint>'
+        f'<content src="text/part0002_split_{0 if index <= 6 else 1:03d}.html{"" if (first_without_fragment and index == 1) else f"#chapter-{index}"}"/></navPoint>'
         for index, number in enumerate(numbers, start=1)
     )
     with zipfile.ZipFile(path, "w") as archive:
@@ -339,3 +339,44 @@ def test_cross_file_decorated_chapters_export_by_paragraph_path_and_repair_ncx(t
     validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
     assert validation["summary"]["toc_broken_links"] == 0
     assert validation["errors"] == []
+
+
+def test_decorated_split_epub_first_target_without_fragment_exports_and_validates(tmp_path: Path) -> None:
+    epub = tmp_path / "decorated-no-frag.epub"
+    write_decorated_split_epub(epub, first_without_fragment=True)
+    runtime = _api_root(tmp_path)
+    result = call_novel_translator(
+        "add-book",
+        "--path",
+        str(epub),
+        "--title",
+        "Decorated Split Fixture No Frag",
+        "--id",
+        "decorated-split-fixture-no-frag",
+        novel_root=runtime,
+    )
+    assert result["summary"]["chapters"] == 12
+    manifest_path = runtime / "data" / "books" / "decorated-split-fixture-no-frag" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    body = [chapter for chapter in manifest["chapters"] if chapter["role"] == "chapter"]
+    assert len(body) == 10
+    assert [chapter["title"] for chapter in body] == [
+        f"【第{number}章 标题{index}】" for index, number in enumerate(("一", "二", "三", "四", "五", "六", "七", "八", "九", "十"), start=1)
+    ]
+    output = tmp_path / "output.epub"
+    exported = call_novel_translator(
+        "export",
+        "--book",
+        "decorated-split-fixture-no-frag",
+        "--format",
+        "epub",
+        "--output",
+        str(output),
+        "--monolingual",
+        novel_root=runtime,
+    )
+    assert exported["summary"]["format"] == "epub"
+    validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
+    assert validation["summary"]["toc_broken_links"] == 0
+    assert validation["errors"] == []
+

@@ -1137,7 +1137,8 @@ def _resolve_navigation_targets(
     resolved: list[_NavigationTarget] = []
     for target in targets:
         if not target.fragment:
-            resolved.append(replace(target, resolution="file"))
+            node_index = 0 if len(targets) > 1 and target is targets[0] and nodes else None
+            resolved.append(replace(target, resolution="file", node_index=node_index))
             continue
         fragment = unquote(html.unescape(target.fragment))
         anchor = next(
@@ -1218,12 +1219,14 @@ def _toc_chapter_starts(
     """Build chapter starts from resolved TOC targets, or request regex fallback."""
     if document_role != "chapter" or not targets:
         return None, list(targets), 0, {}
-    fragment_targets = [target for target in targets if target.fragment]
+    applicable_targets = [
+        target for target in targets if target.fragment or (target.node_index is not None and len(targets) > 1)
+    ]
     resolved_targets = list(targets)
     diagnostics: dict[str, Any] = {
         "toc_target_count": len(targets),
-        "fragment_count": len(fragment_targets),
-        "fragment_resolved_count": sum(target.node_index is not None for target in fragment_targets),
+        "fragment_count": len(applicable_targets),
+        "fragment_resolved_count": sum(target.node_index is not None for target in applicable_targets),
         "target_resolutions": [
             {
                 "label": target.label,
@@ -1237,12 +1240,12 @@ def _toc_chapter_starts(
             for target in resolved_targets
         ],
     }
-    if not fragment_targets or any(target.node_index is None for target in fragment_targets):
-        return None, resolved_targets, len(fragment_targets), diagnostics
+    if not applicable_targets or any(target.node_index is None for target in applicable_targets):
+        return None, resolved_targets, len(applicable_targets), diagnostics
 
     starts: list[tuple[int, str, int | None]] = []
     previous_index = -1
-    for target in fragment_targets:
+    for target in applicable_targets:
         assert target.node_index is not None
         body_marker = _chapter_marker(nodes[target.node_index].text, nodes[target.node_index].tag, target.node_index)
         label_marker = _chapter_marker(target.label, "nav", target.ordinal)
@@ -1627,30 +1630,37 @@ def _chapter_anchor_map(
     for chapter in all_chapters:
         if chapter.role != "chapter" or not chapter.paragraphs:
             continue
-        body_chapter_index += 1
-        marker = next(
-            (
-                paragraph
-                for paragraph in chapter.paragraphs
-                if _normalized_label(paragraph.source) == _normalized_label(chapter.title)
-                or _chapter_marker(
-                    paragraph.source,
-                    str(paragraph.metadata.get("epub", {}).get("node_tag", "")),
-                    int(paragraph.metadata.get("epub", {}).get("node_index", -1)),
-                )
-                is not None
-            ),
-            chapter.paragraphs[0],
-        )
-        marker_path = str(marker.metadata.get("epub", {}).get("chapter_path", chapter.source_path))
-        if marker_path not in chapters_by_path:
-            continue
-        locator = marker.metadata.get("epub", {})
-        try:
-            node_index = int(locator["node_index"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        result.setdefault(marker_path, []).append((node_index, f"chapter-{body_chapter_index:04d}"))
+        paras_by_path: dict[str, list[Paragraph]] = {}
+        for p in chapter.paragraphs:
+            p_path = str(p.metadata.get("epub", {}).get("chapter_path", chapter.source_path))
+            paras_by_path.setdefault(p_path, []).append(p)
+
+        for p_path_idx, (p_path, p_list) in enumerate(paras_by_path.items()):
+            if p_path not in chapters_by_path:
+                continue
+            marker = next(
+                (
+                    paragraph
+                    for paragraph in p_list
+                    if _normalized_label(paragraph.source) == _normalized_label(chapter.title)
+                    or _chapter_marker(
+                        paragraph.source,
+                        str(paragraph.metadata.get("epub", {}).get("node_tag", "")),
+                        int(paragraph.metadata.get("epub", {}).get("node_index", -1)),
+                    )
+                    is not None
+                ),
+                p_list[0] if p_path_idx == 0 else None,
+            )
+            if marker is None:
+                continue
+            locator = marker.metadata.get("epub", {})
+            try:
+                node_index = int(locator["node_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            body_chapter_index += 1
+            result.setdefault(p_path, []).append((node_index, f"chapter-{body_chapter_index:04d}"))
     return result
 
 

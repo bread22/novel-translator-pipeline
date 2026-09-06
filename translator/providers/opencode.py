@@ -98,7 +98,7 @@ def run_prompt(
     model: str | None = None,
     binary: str | None = None,
     agent: str | None = None,
-    max_retries: int = 3,
+    max_retries: int = 2,
 ) -> str:
     if timeout <= 0:
         raise ValueError("OpenCode timeout 必须大于 0")
@@ -140,6 +140,8 @@ def run_prompt(
         lowered = combined.casefold()
         if any(marker in lowered for marker in ("content policy", "sensitive words", "prohibited use policy", "content_filter", "provider_blocked")):
             raise OpenCodeError(f"opencode blocked: {combined[-2000:]}", reason="content_filter")
+        if any(marker in lowered for marker in ("rate limit", "rate_limit", "rate_limit_exceeded", "too many requests")):
+            raise OpenCodeError(f"opencode rate limit: {combined[-2000:]}", reason="rate_limit")
         if result.returncode != 0:
             last_error = OpenCodeError(f"opencode exited {result.returncode}: {combined[-2000:]}", reason="process")
             if attempt < max_retries - 1:
@@ -298,22 +300,12 @@ class OpenCodeProvider(BaseProvider):
         timeout: int | None = None,
     ) -> dict[str, Any]:
         prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                content = run_prompt(
-                    prompt,
-                    role="reviewer",
-                    timeout=timeout or self.timeout,
-                    model=self.model or None,
-                    binary=self.binary or None,
-                    agent=self.agent,
-                )
-                return parse_json_object(content)
-            except Exception as exc:
-                last_error = exc
-                if attempt < 2:
-                    time.sleep(3)
-        if last_error:
-            raise last_error
-        raise RuntimeError("OpenCode review failed")
+        content = run_prompt(
+            prompt,
+            role="reviewer",
+            timeout=timeout or self.timeout,
+            model=self.model or None,
+            binary=self.binary or None,
+            agent=self.agent,
+        )
+        return parse_json_object(content)

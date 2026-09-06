@@ -127,6 +127,19 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(mock_run.call_args.kwargs["model"], "deepseek-ai/deepseek-v3")
         self.assertEqual(mock_run.call_args.kwargs["agent"], "")
 
+    def test_review_does_not_double_retry_on_error(self) -> None:
+        from translator.providers.opencode import OpenCodeError, OpenCodeProvider
+        provider = OpenCodeProvider("opencode", {
+            "binary": "opencode",
+            "model": "test-model",
+            "timeout": 30,
+        })
+        schema_path = Path(__file__).resolve().parents[1] / "schemas" / "chapter-review-output.schema.json"
+        with patch("translator.providers.opencode.run_prompt", side_effect=OpenCodeError("timed out", reason="timeout")) as mock_run:
+            with self.assertRaises(OpenCodeError):
+                provider.review("chapter", {"items": []}, schema_path)
+            self.assertEqual(mock_run.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

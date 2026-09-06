@@ -127,4 +127,36 @@ describe('global application state', () => {
 
     expect(screen.getByText('events:0')).toBeInTheDocument();
   });
+
+  it('caps the waterfall stream events at 30 items per book', async () => {
+    window.location.hash = '#/studio';
+    let emit!: (event: any) => void;
+    vi.spyOn(api, 'getBooks').mockResolvedValue([{ id: 'selected-book' }] as any);
+    vi.spyOn(api, 'getQueue').mockResolvedValue(emptyQueue);
+    vi.spyOn(api, 'getTaskStatus').mockRejectedValue(new Error('not found'));
+    vi.spyOn(api, 'subscribeEvents').mockImplementation((handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+
+    render(<App />);
+    expect(await screen.findByText('events:0')).toBeInTheDocument();
+
+    act(() => {
+      for (let i = 0; i < 45; i++) {
+        emit({
+          event: 'pipeline_progress',
+          book_id: 'selected-book',
+          timestamp: `2026-08-26T12:00:${i.toString().padStart(2, '0')}Z`,
+          event_id: `evt-${i}`,
+          data: { progress: i / 45 },
+        });
+      }
+    });
+
+    expect(screen.getByText('events:30')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}')['selected-book'])
+      .toHaveLength(30);
+  });
 });
+

@@ -12,7 +12,7 @@ import { createRequestCache } from './lib/requestCache';
 
 const VALID_TABS = ['queue', 'studio', 'reader', 'knowledge', 'settings'];
 const STREAM_EVENTS_STORAGE_KEY = 'stream_events_by_book_v1';
-const MAX_STREAM_EVENTS_PER_BOOK = 300;
+const MAX_STREAM_EVENTS_PER_BOOK = 30;
 
 function isStreamEvent(value: unknown): value is StreamEvent {
   return Boolean(
@@ -223,7 +223,7 @@ export const App: React.FC = () => {
   const fetchBookEvents = useCallback(async (bookId: string) => {
     if (!bookId) return;
     try {
-      const serverEvents = await api.getBookEvents(bookId);
+      const serverEvents = await api.getBookEvents(bookId, MAX_STREAM_EVENTS_PER_BOOK);
       if (Array.isArray(serverEvents) && serverEvents.length > 0) {
         setEventsByBook((prev) => {
           const combined = mergeEventHistory(serverEvents, prev[bookId] || []);

@@ -36,3 +36,19 @@ required dependency for constructing adapters. With no explicit config override,
 a manager captures current config when a job begins; changes affect subsequent
 jobs, not a running review's later chunks. Relative policy overrides are resolved
 against the config file, not the process working directory or vendor directory.
+
+## CI fault interleavings
+
+Run `python -m pytest -q -m interleaving` and, in `frontend/`,
+`npm run test:interleaving`. CI runs each suite three times; backend runs vary
+`PYTHONHASHSEED` and retain JUnit reports for each Python version, including failed
+runs. Worker/provider fixtures use bounded Events and release them in finally
+blocks; frontend tests use controlled Promises instead of network timing.
+
+Coverage includes selected/unrelated paragraph edits during translation, edits
+at the publish boundary, cancellation followed by provider failure and next-job
+dispatch, replacement while queued, enqueue/batch/retry while replacing, failed
+replacement rollback (exact hashes), static directory/symlink boundaries, and
+late successful/failed saves or retranslations after book/chapter changes or
+navigation away and back. Version-conflict and glossary projection rollback tests
+run in the same focused backend gate.

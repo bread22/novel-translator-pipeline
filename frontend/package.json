@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:interleaving": "vitest run src/reader_mutation_race.test.tsx"
   },
   "dependencies": {
     "clsx": "^2.1.1",

@@ -28,6 +28,18 @@ jobs:
         run: python -m pip install -c constraints/py310-314.txt -e '.[dev]'
       - name: Compile
         run: python -m compileall -q translator scripts tests
+      - name: Deterministic fault interleavings (repeat three schedules)
+        timeout-minutes: 5
+        run: |
+          mkdir -p artifacts/interleaving
+          for seed in 1 2 3; do
+            PYTHONHASHSEED=$seed python -m pytest -q -m interleaving -o faulthandler_timeout=30 --junitxml=artifacts/interleaving/backend-$seed.xml
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: interleaving-python-${{ matrix.python-version }}
+          path: artifacts/interleaving/*.xml
       - name: Test with coverage
         run: |
           python -m pytest -q --cov=translator --cov-report=term-missing --cov-report=xml --cov-report=json:coverage.json --cov-fail-under=80
@@ -78,6 +90,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - name: Reader mutation interleavings (repeat three times)
+        timeout-minutes: 5
+        run: |
+          for attempt in 1 2 3; do
+            npm run test:interleaving
+          done
       - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=high

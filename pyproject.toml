@@ -40,6 +40,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 norecursedirs = ["artifacts", "frontend", "output", "source", "translated", ".git", ".venv"]
 addopts = ["--strict-markers"]
+markers = ["interleaving: deterministic storage, worker and request interleaving regressions"]
 
 [tool.ruff]
 target-version = "py310"

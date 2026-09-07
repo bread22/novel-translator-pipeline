@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from translator.core.config import load_config
+from translator.core.book_store import BookRepository
 from translator.core.paths import PathResolver
 from translator.core.workspace import BookWorkspace, json_file_lock, read_json, utc_now, write_json
 from translator.glossary.lifecycle import stable_term_id
@@ -154,8 +155,7 @@ def get_pending_queue(book_id: str) -> PendingQueueResponse:
 @router.post("/{book_id}/glossary", response_model=GlossaryResponse)
 def update_glossary(book_id: str, request: GlossaryCreateRequest) -> GlossaryResponse:
     workspace = get_workspace_for_book(book_id)
-    with json_file_lock(workspace.glossary_path):
-        glossary_data = read_json(workspace.glossary_path, default={"terms": [], "conflicts": []})
+    with BookRepository(workspace=workspace).glossary_transaction() as glossary_data:
 
         existing_terms = {str(t.get("source", "")): dict(t) for t in glossary_data.get("terms", []) if isinstance(t, dict) and t.get("source")}
         for item in request.terms:
@@ -187,7 +187,7 @@ def update_glossary(book_id: str, request: GlossaryCreateRequest) -> GlossaryRes
         glossary_data["updated_at"] = utc_now()
         # The glossary is authoritative; always rebuild the disposable
         # translator projection from it rather than editing the projection.
-        persist_glossary(workspace, glossary_data)
+        # Authority and projection are committed together on context exit.
 
     return get_glossary(book_id)
 
@@ -195,14 +195,13 @@ def update_glossary(book_id: str, request: GlossaryCreateRequest) -> GlossaryRes
 @router.delete("/{book_id}/glossary/{source}", response_model=GlossaryResponse)
 def delete_glossary_term(book_id: str, source: str) -> GlossaryResponse:
     workspace = get_workspace_for_book(book_id)
-    with json_file_lock(workspace.glossary_path):
-        glossary_data = read_json(workspace.glossary_path, default={"terms": [], "conflicts": []})
+    with BookRepository(workspace=workspace).glossary_transaction() as glossary_data:
         before = len(glossary_data.get("terms", []))
         glossary_data["terms"] = [term for term in glossary_data.get("terms", []) if str(term.get("source", "")) != source]
         if len(glossary_data["terms"]) == before:
             raise HTTPException(status_code=404, detail=f"未找到术语: {source}")
         glossary_data["updated_at"] = utc_now()
-        persist_glossary(workspace, glossary_data)
+        # Authority and projection are committed together on context exit.
     return get_glossary(book_id)
 
 

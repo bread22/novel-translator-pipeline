@@ -1313,6 +1313,25 @@ def apply_knowledge_delta(
     *,
     evidence_texts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from translator.core.book_store import file_transaction
+    with file_transaction([
+        workspace.glossary_path, workspace.novel_translator_terms_path,
+        workspace.book_memory_path, workspace.knowledge_candidates_path, workspace.knowledge_conflicts_path,
+    ]):
+        return _apply_knowledge_delta_locked(
+            workspace, chapter_id, candidates, decisions, conflicts, evidence_texts=evidence_texts,
+        )
+
+
+def _apply_knowledge_delta_locked(
+    workspace: BookWorkspace,
+    chapter_id: str,
+    candidates: Sequence[Mapping[str, Any]],
+    decisions: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None,
+    conflicts: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    evidence_texts: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Persist final knowledge actions while preserving old active values."""
     if isinstance(decisions, list):
         decision_by_id = {str(item.get("candidate_id", "")): dict(item) for item in decisions if isinstance(item, Mapping)}
@@ -1396,8 +1415,6 @@ def apply_knowledge_delta(
     conflict_store_path = workspace.knowledge_conflicts_path
     glossary_path = workspace.glossary_path
     memory_path = workspace.book_memory_path
-    paths = [candidate_store_path, conflict_store_path, glossary_path, memory_path, workspace.novel_translator_terms_path]
-    originals = {path: path.read_bytes() if path.exists() else None for path in paths}
     evidence = dict(evidence_texts or {})
     glossary_updates: list[dict[str, Any]] = []
     active_memory: list[dict[str, Any]] = []
@@ -1575,11 +1592,6 @@ def apply_knowledge_delta(
         conflict_store["updated_at"] = utc_now()
         write_json(conflict_store_path, conflict_store)
     except Exception:
-        for path, content in originals.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.write_bytes(content)
         raise
     summary["glossary_summary"] = glossary_summary if 'glossary_summary' in locals() else {}
     summary["promoted"] = int(summary["glossary_summary"].get("activated", 0) or 0)

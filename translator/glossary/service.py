@@ -5,7 +5,7 @@ from typing import Any, Iterable, Mapping
 
 from translator.glossary.lifecycle import merge_term_candidates
 from translator.glossary.projection import build_translation_term_projection
-from translator.core.workspace import write_json
+from translator.core.book_store import BookRepository
 
 
 def apply_glossary_delta(
@@ -28,9 +28,8 @@ def apply_glossary_delta(
 
 
 def persist_glossary(workspace: Any, glossary: Mapping[str, Any]) -> None:
-    """Write the authority first and deterministically rebuild the disposable projection."""
-    write_json(workspace.glossary_path, dict(glossary))
-    write_json(workspace.novel_translator_terms_path, build_translation_term_projection(glossary))
+    """Publish authority and projection with one rollback boundary."""
+    BookRepository(workspace=workspace).save_glossary(glossary)
 
 
 def glossary_from_path(path: Path) -> dict[str, Any]:

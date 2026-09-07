@@ -4,11 +4,10 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
-import tempfile
 from typing import Any
 
 from translator.core.config import load_config, setting
-from translator.core.workspace import json_file_lock, write_json
+from translator.core.book_store import BookRepository, VersionConflict
 from translator.glossary.projection import build_translation_term_projection, select_relevant_terms
 from translator.providers.base import (
     extract_json_object,
@@ -212,8 +211,8 @@ class ProviderTranslator:
     def __call__(self, provider: str, book: str, ids: list[str], *, source_chars: int, max_tokens: int) -> dict[str, Any]:
         if not ids:
             return {"status": "ok", "provider": provider, "summary": {"translated": 0}}
-        baseline = _load_json(self.manifest, {})
-        baseline_by_id = {str(p.get("id")): p for ch in baseline.get("chapters", []) for p in ch.get("paragraphs", [])}
+        repository = BookRepository(manifest_path=self.manifest)
+        baseline = repository.manifest.snapshot(default={}).value
         payload, sources = self._payload(book, ids)
         items, result = self._request(provider, payload, max_tokens)
         if result.get("status") != "ok":
@@ -235,19 +234,14 @@ class ProviderTranslator:
                 "duplicate_ids": duplicate_ids,
                 "raw_response": result.get("raw_response", ""),
             }
-        with json_file_lock(self.manifest):
-            manifest = _load_json(self.manifest, {})
-            by_id = {str(p.get("id")): p for ch in manifest.get("chapters", []) for p in ch.get("paragraphs", [])}
-            for item in items:
-                before = baseline_by_id.get(item["id"])
-                current = by_id.get(item["id"])
-                if before is None or current is None or before != current:
-                    return {"status": "error", "provider": provider, "reason": "write_conflict", "id": item["id"]}
-                text = normalize_target_punctuation(item["text"].strip())
-                if not text:
-                    return {"status": "error", "provider": provider, "reason": "empty_translation", "id": item["id"]}
-                current["translated"] = text
-            self._atomic_write(manifest)
+        translations = {item["id"]: normalize_target_punctuation(item["text"].strip()) for item in items}
+        for item_id, text in translations.items():
+            if not text:
+                return {"status": "error", "provider": provider, "reason": "empty_translation", "id": item_id}
+        try:
+            repository.update_paragraphs(translations, baseline=baseline)
+        except VersionConflict as exc:
+            return {"status": "error", "provider": provider, "reason": "write_conflict", "error": str(exc)}
         result["summary"] = {
             "translated": len(items),
             "source_chars": sum(len(sources[item_id]) for item_id in ids),
@@ -255,6 +249,3 @@ class ProviderTranslator:
             "glossary_path": str(self.glossary_path) if self.glossary_path else str(self.novel_root / "data" / "glossary.json"),
         }
         return result
-
-    def _atomic_write(self, manifest: dict[str, Any]) -> None:
-        write_json(self.manifest, manifest)

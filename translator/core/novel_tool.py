@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from importlib import import_module
 import os
 from pathlib import Path
@@ -202,7 +203,13 @@ def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
     api = _vendor_api(root)
     books_dir = _books_dir(root)
 
-    with _VENDOR_OPERATION_LOCK:
+    from translator.core.book_store import file_transaction
+    mutation_book = _flag_value(args, "--book") if command in {"apply-review-fixes", "reset-translations"} else None
+    if mutation_book:
+        from translator.web.path_policy import validate_book_id
+        validate_book_id(mutation_book)
+    boundary = file_transaction([books_dir / mutation_book / "manifest.json"]) if mutation_book else nullcontext()
+    with _VENDOR_OPERATION_LOCK, boundary:
         if command == "add-book":
             source_path = Path(_flag_value(args, "--path") or "").expanduser().resolve()
             if not source_path.exists():

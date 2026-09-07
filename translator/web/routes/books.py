@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
 from translator.core.config import load_config
+from translator.core.book_store import BookRepository
 from translator.core.layout import apply_horizontal_layout, inject_epub_metadata
 from translator.core.metadata import extract_book_metadata, sanitize_epub_filename
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
@@ -458,26 +459,12 @@ def get_chapter_detail(book_id: str, chapter_id: str) -> ChapterDetail:
 @router.put("/{book_id}/paragraphs/{paragraph_id}")
 def update_paragraph(book_id: str, paragraph_id: str, request: ParagraphUpdateRequest) -> dict[str, Any]:
     path = manifest_path(book_id)
-    with json_file_lock(path):
-        manifest = read_json(path, default=None)
-        if not manifest:
-            raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}")
-
-        found = False
-        for ch in manifest.get("chapters", []):
-            for p in ch.get("paragraphs", []):
-                if p.get("id") == paragraph_id:
-                    p["translated"] = request.translated
-                    p["updated_at"] = utc_now()
-                    found = True
-                    break
-            if found:
-                break
-
-        if not found:
-            raise HTTPException(status_code=404, detail=f"未找到段落: {paragraph_id}")
-
-        write_json(path, manifest)
+    try:
+        BookRepository(manifest_path=path).update_paragraphs({paragraph_id: request.translated})
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"未找到书籍: {book_id}") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"未找到段落: {paragraph_id}") from exc
     return {"status": "ok", "paragraph_id": paragraph_id, "translated": request.translated}
 
 

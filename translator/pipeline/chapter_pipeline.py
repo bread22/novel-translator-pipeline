@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 import uuid
 import zipfile
 
+from translator.core.book_store import BookRepository, JsonDocument
 from translator.core.config import (
     dual_review_enabled,
     fallback_translators_names,
@@ -241,6 +242,7 @@ class IterativePipeline:
         self.book = book
         self.workspace = workspace
         self.manifest = manifest
+        self.repository = BookRepository(manifest_path=manifest, workspace=workspace)
         self.tool_call = tool_call
         self.targeted_translator: Callable[..., dict[str, Any]] | None
         if targeted_translator is not None:
@@ -494,7 +496,8 @@ class IterativePipeline:
             return diagnostics
 
         try:
-            manifest_data = read_json(self.manifest, {})
+            snapshot = self.repository.manifest.snapshot(default={})
+            manifest_data = snapshot.value
             p_map = paragraph_map(manifest_data)
             changed = False
             for item_id in ids:
@@ -529,7 +532,7 @@ class IterativePipeline:
                         if repair.rule_id not in diagnostics["repair_rule_ids"]:
                             diagnostics["repair_rule_ids"].append(repair.rule_id)
             if changed:
-                write_json(self.manifest, manifest_data)
+                self.repository.manifest.replace(manifest_data, expected_revision=snapshot.revision)
 
             # Re-open after write so validation observes exactly what the next
             # recovery path will observe, rather than a stale in-memory object.
@@ -1805,24 +1808,16 @@ class IterativePipeline:
 
     def run_chapter(self, chapter_id: str, cycle: int) -> dict[str, Any]:
         self._checkpoint()
-        progress = read_json(self.workspace.progress_path, {
-            "book": self.book,
-            "state": "running",
-            "completed_cycles": 0,
-            "last_chunk": "",
-            "updated_at": utc_now(),
-        })
         if self.on_phase_changed:
             self.on_phase_changed({"phase": "translating", "chapter_id": chapter_id})
         translated_summary = self._translate_chapter(chapter_id, cycle)
-        progress.update({
+        self.repository.progress.patch({
             "state": "running",
             "last_chapter": chapter_id,
             "chapter_status": "translated",
             "last_translated": translated_summary["translated_paragraphs"],
             "updated_at": utc_now(),
         })
-        write_json(self.workspace.progress_path, progress)
         self._checkpoint()
         try:
             known_hits = self._prescan_chapter(chapter_id)
@@ -1851,19 +1846,18 @@ class IterativePipeline:
             }
             if previous_report.get("injected_into_translation"):
                 self._prescan_reports[chapter_id]["injected_into_translation"] = previous_report["injected_into_translation"]
-        progress.update({
+        self.repository.progress.patch({
             "chapter_status": "known_hits_scanned",
             "known_hit_count": int(known_hits.get("hit_count", 0) or 0),
             "updated_at": utc_now(),
         })
-        write_json(self.workspace.progress_path, progress)
         self._checkpoint()
         if self.on_phase_changed:
             self.on_phase_changed({"phase": "reviewing", "chapter_id": chapter_id})
         try:
             reviewed_summary = self._review_chapter(chapter_id)
         except ReviewContextOverflowError as exc:
-            progress.update({
+            self.repository.progress.patch({
                 "state": "running",
                 "last_chapter": chapter_id,
                 "chapter_status": "needs_oversized_review",
@@ -1875,13 +1869,12 @@ class IterativePipeline:
                 },
                 "updated_at": utc_now(),
             })
-            write_json(self.workspace.progress_path, progress)
             raise
         self._checkpoint()
         # Knowledge extraction is advisory; its failure never invalidates an
         # otherwise translated and semantically reviewed chapter.
         review_status = "reviewed"
-        progress.update({
+        self.repository.progress.patch({
             "state": "running",
             "completed_cycles": cycle,
             "last_chapter": chapter_id,
@@ -1889,7 +1882,6 @@ class IterativePipeline:
             "last_reviewed": reviewed_summary["checked_paragraphs"],
             "updated_at": utc_now(),
         })
-        write_json(self.workspace.progress_path, progress)
         return {
             "chapter_id": chapter_id,
             "translated": translated_summary["translated_paragraphs"],
@@ -1992,9 +1984,7 @@ class IterativePipeline:
             "work_report": str(self.workspace.data_dir / "work-report.yaml"),
         }
         write_json(self.workspace.reports_dir / "final-delivery.json", result)
-        progress = read_json(self.workspace.progress_path, {"book": self.book})
-        progress.update({"state": "completed", "output": str(output), "updated_at": utc_now(), "target_filename": target_filename})
-        write_json(self.workspace.progress_path, progress)
+        self.repository.progress.patch({"state": "completed", "output": str(output), "updated_at": utc_now(), "target_filename": target_filename})
 
         return result
 

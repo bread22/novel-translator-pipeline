@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - Windows uses the process-local lock.
 INVALID_DIRECTORY_CHARS = re.compile(r"[\\/:*?\"<>|\x00-\x1f]")
 _JSON_LOCKS: dict[Path, threading.RLock] = {}
 _JSON_LOCKS_GUARD = threading.Lock()
+_JSON_LOCK_DEPTH = threading.local()
 
 
 def utc_now() -> str:
@@ -51,14 +52,22 @@ def json_file_lock(path: Path):
         thread_lock = _JSON_LOCKS.setdefault(resolved, threading.RLock())
 
     with thread_lock:
+        held = getattr(_JSON_LOCK_DEPTH, "held", None)
+        if held is None:
+            held = _JSON_LOCK_DEPTH.held = set()
+        if resolved in held:
+            yield
+            return
         lock_path = resolved.with_name(f".{resolved.name}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock_file:
             if fcntl is not None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            held.add(resolved)
             try:
                 yield
             finally:
+                held.remove(resolved)
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 

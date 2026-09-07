@@ -131,7 +131,7 @@ class WebApiTests(unittest.TestCase):
         mock_manifest_path.return_value = self.book_dir / "manifest.json"
         mock_call_tool.return_value = {
             "status": "ok",
-            "summary": {"book": self.book_id, "title": "测试小说"},
+            "summary": {"book": "test_novel", "title": "测试小说"},
         }
 
         response = self.client.post(
@@ -140,7 +140,7 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["id"], self.book_id)
+        self.assertEqual(data["id"], "test_novel")
         self.assertEqual(data["name"], "测试小说")
 
         call_args = mock_call_tool.call_args.args
@@ -154,7 +154,7 @@ class WebApiTests(unittest.TestCase):
     ) -> None:
         mock_out_root.return_value = self.output_root
         mock_manifest_path.return_value = self.book_dir / "manifest.json"
-        mock_call_tool.return_value = {"status": "ok", "summary": {"book": self.book_id}}
+        mock_call_tool.return_value = {"status": "ok", "summary": {"book": "美人講師-汚辱-特別講座"}}
 
         response = self.client.post(
             "/api/v1/books/upload?replace=true",
@@ -177,7 +177,7 @@ class WebApiTests(unittest.TestCase):
             "status": "warning",
             "returncode": 0,
             "warnings": ["存在重复原文"],
-            "summary": {"book": self.book_id},
+            "summary": {"book": "スチュワーデス-夕子と可奈子"},
         }
 
         response = self.client.post(
@@ -186,7 +186,7 @@ class WebApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["id"], self.book_id)
+        self.assertEqual(response.json()["id"], "スチュワーデス-夕子と可奈子")
 
     @patch("translator.web.routes.books.manifest_path")
     @patch("translator.web.routes.books.get_output_root")

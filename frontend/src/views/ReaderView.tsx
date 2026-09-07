@@ -42,6 +42,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const [retranslatingParaId, setRetranslatingParaId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const mutationSequence = useRef(0);
+  const currentContext = useRef('');
+  const contextKey = `${book?.id ?? ''}/${selectedChapterId ?? ''}`;
+  if (currentContext.current !== contextKey) {
+    currentContext.current = contextKey;
+    mutationSequence.current++;
+  }
   const listSequence = useRef(0);
   const detailSequence = useRef(0);
   const detailAbort = useRef<AbortController | null>(null);
@@ -56,6 +63,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     setChapterReview(null);
     setChapterReviewError(null);
     setLoadError(null);
+    setEditingParaId(null);
+    setRetranslatingParaId(null);
     if (!book) return () => controller.abort();
 
     void (async () => {
@@ -122,6 +131,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     if (!book) return;
     setSelectedChapterId(chId);
     setEditingParaId(null);
+    setRetranslatingParaId(null);
     loadChapterDetail(book.id, chId);
   };
 
@@ -132,8 +142,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
 
   const handleSaveEdit = async (paraId: string) => {
     if (!book) return;
+    const context = currentContext.current;
+    const sequence = ++mutationSequence.current;
     try {
       await api.updateParagraph(book.id, paraId, editContent);
+      if (currentContext.current !== context || mutationSequence.current !== sequence) return;
       if (chapterDetail) {
         const updatedParagraphs = chapterDetail.paragraphs.map((p) =>
           p.id === paraId ? { ...p, translated: editContent, status: 'manually_edited' as const } : p
@@ -150,15 +163,19 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
       }
       setEditingParaId(null);
     } catch (err: any) {
+      if (currentContext.current !== context || mutationSequence.current !== sequence) return;
       alert(`保存修改失败: ${err.message}`);
     }
   };
 
   const handleRetranslate = async (paraId: string) => {
     if (!book || !selectedChapterId) return;
+    const context = currentContext.current;
+    const sequence = ++mutationSequence.current;
     setRetranslatingParaId(paraId);
     try {
       const res = await api.retranslateParagraph(book.id, selectedChapterId, paraId);
+      if (currentContext.current !== context || mutationSequence.current !== sequence) return;
       if (chapterDetail) {
         setChapterDetail({
           ...chapterDetail,
@@ -168,9 +185,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
         });
       }
     } catch (err: any) {
+      if (currentContext.current !== context || mutationSequence.current !== sequence) return;
       alert(`重译失败: ${err.message}`);
     } finally {
-      setRetranslatingParaId(null);
+      if (currentContext.current === context && mutationSequence.current === sequence) setRetranslatingParaId(null);
     }
   };
 

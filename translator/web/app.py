@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from translator.version import __version__
+from translator.core.job_manager import BookBusyError
 from translator.web.routes.books import router as books_router
 from translator.web.routes.events import router as events_router
 from translator.web.routes.knowledge import router as knowledge_router
@@ -42,6 +43,10 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+
+    @app.exception_handler(BookBusyError)
+    async def book_busy_handler(request: Request, exc: BookBusyError):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     configured_origins = [item.strip() for item in os.environ.get("WEB_CORS_ORIGINS", "").split(",") if item.strip()]
     app.add_middleware(
@@ -99,7 +104,9 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         async def serve_spa(request: Request, full_path: str):
             if full_path.startswith("api/") or full_path == "docs" or full_path == "redoc" or full_path == "openapi.json":
                 return JSONResponse(status_code=404, content={"detail": "Not Found"})
-            file_candidate = dist_path / full_path
+            file_candidate = (dist_path / full_path).resolve()
+            if not file_candidate.is_relative_to(dist_path.resolve()):
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
             if file_candidate.exists() and file_candidate.is_file():
                 return FileResponse(file_candidate)
             return FileResponse(

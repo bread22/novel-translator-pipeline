@@ -214,7 +214,8 @@ def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
             )
             requested_id = _flag_value(args, "--id", required=False)
             if requested_id:
-                book.id = api.slugify(requested_id)
+                from translator.web.path_policy import validate_book_id
+                book.id = validate_book_id(requested_id)
             target_dir = api.save_book(books_dir, book, source_path)
             warnings: list[str] = []
             summary: dict[str, Any] = {

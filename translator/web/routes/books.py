@@ -15,6 +15,7 @@ import zipfile
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from translator.core.config import load_config
 from translator.core.layout import apply_horizontal_layout, inject_epub_metadata
@@ -254,45 +255,80 @@ async def upload_book(file: UploadFile = File(...), replace: bool = Query(False)
             except (zipfile.BadZipFile, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=f"EPUB 文件无效：{exc}") from exc
 
-        existing_manifest = manifest_path(book_id)
-        if existing_manifest.exists() and not replace:
-            raise HTTPException(status_code=409, detail=f"书籍 ID 已存在：{book_id}；使用 replace=true 显式替换")
-        # Register book in novel-translator
-        result = call_novel_translator(
-            "add-book",
-            "--path",
-            str(tmp_path),
-            "--title",
-            book_title,
-            "--id",
-            book_id,
-        )
-        registration_status = str(result.get("status", "")).strip().lower()
-        registration_returncode = result.get("returncode")
-        registration_succeeded = (
-            registration_status in {"ok", "success", "warning"}
-            and registration_returncode in {None, 0}
-        )
-        if not registration_succeeded:
-            error_msg = "; ".join([e.get("message", "") for e in result.get("errors", [])]) or "Novel Translator 注册失败"
-            raise HTTPException(status_code=500, detail=error_msg)
-
-        summary = result.get("summary", {})
-        registered_id = str(summary.get("book", "") or summary.get("book_id", "") or book_id)
-
-        manifest = read_json(manifest_path(registered_id))
-        if not manifest:
-            raise HTTPException(status_code=500, detail=f"未找到已注册书籍 manifest: {registered_id}")
-
-        output_root = get_output_root()
-        title = manifest.get("title", book_title)
-        workspace = BookWorkspace.at(output_root, title)
-        workspace.initialize(source_epub=tmp_path if suffix == ".epub" else None, book_id=registered_id)
-
-        return summarize_book(registered_id, manifest, output_root)
+        return await run_in_threadpool(_register_uploaded_book, tmp_path, suffix, book_id, book_title, replace)
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+def _register_uploaded_book(tmp_path: Path, suffix: str, book_id: str, book_title: str, replace: bool) -> BookSummary:
+    # Reserve before inspecting state, so enqueue and replacement cannot race.
+    with job_manager.book_maintenance(book_id), _export_lock(book_id):
+        existing_manifest = manifest_path(book_id)
+        old_manifest = read_json(existing_manifest, {})
+        output_root = get_output_root()
+        roots = list(dict.fromkeys([
+            existing_manifest.parent,
+            BookWorkspace.at(output_root, old_manifest.get("title", book_title)).root,
+            BookWorkspace.at(output_root, book_title).root,
+        ]))
+        if existing_manifest.exists() and not replace:
+            raise HTTPException(status_code=409, detail=f"书籍 ID 已存在：{book_id}；使用 replace=true 显式替换")
+        with tempfile.TemporaryDirectory(prefix="book-upload-backup-") as backup_dir:
+            backups = []
+            for index, root in enumerate(roots):
+                backup = Path(backup_dir) / str(index)
+                existed = root.exists()
+                if existed:
+                    shutil.copytree(root, backup, symlinks=True)
+                backups.append((root, backup, existed))
+            try:
+                # Register book in novel-translator
+                result = call_novel_translator(
+                    "add-book",
+                    "--path",
+                    str(tmp_path),
+                    "--title",
+                    book_title,
+                    "--id",
+                    book_id,
+                )
+                registration_status = str(result.get("status", "")).strip().lower()
+                registration_returncode = result.get("returncode")
+                registration_succeeded = (
+                    registration_status in {"ok", "success", "warning"}
+                    and registration_returncode in {None, 0}
+                )
+                if not registration_succeeded:
+                    error_msg = "; ".join([e.get("message", "") for e in result.get("errors", [])]) or "Novel Translator 注册失败"
+                    raise HTTPException(status_code=500, detail=error_msg)
+
+                summary = result.get("summary", {})
+                registered_id = str(summary.get("book", "") or summary.get("book_id", "") or book_id)
+
+                if registered_id != book_id:
+                    raise ValueError("注册返回了意外的书籍 ID")
+                manifest = read_json(manifest_path(registered_id))
+                if not manifest:
+                    raise HTTPException(status_code=500, detail=f"未找到已注册书籍 manifest: {registered_id}")
+
+                output_root = get_output_root()
+                title = manifest.get("title", book_title)
+                workspace = BookWorkspace.at(output_root, title)
+                if workspace.root not in roots:
+                    raise ValueError("注册返回了意外的书籍目录")
+                if workspace.root.exists():
+                    shutil.rmtree(workspace.root)
+                workspace.initialize(source_epub=tmp_path if suffix == ".epub" else None, book_id=registered_id)
+
+                return summarize_book(registered_id, manifest, output_root)
+            except Exception:
+                for root, backup, existed in reversed(backups):
+                    if root.exists():
+                        shutil.rmtree(root)
+                    if existed:
+                        shutil.copytree(backup, root, symlinks=True)
+                raise
 
 
 @router.get("/{book_id}", response_model=BookSummary)

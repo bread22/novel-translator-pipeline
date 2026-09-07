@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -48,6 +49,10 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class BookBusyError(RuntimeError):
+    """A book has an active job or a storage replacement in progress."""
+
+
 class JobManager:
     """Thread-safe Queue Management and Execution Engine for multi-book batch translation."""
 
@@ -70,6 +75,7 @@ class JobManager:
         self._stop_events: dict[str, threading.Event] = {}
         self._pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self._maintenance_books: set[str] = set()
         self.process_id = uuid.uuid4().hex
         self.history_limit = 200
 
@@ -283,6 +289,21 @@ class JobManager:
         with self._lock:
             return not any(item.book_id == book_id and item.status in SLOT_STATUSES | {"cancelling"} for item in self._items.values())
 
+    @contextmanager
+    def book_maintenance(self, book_id: str):
+        """Reserve an idle book against enqueue/retry for a storage transaction."""
+        with self._lock:
+            if book_id in self._maintenance_books or any(
+                item.book_id == book_id and item.status in ACTIVE_STATUSES for item in self._items.values()
+            ):
+                raise BookBusyError(f"书籍存在活动任务或存储操作：{book_id}")
+            self._maintenance_books.add(book_id)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._maintenance_books.remove(book_id)
+
     def enqueue(
         self,
         book_id: str,
@@ -291,6 +312,8 @@ class JobManager:
         book_name: str | None = None,
     ) -> QueueItem:
         with self._lock:
+            if book_id in self._maintenance_books:
+                raise BookBusyError(f"书籍正在替换：{book_id}")
             # Enforce one active job per book across every entry point.
             for item in self._items.values():
                 if item.book_id == book_id and item.status in ACTIVE_STATUSES:
@@ -338,6 +361,8 @@ class JobManager:
     ) -> list[QueueItem]:
         added: list[QueueItem] = []
         with self._lock:
+            if any(book_id in self._maintenance_books for book_id in book_ids):
+                raise BookBusyError("批次包含正在替换的书籍")
             new_ids: list[str] = []
             for book_id in book_ids:
                 # Skip if already pending or running
@@ -389,6 +414,8 @@ class JobManager:
                 return None
 
             item = self._items[item_id]
+            if item.book_id in self._maintenance_books:
+                raise BookBusyError(f"书籍正在替换：{item.book_id}")
             if item.status in ACTIVE_STATUSES:
                 return item
             if item.status not in {"failed", "cancelled"}:
@@ -635,6 +662,9 @@ class JobManager:
                     item.process_id = self.process_id
                     item.phase = "initializing"
                     item.message = "正在初始化流水线..."
+                    self._stop_events[item.id] = threading.Event()
+                    self._pause_events[item.id] = threading.Event()
+                    self._pause_events[item.id].set()
                     items_to_start.append(item)
 
             self._recalculate_order_indexes()
@@ -642,9 +672,8 @@ class JobManager:
 
         # Start worker threads outside of lock
         for item in items_to_start:
-            stop_ev = threading.Event()
-            pause_ev = threading.Event()
-            pause_ev.set()
+            stop_ev = self._stop_events[item.id]
+            pause_ev = self._pause_events[item.id]
 
             thread = threading.Thread(
                 target=self._run_queue_worker,
@@ -952,14 +981,21 @@ class JobManager:
         except Exception as exc:
             logger.error("Queue worker failed for item %s: %s", item.id, exc, exc_info=True)
             with self._lock:
-                if item.status not in TERMINAL_STATUSES and item.status != "cancelling":
+                if item.status == "cancelling":
+                    self._transition_locked(item, {"cancelling"}, "cancelled")
+                    item.message = "取消期间调用出错；任务已终止"
+                    item.phase = "idle"
+                    item.error_detail = traceback.format_exc()
+                    item.completed_at = utc_now()
+                elif item.status not in TERMINAL_STATUSES:
                     self._transition_locked(item, {item.status}, "failed")
                     item.message = f"执行出错: {exc}"
                     item.phase = "idle"
                     item.error_detail = traceback.format_exc()
                     item.completed_at = utc_now()
                 self._save_state()
-            broadcaster.broadcast_sync("queue_item_failed", item.model_dump(), book_id=item.book_id)
+            event = "pipeline_stopped" if item.status == "cancelled" else "queue_item_failed"
+            broadcaster.broadcast_sync(event, item.model_dump(), book_id=item.book_id)
 
             if self.stop_on_error:
                 with self._lock:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 import json
 from pathlib import Path
 import re
 from typing import Any
 
-from translator.core.config import load_config, setting
+from translator.core.config import CONFIG_PATH, load_config, setting
+from translator.core.paths import PathResolver
 from translator.core.book_store import BookRepository, VersionConflict
 from translator.glossary.projection import build_translation_term_projection, select_relevant_terms
 from translator.providers.base import (
@@ -58,12 +60,17 @@ class ProviderTranslator:
         manifest: Path,
         timeout: int = 600,
         glossary_path: Path | None = None,
+        config: dict[str, Any] | None = None,
+        config_path: Path | None = None,
+        translation_policy: Path | None = None,
     ) -> None:
         self.novel_root = novel_root
         self.manifest = manifest
         self.timeout = timeout
         self.glossary_path = glossary_path
-        self.config = load_config()
+        self.config = deepcopy(config if config is not None else load_config())
+        self.paths = PathResolver.for_config(config_path or CONFIG_PATH)
+        self.translation_policy = self.paths.resolve(translation_policy) if translation_policy is not None else None
 
     def health_check(self, provider: str, timeout: int = 60) -> dict[str, Any]:
         try:
@@ -83,8 +90,7 @@ class ProviderTranslator:
                 "日语惯用语、拟态语和固定字形表达按中文语义翻译；只有 source 明确讨论原文字符时才用引号保留同一个字符并附中文说明。"
                 "输出完成前自检，除显式原文字符引用外不得残留日文假名或韩文字符。"
             )
-        policy_rel = self.config.get("paths", {}).get("translation_policy", "docs/prompts/translation-policy.md")
-        path = self.novel_root / policy_rel
+        path = self.translation_policy or self.paths.translation_policy(self.config)
         if path.exists():
             return path.read_text(encoding="utf-8")
         fallback_path = self.novel_root / "prompts" / "novel_translation_system.md"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import uuid
 
 from translator.core.config import load_config
+from translator.core.execution_context import BookExecutionContext
 from translator.core.job_control import CancellationToken, JobCancelled, PauseGate
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT
 from translator.core.paths import PathResolver
@@ -56,16 +58,21 @@ class BookBusyError(RuntimeError):
 class JobManager:
     """Thread-safe Queue Management and Execution Engine for multi-book batch translation."""
 
-    def __init__(self, output_root: Path | None = None) -> None:
+    def __init__(
+        self, output_root: Path | None = None, *, config: dict[str, Any] | None = None,
+        config_path: Path | None = None,
+    ) -> None:
+        self.config_path = config_path
+        self._config_override = deepcopy(config)
         try:
-            config = load_config()
+            config = self.execution_config()
         except FileNotFoundError:
             # Importing the wheel (including creating the FastAPI app for a
             # health/version probe) must not require a deployment-local config.
             # Operational commands still validate config.toml when they use it.
             config = {}
         self.output_root = output_root or (
-            PathResolver.for_config().output_root(config)
+            (PathResolver.for_config(config_path) if config_path is not None else PathResolver.for_config()).output_root(config)
             if config
             else (Path.cwd() / "output").resolve()
         )
@@ -89,6 +96,12 @@ class JobManager:
         self._load_state()
         if not self.is_paused:
             self._dispatch()
+
+    def execution_config(self) -> dict[str, Any]:
+        """Capture once per job; embedded callers may supply independent config."""
+        if self._config_override is not None:
+            return deepcopy(self._config_override)
+        return load_config(self.config_path) if self.config_path is not None else load_config()
 
     @property
     def state_file(self) -> Path:
@@ -735,11 +748,12 @@ class JobManager:
             item.message = f"共 {item.total_chapters} 章节，流水线推进中..."
             self._emit_item_progress(item)
 
-            policy_path = (
-                Path(item.options.translation_policy).resolve()
-                if item.options.translation_policy
-                else None
+            context = BookExecutionContext.create(
+                book_id=item.book_id, manifest=manifest_path(item.book_id), workspace=workspace,
+                novel_root=NOVEL_TRANSLATOR_ROOT, config=self.execution_config(), config_path=self.config_path,
+                translation_policy=Path(item.options.translation_policy) if item.options.translation_policy else None,
             )
+            policy_path = context.translation_policy
 
             def _get_paragraph_progress() -> tuple[int, int, float]:
                 m = read_json(manifest_path(item.book_id), default={})
@@ -863,6 +877,7 @@ class JobManager:
 
             # 2. Instantiate pipeline
             pipeline = ChapterPipeline(
+                execution_context=context,
                 book=item.book_id,
                 workspace=workspace,
                 manifest=manifest_path(item.book_id),
@@ -873,11 +888,7 @@ class JobManager:
                 fallback_translators=item.options.fallback_translators or None,
                 reviewer=item.options.reviewer or None,
                 translation_policy=policy_path,
-                targeted_translator=ProviderTranslator(
-                    novel_root=NOVEL_TRANSLATOR_ROOT,
-                    manifest=manifest_path(item.book_id),
-                    glossary_path=workspace.glossary_path,
-                ),
+                targeted_translator=context.translator(factory=ProviderTranslator),
                 on_batch_completed=handle_batch_completed,
                 on_phase_changed=handle_phase_changed,
                 on_reviewer_status=handle_reviewer_status,

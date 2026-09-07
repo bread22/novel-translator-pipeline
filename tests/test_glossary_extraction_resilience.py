@@ -484,14 +484,9 @@ def test_pipeline_finalization_batches_and_retries_missing_decisions(tmp_path: P
             {"candidate_id": candidate_id, "action": "candidate"} for candidate_id in selected
         ]}
 
-    pipeline = IterativePipeline(
-        book="batch-book",
-        workspace=workspace,
-        manifest=manifest_path,
-        tool_call=lambda *_args: {"status": "ok"},
-        knowledge_extractor=extractor,
-    )
+    base_config = pipeline_module.load_config()
     monkeypatch.setattr(pipeline_module, "load_config", lambda: {
+        **base_config,
         "knowledge_extractor": {
             "enabled": True,
             "finalization_batch_size": 2,
@@ -499,6 +494,13 @@ def test_pipeline_finalization_batches_and_retries_missing_decisions(tmp_path: P
             "input_hard_limit_chars": 30_000,
         }
     })
+    pipeline = IterativePipeline(
+        book="batch-book",
+        workspace=workspace,
+        manifest=manifest_path,
+        tool_call=lambda *_args: {"status": "ok"},
+        knowledge_extractor=extractor,
+    )
     pipeline._knowledge_candidates["c1"] = [
         {
             "candidate_id": f"cand-{index}",
@@ -538,14 +540,9 @@ def test_pipeline_empty_finalization_is_incomplete_after_retries(tmp_path: Path,
         "book": "incomplete-book",
         "chapters": [{"id": "c1", "paragraphs": [paragraph, second_paragraph]}],
     }, ensure_ascii=False), encoding="utf-8")
-    pipeline = IterativePipeline(
-        book="incomplete-book",
-        workspace=workspace,
-        manifest=manifest_path,
-        tool_call=lambda *_args: {"status": "ok"},
-        knowledge_extractor=lambda _kind, _payload: {"decisions": []},
-    )
+    base_config = pipeline_module.load_config()
     monkeypatch.setattr(pipeline_module, "load_config", lambda: {
+        **base_config,
         "knowledge_extractor": {
             "enabled": True,
             "finalization_batch_size": 12,
@@ -553,6 +550,13 @@ def test_pipeline_empty_finalization_is_incomplete_after_retries(tmp_path: Path,
             "input_hard_limit_chars": 30_000,
         }
     })
+    pipeline = IterativePipeline(
+        book="incomplete-book",
+        workspace=workspace,
+        manifest=manifest_path,
+        tool_call=lambda *_args: {"status": "ok"},
+        knowledge_extractor=lambda _kind, _payload: {"decisions": []},
+    )
     pipeline._knowledge_candidates["c1"] = [{
         "candidate_id": "cand-1",
         "kind": "glossary",

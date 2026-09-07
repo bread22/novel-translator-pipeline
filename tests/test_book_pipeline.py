@@ -845,7 +845,7 @@ class PipelineFunctionTests(unittest.TestCase):
             states: list[dict[str, Any]] = []
 
             class Provider:
-                def __init__(self, name: str) -> None:
+                def __init__(self, name: str, config=None) -> None:
                     self.name = name
 
                 def review(self, _kind, payload, _schema, *, timeout, **_kwargs):

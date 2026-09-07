@@ -12,7 +12,8 @@ from typing import Any, Callable, Mapping
 import uuid
 import zipfile
 
-from translator.core.book_store import BookRepository, JsonDocument
+from translator.core.book_store import BookRepository
+from translator.core.execution_context import BookExecutionContext
 from translator.core.config import (
     dual_review_enabled,
     fallback_translators_names,
@@ -238,26 +239,27 @@ class IterativePipeline:
         cancellation_token: CancellationToken | None = None,
         pause_gate: PauseGate | None = None,
         knowledge_extractor: Callable[..., Any] | None = None,
+        execution_context: BookExecutionContext | None = None,
     ) -> None:
         self.book = book
         self.workspace = workspace
         self.manifest = manifest
         self.repository = BookRepository(manifest_path=manifest, workspace=workspace)
         self.tool_call = tool_call
+        self.execution_context = execution_context or BookExecutionContext.create(
+            book_id=book, manifest=manifest, workspace=workspace, novel_root=NOVEL_TRANSLATOR_ROOT,
+            config=load_config(), translation_policy=translation_policy,
+        )
         self.targeted_translator: Callable[..., dict[str, Any]] | None
         if targeted_translator is not None:
             self.targeted_translator = targeted_translator
         elif tool_call is call_novel_translator:
-            self.targeted_translator = ProviderTranslator(
-                novel_root=NOVEL_TRANSLATOR_ROOT,
-                manifest=manifest,
-                glossary_path=workspace.glossary_path,
-            )
+            self.targeted_translator = self.execution_context.translator(factory=ProviderTranslator)
         else:
             self.targeted_translator = None
         self.chapter_reviewer = chapter_reviewer or run_chapter_review
 
-        config = load_config()
+        config = self.execution_context.config
         pipeline_cfg = config.get("pipeline", {})
 
         eff_batch_max_chars = primary_batch_max_chars if primary_batch_max_chars is not None else int(pipeline_cfg.get("primary_batch_max_chars", 4000))
@@ -295,8 +297,8 @@ class IterativePipeline:
         self.translation_max_tokens = max(512, eff_max_tokens)
         eff_max_batches = max_chapter_batches if max_chapter_batches is not None else int(pipeline_cfg.get("max_chapter_batches", 1000))
         self.max_chapter_batches = max(1, eff_max_batches)
-        paths = PathResolver.for_config()
-        self.translation_policy = translation_policy or paths.translation_policy(config)
+        paths = PathResolver.for_config(self.execution_context.config_path)
+        self.translation_policy = self.execution_context.translation_policy
         self.apply = apply
         review_apply_cfg = dict(pipeline_cfg.get("review_apply", {}) or {})
         self.review_apply_mode = str(review_apply_mode or review_apply_cfg.get("mode", "report_only"))
@@ -1159,7 +1161,7 @@ class IterativePipeline:
         return repaired
 
     def _knowledge_config(self) -> dict[str, Any]:
-        return dict(load_config().get("knowledge_extractor", {}) or {})
+        return dict(self.execution_context.config.get("knowledge_extractor", {}) or {})
 
     @staticmethod
     def _project_window_fixes(window: dict[str, list[dict[str, Any]]], review: dict[str, Any], *, apply: bool) -> dict[str, list[dict[str, Any]]]:
@@ -1240,7 +1242,7 @@ class IterativePipeline:
                 }
                 write_json(output_path, result)
             else:
-                result = run_knowledge_extractor_window(payload, output_path=output_path)
+                result = run_knowledge_extractor_window(payload, output_path=output_path, config=self.execution_context.config)
         except JobCancelled:
             raise
         except Exception as exc:
@@ -1393,7 +1395,7 @@ class IterativePipeline:
                         finalized["status"] = "completed"
                         write_json(attempt_output_path, finalized)
                     else:
-                        finalized = run_knowledge_finalization(final_input, output_path=attempt_output_path)
+                        finalized = run_knowledge_finalization(final_input, output_path=attempt_output_path, config=self.execution_context.config)
                 except JobCancelled:
                     raise
                 except Exception as exc:
@@ -1570,9 +1572,10 @@ class IterativePipeline:
                     return {}
                 return self._extract_window_knowledge(chapter_id, window, review_result, index, total)
             if self.chapter_reviewer is run_chapter_review:
-                run_chapter_review(
+                self.execution_context.review(
                     input_path,
                     output_path,
+                    factory=run_chapter_review,
                     autonomous=self.autonomous,
                     backend=self.reviewer,
                     on_reviewer_status=self.on_reviewer_status,
@@ -1594,9 +1597,10 @@ class IterativePipeline:
             retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
             if self._builtin_reviewer:
                 if self.chapter_reviewer is run_chapter_review:
-                    run_chapter_review(
+                    self.execution_context.review(
                         input_path,
                         retry_path,
+                        factory=run_chapter_review,
                         autonomous=self.autonomous,
                         backend=self.reviewer,
                         on_reviewer_status=self.on_reviewer_status,
@@ -1996,11 +2000,11 @@ def main() -> int:
     if args.health_check_timeout <= 0:
         raise ValueError("health_check_timeout 必须大于 0")
     workspace = BookWorkspace.at(args.output_root, args.name)
-    targeted_translator = ProviderTranslator(
-        novel_root=NOVEL_TRANSLATOR_ROOT,
-        manifest=manifest_path(args.book),
-        glossary_path=workspace.glossary_path,
+    context = BookExecutionContext.create(
+        book_id=args.book, manifest=manifest_path(args.book), workspace=workspace, novel_root=NOVEL_TRANSLATOR_ROOT,
+        config=load_config(), translation_policy=args.translation_policy,
     )
+    targeted_translator = context.translator(factory=ProviderTranslator)
     try:
         preflight = run_preflight(
             targeted_translator,
@@ -2022,7 +2026,7 @@ def main() -> int:
         *,
         on_window_completed: Callable[..., Any] | None = None,
     ) -> None:
-        run_chapter_review(
+        context.review(
             input_path,
             output_path,
             autonomous=args.autonomous,
@@ -2041,6 +2045,7 @@ def main() -> int:
     setattr(configured_chapter_reviewer, "_uses_window_knowledge", True)
 
     pipeline = IterativePipeline(
+        execution_context=context,
         book=args.book,
         workspace=workspace,
         manifest=manifest_path(args.book),

@@ -5,6 +5,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from translator.core.config import load_config, primary_translator_name
+from translator.core.execution_context import BookExecutionContext
+from translator.core.paths import PathResolver
+from translator.core.workspace import BookWorkspace
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT
 from translator.core.workspace import read_json
 from translator.pipeline.chapter_pipeline import manifest_path
@@ -95,7 +98,11 @@ def retranslate_paragraph(request: RetranslateParagraphRequest) -> dict[str, Any
     provider_name = request.provider or primary_translator_name(config)
 
     # Use ProviderTranslator for single paragraph targeted translation
-    translator = ProviderTranslator(novel_root=NOVEL_TRANSLATOR_ROOT, manifest=path)
+    workspace = BookWorkspace.at(PathResolver.for_config().output_root(config), manifest.get("title", request.book_id))
+    context = BookExecutionContext.create(
+        book_id=request.book_id, manifest=path, workspace=workspace, novel_root=NOVEL_TRANSLATOR_ROOT, config=config,
+    )
+    translator = context.translator(factory=ProviderTranslator)
     source_chars = len(str(target_para.get("source", "")))
     result = translator(
         provider_name,

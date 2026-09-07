@@ -12,7 +12,7 @@ from translator.providers.openai_provider import OpenAIProvider
 
 def get_provider(name: str, config: dict[str, Any] | None = None) -> BaseProvider:
     """Instantiate a provider adapter by its name in config.toml."""
-    cfg = config or load_config()
+    cfg = config if config is not None else load_config()
     providers = cfg.get("providers", {})
     if name not in providers:
         matching = [p_name for p_name, p_val in providers.items() if isinstance(p_val, dict) and p_val.get("type") == name]

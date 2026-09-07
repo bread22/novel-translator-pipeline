@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 import argparse
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
@@ -691,13 +693,13 @@ def review_report_counts(checked: int, records: list[dict[str, Any]]) -> dict[st
     }
 
 
-def _selected_backend(backend: str | None = None) -> str:
-    config = load_config()
+def _selected_backend(backend: str | None = None, *, config: dict[str, Any] | None = None) -> str:
+    config = config if config is not None else load_config()
     return (backend or setting(config, "roles.reviewer", "REVIEWER")).strip()
 
 
-def _review_backends(backend: str | None = None) -> list[str]:
-    config = load_config()
+def _review_backends(backend: str | None = None, *, config: dict[str, Any] | None = None) -> list[str]:
+    config = config if config is not None else load_config()
     primary = (backend or setting(config, "roles.reviewer", "REVIEWER")).strip()
     fallbacks = [
         str(item).strip()
@@ -707,10 +709,10 @@ def _review_backends(backend: str | None = None) -> list[str]:
     return [primary] + fallbacks
 
 
-def check_reviewer(timeout: int = 60, *, backend: str | None = None) -> dict[str, Any]:
-    selected = _selected_backend(backend)
+def check_reviewer(timeout: int = 60, *, backend: str | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    selected = _selected_backend(backend, config=config)
     try:
-        provider = get_provider(selected)
+        provider = get_provider(selected, config) if config is not None else get_provider(selected)
         return provider.health_check(timeout=timeout)
     except Exception as exc:
         return {"name": f"reviewer:{selected}", "status": "error", "error": str(exc)}
@@ -996,11 +998,12 @@ def _execute_review_with_fallbacks(
     monotonic: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
     wall_clock: Callable[[], float] = time.time,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    backends = _review_backends(backend)
+    backends = _review_backends(backend, config=config) if config is not None else _review_backends(backend)
     last_exc: Exception | None = None
     effective_timeout = timeout or dynamic_review_timeout(input_payload)
-    pipeline_config = retry_config if retry_config is not None else load_config().get("pipeline", {})
+    pipeline_config = retry_config if retry_config is not None else (config if config is not None else load_config()).get("pipeline", {})
     transient_retries = max(0, int(pipeline_config.get("transient_http_retries", 3)))
     timeout_retries = max(0, int(pipeline_config.get("timeout_retries", 1)))
     connection_retries = max(0, int(pipeline_config.get("connection_retries", 2)))
@@ -1045,7 +1048,7 @@ def _execute_review_with_fallbacks(
                 on_reviewer_status({**status_base, "status": "reviewing" if retry_index == 0 else "retrying"})
             try:
                 if provider is None:
-                    provider = get_provider(candidate)
+                    provider = get_provider(candidate, config) if config is not None else get_provider(candidate)
                 result = provider.review(
                     kind, input_payload, schema_path, autonomous=autonomous, timeout=effective_timeout
                 )
@@ -1215,6 +1218,7 @@ def _execute_single_segment_review(
     monotonic: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
     wall_clock: Callable[[], float] = time.time,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute single segment review with dual review (if configured) and backend failover."""
     primary_cand = backend
@@ -1245,6 +1249,7 @@ def _execute_single_segment_review(
             monotonic=monotonic,
             sleeper=sleeper,
             wall_clock=wall_clock,
+            config=config,
         )
         try:
             while not future.done():
@@ -1297,6 +1302,7 @@ def _execute_single_segment_review(
             monotonic=monotonic,
             sleeper=sleeper,
             wall_clock=wall_clock,
+            config=config,
         ): (role, candidate)
         for role, candidate in reviewers.items()
     }
@@ -1360,6 +1366,7 @@ def _execute_segment_with_adaptive_split(
     monotonic: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
     wall_clock: Callable[[], float] = time.time,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute review and split only failures whose classification can benefit from smaller input."""
     if not items:
@@ -1399,6 +1406,7 @@ def _execute_segment_with_adaptive_split(
                 max_depth=max_depth,
                 context_before_size=context_before_size,
                 context_after_size=context_after_size,
+                config=config,
             ): (reviewer_role, candidate)
             for reviewer_role, candidate in {"primary": backend, "secondary": secondary_backend}.items()
         }
@@ -1444,7 +1452,7 @@ def _execute_segment_with_adaptive_split(
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
     context_diagnostics: dict[str, Any] | None = None
-    pipeline_config = load_config().get("pipeline", {})
+    pipeline_config = config if config is not None else (config if config is not None else load_config()).get("pipeline", {})
     context_config = ReviewContextBudget.from_mapping(pipeline_config.get("review_context"))
     if context_config.enabled:
         _snapshot, context_diagnostics, segment_payload = build_budgeted_review_context(
@@ -1486,6 +1494,7 @@ def _execute_segment_with_adaptive_split(
             sleeper=sleeper,
             wall_clock=wall_clock,
             role=role,
+            config=config,
         )
         res = validate_chapter_review_payload(
             res,
@@ -1541,6 +1550,7 @@ def _execute_segment_with_adaptive_split(
                 max_depth=max_depth,
                 context_before_size=context_before_size,
                 context_after_size=context_after_size,
+                config=config,
             )
 
             rolling_payload = _update_rolling_payload(base_payload, left_res)
@@ -1574,6 +1584,7 @@ def _execute_segment_with_adaptive_split(
                 max_depth=max_depth,
                 context_before_size=context_before_size,
                 context_after_size=context_after_size,
+                config=config,
             )
 
             return _combine_chunk_reviews(left_res, right_res)
@@ -1647,13 +1658,14 @@ def run_chapter_review(
     on_reviewer_status: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
     on_window_completed: Callable[[dict[str, Any], dict[str, list[dict[str, Any]]], int, int], dict[str, Any] | None] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> None:
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
 
-    config = load_config()
+    config = deepcopy(config if config is not None else load_config())
     is_dual = (
         dual_review
         if dual_review is not None
@@ -1754,6 +1766,7 @@ def run_chapter_review(
             attempt_lock=attempt_lock,
             context_before_size=effective_context_before,
             context_after_size=effective_context_after,
+            config=config,
         )
         if aggregate is None:
             aggregate = chunk_res
@@ -1832,6 +1845,7 @@ def run_chapter_review(
                         attempt_lock=attempt_lock,
                         context_before_size=effective_context_before,
                         context_after_size=effective_context_after,
+                        config=config,
                     )
                     aggregate = _replace_targeted_review(aggregate, targeted_res, {finding_id})
                     backtrack_diagnostics.append({
@@ -1878,12 +1892,12 @@ def run_chapter_review(
     output_path.write_text(json.dumps(merged_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def run_global_consistency_review(input_path: Path, output_path: Path, *, backend: str | None = None) -> None:
+def run_global_consistency_review(input_path: Path, output_path: Path, *, backend: str | None = None, config: dict[str, Any] | None = None) -> None:
     try:
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Reviewer input is invalid: {input_path}: {exc}") from exc
-    payload = _execute_review_with_fallbacks("global", input_payload, GLOBAL_SCHEMA, autonomous=False, backend=backend)
+    payload = _execute_review_with_fallbacks("global", input_payload, GLOBAL_SCHEMA, autonomous=False, backend=backend, config=config)
     expected_chapters = {str(item.get("chapter_id", "")) for item in input_payload.get("chapters", []) if isinstance(item, dict) and item.get("chapter_id")}
     payload = validate_global_consistency_payload(payload, expected_chapters)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1902,8 +1916,10 @@ def review_book(
     autonomous: bool = False,
     export: bool = False,
     reviewer: str | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    review_apply_cfg = dict(load_config().get("pipeline", {}).get("review_apply", {}) or {})
+    config = deepcopy(config if config is not None else load_config())
+    review_apply_cfg = dict((config if config is not None else load_config()).get("pipeline", {}).get("review_apply", {}) or {})
     apply = bool(apply and review_apply_cfg.get("mode", "report_only") == "hard_fix")
     workspace = BookWorkspace.at(output_root, name)
     workspace.initialize(book_id=book)
@@ -1948,7 +1964,7 @@ def review_book(
             "items": items,
             "glossary": glossary.get("terms", []),
         })
-        run_chapter_review(input_path, output_path, autonomous=autonomous, backend=reviewer)
+        run_chapter_review(input_path, output_path, autonomous=autonomous, backend=reviewer, config=config)
         review = read_json(output_path)
         if not isinstance(review, dict):
             raise ValueError(f"章节审阅结果不是 JSON 对象：{output_path}")
@@ -1957,7 +1973,7 @@ def review_book(
             if not missing_checked_ids(review, expected):
                 break
             retry_path = workspace.reviews_dir / f"{c_id}-consistency-retry-{retry:02d}.json"
-            run_chapter_review(input_path, retry_path, autonomous=autonomous, backend=reviewer)
+            run_chapter_review(input_path, retry_path, autonomous=autonomous, backend=reviewer, config=config)
             review = read_json(retry_path)
         review = validate_chapter_review_payload(
             review,
@@ -2080,7 +2096,7 @@ def review_book(
             "book_memory": memory,
             "glossary": glossary.get("terms", []),
         })
-        run_global_consistency_review(global_input, global_output, backend=reviewer)
+        run_global_consistency_review(global_input, global_output, backend=reviewer, config=config)
         global_payload = read_json(global_output)
         validate_global_consistency_payload(global_payload, {str(c["id"]) for c in all_chapters})
         global_report = workspace.reports_dir / "global-consistency.json"

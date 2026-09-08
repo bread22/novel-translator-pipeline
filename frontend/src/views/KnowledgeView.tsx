@@ -38,6 +38,15 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
   const [newCategory, setNewCategory] = useState('character');
   const [newNotes, setNewNotes] = useState('');
 
+  const bookId = book?.id;
+  const resource = activeTab === 'glossary' ? 'glossary' : activeTab === 'reports' ? 'reports' : 'memory';
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    setShowAddModal(false);
+    setSearch('');
+  }, [bookId]);
+
   useEffect(() => {
     const controller = new AbortController();
     const sequence = ++requestSequence.current;
@@ -47,47 +56,36 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
     setMemory(null);
     setReports([]);
     setLoadError(null);
-    if (!book) return () => controller.abort();
-    setIsLoading(true);
-    void loadData(book.id, controller.signal, sequence);
+    setIsLoading(Boolean(bookId));
+    if (!bookId) return () => controller.abort();
+    void (async () => {
+      try {
+        const options = { signal: controller.signal };
+        if (resource === 'glossary') {
+          const result = await api.getGlossary(bookId, options);
+          if (controller.signal.aborted || sequence !== requestSequence.current) return;
+          setGlossaryTerms(result.terms || []);
+          setPendingItems(result.pending_items || []);
+          setPendingReasonCounts(result.pending_reason_counts || {});
+        } else if (resource === 'reports') {
+          const result = await api.getReports(bookId, options);
+          if (controller.signal.aborted || sequence !== requestSequence.current) return;
+          setReports(result || []);
+        } else {
+          const result = await api.getMemory(bookId, options);
+          if (controller.signal.aborted || sequence !== requestSequence.current) return;
+          setMemory(result);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted && sequence === requestSequence.current) {
+          setLoadError(error instanceof Error ? error.message : '加载失败');
+        }
+      } finally {
+        if (!controller.signal.aborted && sequence === requestSequence.current) setIsLoading(false);
+      }
+    })();
     return () => controller.abort();
-  }, [book?.id]);
-
-  const loadData = async (bookId: string, signal: AbortSignal, sequence: number) => {
-    try {
-      const [glossaryRes, memoryRes, reportsRes] = await Promise.allSettled([
-        api.getGlossary(bookId, { signal }),
-        api.getMemory(bookId, { signal }),
-        api.getReports(bookId, { signal }),
-      ]);
-      if (signal.aborted || sequence !== requestSequence.current) return;
-
-      const errors: string[] = [];
-      if (glossaryRes.status === 'fulfilled') {
-        setGlossaryTerms(glossaryRes.value.terms || []);
-        setPendingItems(glossaryRes.value.pending_items || []);
-        setPendingReasonCounts(glossaryRes.value.pending_reason_counts || {});
-      } else {
-        errors.push(`术语表：${glossaryRes.reason instanceof Error ? glossaryRes.reason.message : '加载失败'}`);
-      }
-      if (memoryRes.status === 'fulfilled') {
-        setMemory(memoryRes.value);
-      } else {
-        errors.push(`记忆：${memoryRes.reason instanceof Error ? memoryRes.reason.message : '加载失败'}`);
-      }
-      if (reportsRes.status === 'fulfilled') {
-        setReports(reportsRes.value || []);
-      } else {
-        errors.push(`质检报告：${reportsRes.reason instanceof Error ? reportsRes.reason.message : '加载失败'}`);
-      }
-      setLoadError(errors.length > 0 ? errors.join('；') : null);
-    } catch (err) {
-      if (signal.aborted || sequence !== requestSequence.current) return;
-      setLoadError(err instanceof Error ? err.message : '知识库加载失败');
-    } finally {
-      if (sequence === requestSequence.current) setIsLoading(false);
-    }
-  };
+  }, [bookId, resource, reload]);
 
   const handleAddTerm = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +100,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
     };
 
     try {
+      const sequence = requestSequence.current;
       const updated = await api.updateGlossary(book.id, [newItem]);
+      if (sequence !== requestSequence.current) return;
       setGlossaryTerms(updated.terms);
       setShowAddModal(false);
       setNewSource('');
@@ -146,7 +146,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({ book }) => {
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16">
       {isLoading && <div role="status" className="border border-[#E5E0D8] bg-white p-4 text-xs text-[#666666]">正在加载知识库…</div>}
-      {loadError && <div role="alert" className="border border-red-300 bg-red-50 p-4 text-xs text-red-800">知识库加载失败：{loadError}</div>}
+      {loadError && <div role="alert" className="border border-red-300 bg-red-50 p-4 text-xs text-red-800">知识库加载失败：{loadError} <button onClick={() => setReload((value) => value + 1)}>重试</button></div>}
       
       {/* Top Banner */}
       <div className="bg-white border border-[#E5E0D8] p-6 rounded-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">

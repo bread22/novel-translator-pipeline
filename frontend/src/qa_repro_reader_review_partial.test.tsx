@@ -21,4 +21,16 @@ describe('QA regression: Reader review partial failure', () => {
     expect(await screen.findByText('译文')).toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent('review down');
   });
+  it('renders chapter text while its review report is still pending', async () => {
+    vi.spyOn(api, 'getChapters').mockResolvedValue([{ id: 'c1', title: 'Chapter 1' }] as any);
+    vi.spyOn(api, 'getChapterDetail').mockResolvedValue({
+      id: 'c1', title: 'Chapter 1', paragraphs: [
+        { id: 'p1', source: '源文', translated: '正文先显示', status: 'translated' },
+      ],
+    } as any);
+    vi.spyOn(api, 'getChapterReview').mockReturnValue(new Promise(() => {}));
+    render(<ReaderView book={{ id: 'book-1', name: 'Book 1' } as any} />);
+    expect(await screen.findByText('正文先显示')).toBeInTheDocument();
+  });
+
 });

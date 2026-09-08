@@ -10,6 +10,7 @@ describe('Knowledge loading states', () => {
     vi.spyOn(api, 'getMemory').mockResolvedValue({ book_id: 'book', characters: [], world_settings: [] });
     vi.spyOn(api, 'getReports').mockResolvedValue([]);
     render(<KnowledgeView book={{ id: 'book', name: 'Book' } as any} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: /术语表/ }));
     expect(await screen.findByRole('alert')).toHaveTextContent('network down');
   });
 
@@ -99,4 +100,17 @@ describe('Knowledge loading states', () => {
     expect(screen.getByText(/问题分类 style 不在客观缺陷自动修正白名单/)).toBeInTheDocument();
     expect(screen.getByText(/建议风格译文/)).toBeInTheDocument();
   });
+  it('loads only the visible knowledge resource', async () => {
+    const glossary = vi.spyOn(api, 'getGlossary').mockResolvedValue({ terms: [] } as any);
+    const memory = vi.spyOn(api, 'getMemory').mockResolvedValue({} as any);
+    const reports = vi.spyOn(api, 'getReports').mockResolvedValue([]);
+    render(<KnowledgeView book={{ id: 'book', name: 'Book' } as any} />);
+    expect(reports).toHaveBeenCalledTimes(1);
+    expect(glossary).not.toHaveBeenCalled();
+    expect(memory).not.toHaveBeenCalled();
+    await userEvent.setup().click(screen.getByRole('button', { name: /术语表/ }));
+    expect(glossary).toHaveBeenCalledTimes(1);
+    expect(memory).not.toHaveBeenCalled();
+  });
+
 });

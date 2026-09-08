@@ -17,9 +17,10 @@ describe('QA regression: Knowledge partial loading', () => {
     vi.spyOn(api, 'getReports').mockResolvedValue([]);
 
     render(<KnowledgeView book={{ id: 'book', name: 'Book' } as any} />);
+    await user.click(screen.getByRole('button', { name: /角色档案/ }));
     expect(await screen.findByRole('alert')).toHaveTextContent('memory down');
     await user.click(screen.getByRole('button', { name: /术语表/ }));
 
-    expect(screen.getByText('名字')).toBeInTheDocument();
+    expect(await screen.findByText('名字')).toBeInTheDocument();
   });
 });

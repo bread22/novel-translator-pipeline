@@ -53,10 +53,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
   const detailSequence = useRef(0);
   const detailAbort = useRef<AbortController | null>(null);
 
+  const bookId = book?.id;
+
   useEffect(() => {
     const controller = new AbortController();
     const sequence = ++listSequence.current;
     detailAbort.current?.abort();
+    detailAbort.current = null;
     setChapters([]);
     setSelectedChapterId(null);
     setChapterDetail(null);
@@ -65,17 +68,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     setLoadError(null);
     setEditingParaId(null);
     setRetranslatingParaId(null);
-    if (!book) return () => controller.abort();
+    if (!bookId) return () => controller.abort();
 
     void (async () => {
       setIsLoading(true);
       try {
-        const data = await api.getChapters(book.id, { signal: controller.signal });
+        const data = await api.getChapters(bookId, { signal: controller.signal });
         if (sequence !== listSequence.current) return;
         setChapters(data);
         if (data.length > 0) {
           setSelectedChapterId(data[0].id);
-          await loadChapterDetail(book.id, data[0].id);
+          await loadChapterDetail(bookId, data[0].id);
         }
       } catch (err) {
         if (controller.signal.aborted || sequence !== listSequence.current) return;
@@ -84,8 +87,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
         if (sequence === listSequence.current && !detailAbort.current) setIsLoading(false);
       }
     })();
-    return () => controller.abort();
-  }, [book?.id]);
+    return () => {
+      controller.abort();
+      detailAbort.current?.abort();
+    };
+  }, [bookId]);
 
   const loadChapterDetail = async (bookId: string, chapterId: string) => {
     detailAbort.current?.abort();
@@ -98,30 +104,24 @@ export const ReaderView: React.FC<ReaderViewProps> = ({ book }) => {
     setChapterReview(null);
     setChapterReviewError(null);
     try {
-      const reviewPromise = api.getChapterReview(bookId, chapterId, { signal: controller.signal }).then(
-        (value) => ({ value, error: null as string | null }),
+      void api.getChapterReview(bookId, chapterId, { signal: controller.signal }).then(
+        (value) => {
+          if (!controller.signal.aborted && sequence === detailSequence.current) setChapterReview(value);
+        },
         (error) => {
-          if (controller.signal.aborted) throw error;
-          return {
-            value: null,
-            error: error instanceof Error ? error.message : '本章审阅报告加载失败',
-          };
+          if (!controller.signal.aborted && sequence === detailSequence.current) {
+            setChapterReviewError(error instanceof Error ? error.message : '本章审阅报告加载失败');
+          }
         },
       );
-      const [detail, reviewRes] = await Promise.all([
-        api.getChapterDetail(bookId, chapterId, { signal: controller.signal }),
-        reviewPromise,
-      ]);
-      if (sequence !== detailSequence.current) return;
+      const detail = await api.getChapterDetail(bookId, chapterId, { signal: controller.signal });
+      if (controller.signal.aborted || sequence !== detailSequence.current) return;
       setChapterDetail(detail);
-      setChapterReview(reviewRes.value);
-      setChapterReviewError(reviewRes.error);
     } catch (err) {
       if (controller.signal.aborted || sequence !== detailSequence.current) return;
       setLoadError(err instanceof Error ? err.message : '章节加载失败');
     } finally {
       if (sequence === detailSequence.current) {
-        detailAbort.current = null;
         setIsLoading(false);
       }
     }

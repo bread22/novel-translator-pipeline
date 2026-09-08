@@ -250,8 +250,11 @@ def _state_projection(state: Any) -> dict[str, Any]:
              "locations", "relationships", "important_states", "notes",
              "adopted_terms", "timeline", "summary")
     projected = {key: deepcopy(state[key]) for key in order if key in state and state[key] not in (None, "", [])}
-    entities = [value for key in ("active_entities", "characters")
-                for value in (state.get(key) if isinstance(state.get(key), list) else [])]
+    entities = []
+    for key in ("active_entities", "characters"):
+        values = state.get(key)
+        if isinstance(values, list):
+            entities.extend(values)
     if entities:
         projected["active_entities"] = list(dict.fromkeys(str(value) for value in entities if value))
     return projected

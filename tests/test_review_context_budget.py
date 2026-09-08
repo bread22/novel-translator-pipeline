@@ -222,3 +222,28 @@ def test_full_execution_config_enables_budget_at_provider_boundary(monkeypatch):
     assert state["locations"] == ["王都"]
     assert state["relationships"] == ["勇者是国王之子"]
     assert state["notes"] == ["身份保密"]
+
+
+def test_budget_overflow_splits_before_provider_execution(monkeypatch):
+    from translator.review import reviewer
+
+    calls = []
+    original = reviewer.build_budgeted_review_context
+
+    def build(payload, **kwargs):
+        if len(kwargs['items']) > 1:
+            raise ReviewTargetSplitRequired({'reason': 'target_overflow'})
+        return original(payload, **kwargs)
+
+    def execute(payload, *args, **kwargs):
+        calls.append([row['id'] for row in payload['items']])
+        return {'checked_ids': calls[-1], 'fixes': []}
+
+    monkeypatch.setattr(reviewer, 'build_budgeted_review_context', build)
+    monkeypatch.setattr(reviewer, '_execute_single_segment_review', execute)
+    result = reviewer._execute_segment_with_adaptive_split(
+        {}, [item('p1', '原文'), item('p2', '原文')], SCHEMA,
+        config={'pipeline': {'review_context': {'enabled': True}}},
+    )
+    assert calls == [['p1'], ['p2']]
+    assert result['checked_ids'] == ['p1', 'p2']

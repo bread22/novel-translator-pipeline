@@ -1452,27 +1452,27 @@ def _execute_segment_with_adaptive_split(
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
     context_diagnostics: dict[str, Any] | None = None
-    pipeline_config = (config if config is not None else load_config()).get("pipeline", {})
-    context_config = ReviewContextBudget.from_mapping(pipeline_config.get("review_context"))
-    if context_config.enabled:
-        _snapshot, context_diagnostics, segment_payload = build_budgeted_review_context(
-            base_payload,
-            items=items,
-            context_before=list(base_payload.get("context_before", []) or []),
-            context_after=list(base_payload.get("context_after", []) or []),
-            trigger_evidence=list(base_payload.get("trigger_findings", []) or []),
-            budget=context_config,
-            schema_path=schema_path,
-            autonomous=autonomous,
-        )
-    expected_ids = {str(item.get("id", "")) for item in items if item.get("id")}
-    context_before_ids = {
-        str(item.get("id", ""))
-        for item in segment_payload.get("context_before", [])
-        if isinstance(item, dict) and item.get("id")
-    }
-
     try:
+        pipeline_config = (config if config is not None else load_config()).get("pipeline", {})
+        context_config = ReviewContextBudget.from_mapping(pipeline_config.get("review_context"))
+        if context_config.enabled:
+            _snapshot, context_diagnostics, segment_payload = build_budgeted_review_context(
+                base_payload,
+                items=items,
+                context_before=list(base_payload.get("context_before", []) or []),
+                context_after=list(base_payload.get("context_after", []) or []),
+                trigger_evidence=list(base_payload.get("trigger_findings", []) or []),
+                budget=context_config,
+                schema_path=schema_path,
+                autonomous=autonomous,
+            )
+        expected_ids = {str(item.get("id", "")) for item in items if item.get("id")}
+        context_before_ids = {
+            str(item.get("id", ""))
+            for item in segment_payload.get("context_before", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+
         res = _execute_single_segment_review(
             segment_payload,
             schema_path,

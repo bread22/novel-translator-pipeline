@@ -38,6 +38,7 @@ from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
     empty_book_memory,
+    memory_for_chapter,
     read_json,
     utc_now,
     write_json,
@@ -1322,7 +1323,10 @@ class IterativePipeline:
 
         try:
             glossary = read_json(self.workspace.glossary_path, {"terms": []})
-            memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
+            memory = memory_for_chapter(
+                read_json(self.workspace.book_memory_path, empty_book_memory(self.book)),
+                chapter_id, [str(ch.get("id", "")) for ch in read_json(self.manifest).get("chapters", [])],
+            )
             candidate_store = read_json(self.workspace.knowledge_candidates_path, {"items": []})
             hard_limit = int(config.get("input_hard_limit_chars", 30_000) or 30_000)
             historical = candidate_store.get("items", []) if isinstance(candidate_store, dict) else []
@@ -1573,7 +1577,10 @@ class IterativePipeline:
         paragraphs = [p for p in chapter.get("paragraphs", []) if isinstance(p, dict) and p.get("id")]
         items = [{"id": str(p["id"]), "source": str(p.get("source", "")), "translated": str(p.get("translated", ""))} for p in paragraphs if str(p.get("translated", "")).strip()]
         glossary = read_json(self.workspace.glossary_path, {"book": self.book, "terms": [], "conflicts": []})
-        memory = read_json(self.workspace.book_memory_path, empty_book_memory(self.book))
+        memory = memory_for_chapter(
+                read_json(self.workspace.book_memory_path, empty_book_memory(self.book)),
+                chapter_id, [str(ch.get("id", "")) for ch in read_json(self.manifest).get("chapters", [])],
+            )
         known_hits_doc = read_json(self.workspace.reviews_dir / f"{chapter_id}-known-hits.json", {})
         input_path = self.workspace.reviews_dir / f"{chapter_id}-input.json"
         output_path = self.workspace.reviews_dir / f"{chapter_id}-output.json"

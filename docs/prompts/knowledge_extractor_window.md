@@ -12,3 +12,5 @@ Reasoning strength: low
 - `conflicts` 只记录输入中有证据的冲突，不覆盖既有值。
 - 候选不会立即写入正式 Glossary/Memory，最终动作由 Chapter Knowledge Finalization 决定。
 - 严格只输出符合 Schema 的 JSON，不输出 Markdown 或解释。
+
+- Memory 的地点、伤势、当前阵营、关系阶段等会随剧情变化的信息，使用 `category: "state"`，key 使用稳定的“人物：属性”，例如“甲：当前位置”。value 描述本窗口时点的状态。正常状态变化不是事实冲突。稳定世界规则仍使用 fact；人物位置不是地点百科 location。倒叙中的历史状态不要表述成当前状态，无法明确时点的信息只放临时 notes。

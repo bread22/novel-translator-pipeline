@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -391,6 +392,9 @@ def empty_book_memory(book: str = "") -> dict[str, Any]:
 
 
 MEMORY_CATEGORY_ALIASES = {
+    "state": "state",
+    "temporary_state": "state",
+    "current_state": "state",
     "character": "character",
     "character_background": "character",
     "character_profile": "character",
@@ -590,6 +594,30 @@ def merge_memory_delta(
                 rejected += 1
                 continue
             existing = by_key.get(key)
+            if category == "state":
+                if not chapter_id:
+                    rejected += 1
+                    continue
+                # State changes are observations at a chapter, not competing
+                # timeless truths. Replaying a chapter replaces its observation.
+                if existing is None:
+                    existing = {"key": key, "category": "state", "value": value,
+                                "confidence": confidence, "first_seen_chapter": chapter_id}
+                    entries.append(existing)
+                    by_key[key] = existing
+                    added += 1
+                else:
+                    updated += 1
+                versions = list(existing.get("state_versions", []))
+                if not versions and existing.get("last_seen_chapter"):
+                    versions.append({"chapter_id": existing["last_seen_chapter"],
+                                     "value": existing["value"], "confidence": existing.get("confidence", 0)})
+                versions = [v for v in versions if v.get("chapter_id") != chapter_id]
+                versions.append({"chapter_id": chapter_id, "value": value, "confidence": confidence,
+                                 "note": str(raw.get("note", "")).strip()})
+                existing.update({"category": "state", "value": value, "confidence": confidence,
+                                 "last_seen_chapter": chapter_id, "state_versions": versions})
+                continue
             if existing is not None and str(existing.get("value", "")).strip() != value:
                 conflicts.append({
                     "key": key,
@@ -632,6 +660,38 @@ def merge_memory_delta(
     current["conflicts"] = conflicts
     current["updated_at"] = utc_now()
     return current, {"added": added, "updated": updated, "rejected": rejected, "conflicted": conflicted}
+
+
+def memory_for_chapter(
+    memory: dict[str, Any], chapter_id: str, chapter_ids: list[str], *, include_current: bool = False,
+) -> dict[str, Any]:
+    """Project temporal observations using manifest order, never lexical IDs.
+
+    Histories stay on disk. Review receives only the latest applicable value,
+    even when an older chapter is rerun after later chapters have completed.
+    """
+    result = deepcopy(memory)
+    order = {value: index for index, value in enumerate(chapter_ids)}
+    boundary = order.get(chapter_id, -1) + int(include_current)
+    projected = []
+    for entry in result.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("category") != "state":
+            projected.append(entry)
+            continue
+        versions = [v for v in entry.get("state_versions", [])
+                    if isinstance(v, dict) and v.get("chapter_id") in order
+                    and order[v["chapter_id"]] < boundary]
+        if not versions:
+            continue
+        latest = max(versions, key=lambda v: order[v["chapter_id"]])
+        entry.pop("state_versions", None)
+        entry.update({key: latest[key] for key in ("value", "confidence", "note") if key in latest})
+        entry["last_seen_chapter"] = latest["chapter_id"]
+        projected.append(entry)
+    result["entries"] = projected
+    return result
 
 
 def merge_chapter_state(

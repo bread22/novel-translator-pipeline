@@ -15,3 +15,5 @@ Reasoning strength: low
 - 必须覆盖每个短 `candidate_id` 且恰好一次，不得增加未知 ID。
 - 只需输出 `candidate_id` 和 `action`；`reason` 非必要时留空。
 - 严格只输出符合 Schema 的 JSON，不输出 Markdown 或解释。
+
+- `kind: "memory", category: "state"` 表示随剧情变化的状态。当前章节有明确证据的新状态可以 active，不要仅因同 key 的旧状态不同而标记 conflict。稳定事实的真实矛盾仍按 conflict 处理；不要把推测或倒叙历史当成新的当前状态。

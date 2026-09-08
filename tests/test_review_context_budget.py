@@ -195,3 +195,30 @@ def test_rolling_state_does_not_replace_previous_chapter_seed() -> None:
     assert rolled["previous_chapter_state"]["summary"] == "上一章"
     assert rolled["current_chapter_review_context"]["active_entities"] == ["甲", "乙"]
     assert rolled["current_chapter_review_context"]["locations"] == ["新宿"]
+
+
+def test_full_execution_config_enables_budget_at_provider_boundary(monkeypatch):
+    from translator.review import reviewer
+
+    received = []
+
+    def execute(payload, *args, **kwargs):
+        received.append(payload)
+        return {"checked_ids": ["p1"], "fixes": []}
+
+    monkeypatch.setattr(reviewer, "_execute_single_segment_review", execute)
+    result = reviewer._execute_segment_with_adaptive_split(
+        {"book_memory": {}, "previous_chapter_state": {
+            "characters": ["勇者"], "locations": ["王都"],
+            "relationships": ["勇者是国王之子"], "notes": ["身份保密"],
+            "summary": "勇者返回王都",
+        }},
+        [item("p1", "他推开门")], SCHEMA,
+        config={"pipeline": {"review_context": {"enabled": True}}},
+    )
+    assert result["review_diagnostics"]["context_snapshots"]
+    state = received[0]["previous_chapter_state"]
+    assert state["active_entities"] == ["勇者"]
+    assert state["locations"] == ["王都"]
+    assert state["relationships"] == ["勇者是国王之子"]
+    assert state["notes"] == ["身份保密"]

@@ -1452,7 +1452,7 @@ def _execute_segment_with_adaptive_split(
     segment_payload = dict(base_payload)
     segment_payload["items"] = items
     context_diagnostics: dict[str, Any] | None = None
-    pipeline_config = config if config is not None else (config if config is not None else load_config()).get("pipeline", {})
+    pipeline_config = (config if config is not None else load_config()).get("pipeline", {})
     context_config = ReviewContextBudget.from_mapping(pipeline_config.get("review_context"))
     if context_config.enabled:
         _snapshot, context_diagnostics, segment_payload = build_budgeted_review_context(

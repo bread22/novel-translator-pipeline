@@ -243,8 +243,18 @@ def _compact_known_hit(item: dict[str, Any]) -> dict[str, Any]:
 def _state_projection(state: Any) -> dict[str, Any]:
     if not isinstance(state, dict):
         return {}
-    order = ("active_entities", "open_questions", "important_changes", "location", "timeline", "summary")
-    return {key: deepcopy(state[key]) for key in order if key in state and state[key] not in (None, "", [])}
+    # Chapter-state writers historically use characters/locations, while the
+    # selector consumes active_entities. Preserve narrative fields at this
+    # boundary rather than silently dropping them from the next chapter.
+    order = ("active_entities", "open_questions", "important_changes", "location",
+             "locations", "relationships", "important_states", "notes",
+             "adopted_terms", "timeline", "summary")
+    projected = {key: deepcopy(state[key]) for key in order if key in state and state[key] not in (None, "", [])}
+    entities = [value for key in ("active_entities", "characters")
+                for value in (state.get(key) if isinstance(state.get(key), list) else [])]
+    if entities:
+        projected["active_entities"] = list(dict.fromkeys(str(value) for value in entities if value))
+    return projected
 
 
 def _memory_collections(memory: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:

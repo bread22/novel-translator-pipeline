@@ -55,7 +55,7 @@ export interface ChapterDetail {
 export interface TaskStatusResponse {
   task_id: string;
   book_id: string;
-  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
+  status: 'idle' | 'pending' | 'recovery_pending' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'stopped';
   phase?: 'queued' | 'initializing' | 'translating' | 'reviewing' | 'finalizing' | 'idle';
   reviewer_states?: Partial<Record<'primary' | 'secondary', 'standby' | 'pending' | 'reviewing' | 'retry_wait' | 'retrying' | 'completed' | 'failed' | 'cancelled'>>;
   reviewer_details?: Partial<Record<'primary' | 'secondary', ReviewerExecutionDetail>>;

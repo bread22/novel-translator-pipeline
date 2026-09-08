@@ -106,3 +106,46 @@ def test_stop_does_not_emit_terminal_event_before_worker_stops(tmp_path: Path, m
             worker = manager._running_threads.get(task.task_id)
         if worker:
             worker.join(2)
+
+
+def test_pause_inside_chapter_acknowledges_before_blocking(monkeypatch, tmp_path):
+    manifest = tmp_path / 'manifest.json'
+    write_json(manifest, {'book': 'book-1', 'chapters': [{'id': 'c1', 'paragraphs': []}]})
+    entered, reach_boundary, acknowledged, resumed = [threading.Event() for _ in range(4)]
+
+    class Pipeline:
+        def __init__(self, **kwargs):
+            self.gate = kwargs['pause_gate']
+            self.cancellation = kwargs['cancellation_token']
+
+        def is_chapter_completed(self, _id):
+            return False
+
+        def run_chapter(self, _id, cycle):
+            entered.set()
+            assert reach_boundary.wait(3)
+            self.gate.wait(self.cancellation)
+            resumed.set()
+            return {'translated': 0, 'reviewed': 0, 'issues': 0, 'fixes': 0}
+
+    monkeypatch.setattr('translator.core.job_manager.manifest_path', lambda _: manifest)
+    monkeypatch.setattr('translator.core.job_manager.ChapterPipeline', Pipeline)
+    monkeypatch.setattr('translator.core.job_manager.broadcaster.broadcast_sync',
+                        lambda event, data, **kw: acknowledged.set() if event == 'pipeline_paused' else None)
+    manager = JobManager(output_root=tmp_path / 'output')
+    task = manager.start_pipeline(PipelineStartRequest(book_id='book-1', finalize=False, max_cycles=1))
+    try:
+        assert entered.wait(3)
+        assert manager.pause_pipeline(task.task_id).status == 'pausing'
+        reach_boundary.set()
+        assert acknowledged.wait(3)
+        assert manager.get_task(task.task_id).status == 'paused'
+        assert not resumed.is_set()
+        assert manager.resume_pipeline(task.task_id).status == 'running'
+        assert resumed.wait(3)
+    finally:
+        reach_boundary.set()
+        manager.stop_pipeline(task.task_id)
+        worker = manager._running_threads.get(task.task_id)
+        if worker:
+            worker.join(3)

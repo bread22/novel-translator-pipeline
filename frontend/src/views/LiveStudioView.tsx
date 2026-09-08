@@ -78,6 +78,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
 
   const isRunning = activeTask && activeTask.status === 'running';
   const isPaused = activeTask && activeTask.status === 'paused';
+  const isTransitioning = activeTask?.status === 'pausing' || activeTask?.status === 'cancelling';
 
   useEffect(() => {
     if (!followEvents || !eventsExpanded) return;
@@ -229,7 +230,11 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2.5 flex-wrap">
-          {!isRunning && !isPaused ? (
+          {isTransitioning ? (
+            <div role="status" className="text-sm text-amber-800">
+              {activeTask?.status === 'pausing' ? '正在暂停，等待当前请求结束并保存结果…' : '正在终止，等待当前处理结束…'}
+            </div>
+          ) : !isRunning && !isPaused ? (
             <button
               onClick={handleStart}
               disabled={isStarting}

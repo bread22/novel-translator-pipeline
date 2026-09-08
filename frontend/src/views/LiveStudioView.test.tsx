@@ -178,3 +178,18 @@ describe('live model topology', () => {
     expect(screen.getByText(/自动切换至/).parentElement?.textContent).toContain('deepseek');
   });
 });
+
+describe('transitional task controls', () => {
+  it.each(['pausing', 'cancelling'] as const)('does not offer a new start while %s', async (status) => {
+    vi.spyOn(api, 'getConfig').mockResolvedValue({ roles: {}, providers: {} } as never);
+    vi.spyOn(api, 'getPrompts').mockResolvedValue([]);
+    render(<LiveStudioView
+      book={{ id: 'book', name: 'Book', progress_percentage: 0 } as never}
+      activeTask={{ task_id: 'task', book_id: 'book', status, overall_progress: 0 } as never}
+      streamEvents={[]} onRefreshTask={vi.fn(async () => undefined)} onRefreshBooks={vi.fn(async () => undefined)}
+    />);
+    expect(screen.queryByRole('button', { name: '启动全自动流水线' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续流水线' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(status === 'pausing' ? '正在暂停' : '正在终止');
+  });
+});

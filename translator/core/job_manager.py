@@ -713,22 +713,26 @@ class JobManager:
         logger.info("Started queue worker for item %s (book: %s)", item.id, item.book_id)
         out_root = self.output_root.resolve()
         cancellation = CancellationToken(stop_event)
-        pause_gate = PauseGate(pause_event)
-
-        def checkpoint(boundary: str) -> None:
-            item.checkpoint = {"boundary": boundary, "chapter": item.current_chapter, "updated_at": utc_now()}
-            item.updated_at = utc_now()
+        def acknowledge_pause() -> None:
             paused_payload: dict[str, Any] | None = None
             if not pause_event.is_set():
                 with self._lock:
                     if item.status == "pausing":
                         self._transition_locked(item, {"pausing"}, "paused")
                         item.message = "已暂停；当前 worker 槽位仍保留"
+                        item.updated_at = utc_now()
                         self._save_state()
                         paused_payload = self._as_task(item).model_dump()
                 if paused_payload is not None:
                     broadcaster.broadcast_sync("pipeline_paused", paused_payload, book_id=item.book_id)
                     self._emit_queue_updated()
+        # The pipeline has safe points inside a chapter as well as the worker's
+        # chapter boundaries. Every wait must acknowledge pausing before blocking.
+        pause_gate = PauseGate(pause_event, on_pause=acknowledge_pause)
+
+        def checkpoint(boundary: str) -> None:
+            item.checkpoint = {"boundary": boundary, "chapter": item.current_chapter, "updated_at": utc_now()}
+            item.updated_at = utc_now()
             pause_gate.wait(cancellation)
             cancellation.check()
 

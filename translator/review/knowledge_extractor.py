@@ -717,6 +717,95 @@ def aggregate_candidates(
     return result
 
 
+def ground_candidates_with_text(
+    candidates: Sequence[Mapping[str, Any]],
+    evidence_texts: Mapping[str, Any] | None,
+    current_chapter_id: str = "",
+    *,
+    max_grounded_evidence: int = 20,
+) -> list[dict[str, Any]]:
+    """Count source occurrences in supplied body paragraphs, not translation votes.
+
+    Callers supply only the chapter prefix already reached. Structured evidence
+    must use its source text and explicit chapter, never a stringified mapping.
+    Name validation and the finalizer still decide whether a mapping is valid.
+    """
+    from copy import deepcopy
+    import re
+    from translator.glossary.validation import _evidence_scope, _evidence_text
+
+    if not evidence_texts:
+        return [deepcopy(dict(c)) for c in candidates if isinstance(c, Mapping)]
+    text_items: list[tuple[str, str, str]] = []
+    for raw_id, value in evidence_texts.items():
+        pid = str(raw_id).strip()
+        if not pid or _evidence_scope(value) != "body":
+            continue
+        text = unicodedata.normalize("NFKC", _evidence_text(value))
+        if not text:
+            continue
+        explicit_chapter = str(value.get("chapter_id", "")).strip() if isinstance(value, Mapping) else ""
+        chapter = explicit_chapter or _chapter_from_evidence_id(pid) or current_chapter_id
+        if chapter:
+            text_items.append((pid, chapter, text))
+
+    grounded: list[dict[str, Any]] = []
+    for raw in candidates:
+        if not isinstance(raw, Mapping):
+            continue
+        candidate = deepcopy(dict(raw))
+        if str(candidate.get("kind", "glossary")).strip().lower() != "glossary":
+            grounded.append(candidate)
+            continue
+        source = unicodedata.normalize("NFKC", str(candidate.get("source", "")).strip())
+        if not source:
+            grounded.append(candidate)
+            continue
+        # A Latin alias such as Ann must not acquire evidence from Anna/JoAnn.
+        expression = re.escape(source)
+        if source[0].isascii() and source[0].isalnum():
+            expression = r"(?<![A-Za-z0-9_])" + expression
+        if source[-1].isascii() and source[-1].isalnum():
+            expression += r"(?![A-Za-z0-9_])"
+        pattern = re.compile(expression)
+        matches = [(pid, chapter) for pid, chapter, text in text_items if pattern.search(text)]
+        # Stable document order within each group, with this chapter first.
+        matches.sort(key=lambda pair: pair[1] != current_chapter_id)
+        existing_ids = {str(v) for v in candidate.get("evidence_ids", []) or []}
+        selected = [pair for pair in matches if pair[0] in existing_ids]
+        selected += [pair for pair in matches if pair[0] not in existing_ids][:max(0, max_grounded_evidence - len(selected))]
+        ids = list(dict.fromkeys(pid for pid, _ in selected))
+        chapters = dict(selected)
+        provenance = []
+        for value in candidate.get("evidence_provenance", []) or []:
+            if isinstance(value, Mapping) and str(value.get("paragraph_id", "")) in ids:
+                entry = dict(value)
+                entry["chapter_id"] = chapters[str(entry["paragraph_id"])]
+                provenance.append(entry)
+        represented = {str(value.get("paragraph_id", "")) for value in provenance}
+        for pid in ids:
+            if pid not in represented:
+                provenance.append({"chapter_id": chapters[pid], "paragraph_id": pid,
+                                   "reporter": "deterministic_grounding",
+                                   "confidence": candidate.get("confidence", 0)})
+        if not ids and existing_ids:
+            first = sorted(existing_ids)[0]
+            if first not in evidence_texts:
+                candidate["grounding_error"] = "unknown_evidence_id:" + first
+            elif _evidence_scope(evidence_texts[first]) != "body":
+                candidate["grounding_error"] = "metadata_source"
+            else:
+                candidate["grounding_error"] = "source_not_in_evidence:" + first
+        elif ids:
+            candidate.pop("grounding_error", None)
+        candidate["evidence_ids"] = ids
+        candidate["source_paragraph_ids"] = ids.copy()
+        candidate["evidence_provenance"] = provenance
+        candidate["unresolved_evidence_ids"] = []
+        grounded.append(candidate)
+    return grounded
+
+
 def build_finalization_payload(
     candidates: Sequence[Mapping[str, Any]],
     conflicts: Sequence[Mapping[str, Any]],
@@ -873,7 +962,9 @@ def _evidence_stats(candidate: Mapping[str, Any]) -> tuple[int, int]:
     }
     if provenance_keys:
         chapters = {chapter for chapter, _paragraph, _reporter in provenance_keys if chapter}
-        return len(provenance_keys), len(chapters)
+        # Multiple reporters of the same paragraph are not independent textual
+        # occurrences (including model + deterministic grounding).
+        return len({(chapter, paragraph) for chapter, paragraph, _ in provenance_keys}), len(chapters)
     evidence_ids = {
         str(value).strip() for value in candidate.get("evidence_ids", []) if str(value).strip()
     }
@@ -1490,6 +1581,8 @@ def _apply_knowledge_delta_locked(
                             glossary_updates.append(update)
                         else:
                             pending_reason = validation.reason or "candidate_validation_failed"
+                            if pending_reason == "missing_evidence" and candidate.get("grounding_error"):
+                                pending_reason = str(candidate["grounding_error"])
                 elif action == "active" and candidate.get("kind") == "memory":
                     try:
                         memory_confidence = float(candidate.get("confidence", 0) or 0)
@@ -1600,6 +1693,7 @@ def _apply_knowledge_delta_locked(
 
 __all__ = [
     "EvidenceProvenance", "WindowKnowledgeOutput", "FinalKnowledgeOutput", "aggregate_candidates",
+    "ground_candidates_with_text",
     "build_finalization_payload", "compact_finalization_payload", "finalization_prompt_chars",
     "partition_finalization_candidates",
     "run_knowledge_extractor_window", "run_knowledge_finalization",

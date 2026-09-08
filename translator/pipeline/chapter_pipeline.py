@@ -52,6 +52,7 @@ from translator.review.knowledge_extractor import (
     build_finalization_payload,
     compact_finalization_payload,
     finalization_prompt_chars,
+    ground_candidates_with_text,
     knowledge_extractor_enabled,
     normalize_finalize_output,
     normalize_window_output,
@@ -1296,10 +1297,10 @@ class IterativePipeline:
             return {"status": "skipped", "reason": "disabled", "candidates": len(candidates), "active": 0}
 
         final_candidates: list[dict[str, Any]] = []
+        evidence: dict[str, Any] = {}
 
         def retain_without_promotion(status: str, *, error: str = "") -> dict[str, Any]:
             """Keep extraction evidence auditable when finalization is unavailable."""
-            evidence = {str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")}
             try:
                 retained = apply_knowledge_delta(
                     self.workspace, chapter_id, final_candidates or candidates, {}, conflicts,
@@ -1322,6 +1323,23 @@ class IterativePipeline:
             }
 
         try:
+            manifest_doc = read_json(self.manifest, default={})
+            chapters = manifest_doc.get("chapters", [])
+            if any(str(ch.get("id", "")) == chapter_id for ch in chapters):
+                for chapter in chapters:
+                    cid = str(chapter.get("id", ""))
+                    for paragraph in chapter.get("paragraphs", []):
+                        if paragraph.get("id"):
+                            evidence[str(paragraph["id"])] = {
+                                "source": str(paragraph.get("source", "")), "chapter_id": cid,
+                                "source_scope": paragraph.get("source_scope") or paragraph.get("section_type") or paragraph.get("scope")
+                                    or chapter.get("source_scope") or chapter.get("section_type") or chapter.get("scope") or "body",
+                            }
+                    if cid == chapter_id:
+                        break
+            else:
+                evidence = {str(item["id"]): {**item, "chapter_id": chapter_id}
+                            for item in items if item.get("id")}
             glossary = read_json(self.workspace.glossary_path, {"terms": []})
             memory = memory_for_chapter(
                 read_json(self.workspace.book_memory_path, empty_book_memory(self.book)),
@@ -1329,8 +1347,31 @@ class IterativePipeline:
             )
             candidate_store = read_json(self.workspace.knowledge_candidates_path, {"items": []})
             hard_limit = int(config.get("input_hard_limit_chars", 30_000) or 30_000)
-            historical = candidate_store.get("items", []) if isinstance(candidate_store, dict) else []
+            historical = list(candidate_store.get("items", []) if isinstance(candidate_store, dict) else [])
+            for term in glossary.get("terms", []):
+                if isinstance(term, Mapping) and str(term.get("status", "")).strip().lower() == "candidate":
+                    historical.append({
+                        "candidate_id": str(term.get("term_id", "")),
+                        "kind": "glossary",
+                        "source": str(term.get("source", "")),
+                        "target": str(term.get("target", "")),
+                        "category": str(term.get("category", "")),
+                        "source_scope": str(term.get("source_scope", "body")),
+                        "confidence": term.get("confidence", 0),
+                        "evidence_ids": [
+                            str(e.get("paragraph_id", ""))
+                            for e in term.get("evidence", [])
+                            if isinstance(e, Mapping) and e.get("paragraph_id")
+                        ],
+                        "evidence_provenance": [
+                            dict(e) for e in term.get("evidence", []) if isinstance(e, Mapping)
+                        ],
+                        "note": str(term.get("note", "")),
+                    })
             final_candidates = aggregate_candidates(candidates, historical_candidates=historical)
+            final_candidates = ground_candidates_with_text(
+                final_candidates, evidence, current_chapter_id=chapter_id,
+            )
             deterministic_decisions, model_candidates = partition_finalization_candidates(
                 final_candidates, conflicts, glossary, memory,
             )
@@ -1493,11 +1534,6 @@ class IterativePipeline:
         decision_map = {
             str(item.get("candidate_id", "")): item
             for item in decisions if isinstance(item, dict) and item.get("candidate_id")
-        }
-        manifest_doc = read_json(self.manifest, default={})
-        all_paragraphs = paragraph_map(manifest_doc)
-        evidence = {str(p_id): str(p.get("source", "")) for p_id, p in all_paragraphs.items()} if all_paragraphs else {
-            str(item.get("id", "")): str(item.get("source", "")) for item in items if item.get("id")
         }
         try:
             applied = apply_knowledge_delta(

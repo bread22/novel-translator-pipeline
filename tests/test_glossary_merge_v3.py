@@ -103,3 +103,56 @@ def test_two_body_paragraphs_activate_a_candidate():
     )
     assert glossary["terms"][0]["status"] == "active"
     assert summary["activated"] == 1
+
+
+def test_activation_does_not_depend_on_uncalibrated_high_confidence():
+    """Verify terms with confidence < 0.92 (e.g. 0.85, 0.90) still activate when supported by independent evidence."""
+    candidate = {
+        "source": "正也",
+        "target": "正也",
+        "category": "person",
+        "confidence": 0.88,
+        "evidence_ids": ["p1"],
+    }
+    glossary, _ = merge_term_candidates(
+        empty(), [candidate], chapter_id="c1", reporter="reviewer", evidence_texts={"p1": "正也出现"}
+    )
+    assert glossary["terms"][0]["status"] == "candidate"
+
+    glossary, summary = merge_term_candidates(
+        glossary,
+        [{**candidate, "evidence_ids": ["p2"]}],
+        chapter_id="c2",
+        reporter="reviewer",
+        evidence_texts={"p2": "正也再次出现"},
+    )
+    assert glossary["terms"][0]["status"] == "active"
+    assert summary["activated"] == 1
+
+
+def test_ground_candidates_with_text_enriches_evidence():
+    from translator.review.knowledge_extractor import ground_candidates_with_text, _evidence_stats
+
+    candidates = [{
+        "candidate_id": "cand-miki",
+        "kind": "glossary",
+        "source": "美樹",
+        "target": "美树",
+        "category": "person",
+        "confidence": 0.90,
+        "evidence_ids": ["c1-p1"],
+        "source_paragraph_ids": ["c1-p1"],
+    }]
+    evidence_texts = {
+        "c1-p1": "美樹は銀行員だ。",
+        "c1-p5": "美樹は微笑んだ。",
+        "c2-p3": "美樹は家に戻った。",
+    }
+    grounded = ground_candidates_with_text(candidates, evidence_texts, current_chapter_id="c1")
+    assert len(grounded) == 1
+    item = grounded[0]
+    ev_count, ch_count = _evidence_stats(item)
+    assert ev_count == 3
+    assert ch_count == 2
+    assert "c1-p5" in item["evidence_ids"]
+    assert "c2-p3" in item["evidence_ids"]

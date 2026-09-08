@@ -256,9 +256,12 @@ export const App: React.FC = () => {
     if (selectedBookId) {
       localStorage.setItem('selected_book_id', selectedBookId);
       refreshTask();
-      fetchBookEvents(selectedBookId);
     }
-  }, [selectedBookId, refreshTask, fetchBookEvents]);
+  }, [selectedBookId, refreshTask]);
+
+  useEffect(() => {
+    if (currentTab === 'studio' && selectedBookId) void fetchBookEvents(selectedBookId);
+  }, [currentTab, selectedBookId, fetchBookEvents]);
 
   // Global SSE Subscription
   useEffect(() => {
@@ -375,7 +378,7 @@ export const App: React.FC = () => {
   };
 
   const handleClearEvents = (bookId: string) => {
-    setEventsByBook((prev) => ({
+    setEventsByBook((prev) => boundedEvents({
       ...prev,
       [bookId]: [],
     }));
@@ -409,7 +412,20 @@ export const App: React.FC = () => {
             {loadError} <button className="underline" onClick={() => void refreshBooks()}>重试</button>
           </div>
         )}
-        {(currentTab === 'queue' || currentTab === 'library') && (
+        {['queue', 'studio', 'knowledge'].includes(currentTab) && (
+          <nav aria-label="任务详情导航" className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+            {([['queue', '任务列表'], ['studio', '运行详情'], ['knowledge', '知识与报告']] as const).map(([tab, label]) => (
+              <button key={tab} onClick={() => selectTab(tab)}
+                aria-current={currentTab === tab ? 'page' : undefined}
+                disabled={tab !== 'queue' && !selectedBookId}
+                className={`rounded border px-3 py-2 disabled:opacity-40 ${currentTab === tab ? 'bg-[#1A1A1A] text-white' : 'bg-white'}`}>
+                {label}
+              </button>
+            ))}
+            {selectedBook && currentTab !== 'queue' && <span className="text-[#666666]">{selectedBook.name}</span>}
+          </nav>
+        )}
+        {currentTab === 'queue' && (
           <QueueHubView
             books={books}
             queueStatus={queueStatus}

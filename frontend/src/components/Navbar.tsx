@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Activity, Compass, Cpu, BookMarked, Radio } from 'lucide-react';
+import { Layers, Compass, Cpu, Radio } from 'lucide-react';
 import { BookSummary, TaskStatusResponse } from '../types/api';
 
 interface NavbarProps {
@@ -32,7 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-50 border-b border-[#E5E0D8] bg-[#FAF9F6]/95 backdrop-blur-md px-6 py-3">
-      <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
+      <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-4">
         
         {/* Editorial Masthead & Branding */}
         <div className="flex items-center gap-3">
@@ -57,36 +57,22 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => onSelectTab('queue')}
             className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
-              currentTab === 'queue'
+              ['queue', 'studio', 'knowledge'].includes(currentTab)
                 ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
                 : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>队列枢纽 (QUEUE)</span>
+            <span>任务</span>
+            {isTaskRunning && <span aria-label="有任务运行中" className="h-2 w-2 rounded-full bg-emerald-500" />}
             {queueCount > 0 && (
               <span
                 className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                  currentTab === 'queue' ? 'bg-amber-400 text-black' : 'bg-[#D5D0C7] text-neutral-800'
+                  ['queue', 'studio', 'knowledge'].includes(currentTab) ? 'bg-amber-400 text-black' : 'bg-[#D5D0C7] text-neutral-800'
                 }`}
               >
                 {queueCount}
               </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => onSelectTab('studio')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
-              currentTab === 'studio'
-                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
-                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-            <span>流水车间 (STUDIO)</span>
-            {isTaskRunning && (
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse ml-0.5" />
             )}
           </button>
 
@@ -99,19 +85,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <Compass className="w-3.5 h-3.5" />
-            <span>双语对齐 (READER)</span>
-          </button>
-
-          <button
-            onClick={() => onSelectTab('knowledge')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-all rounded-xs ${
-              currentTab === 'knowledge'
-                ? 'bg-[#1A1A1A] text-[#FAF9F6] shadow-xs'
-                : 'text-[#4A4A4A] hover:bg-[#FAF9F6]/60'
-            }`}
-          >
-            <BookMarked className="w-3.5 h-3.5" />
-            <span>设定与质检 (KNOWLEDGE)</span>
+            <span>阅读</span>
           </button>
 
           <button
@@ -123,7 +97,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span>系统设置 (SYSTEM)</span>
+            <span>设置</span>
           </button>
         </nav>
 

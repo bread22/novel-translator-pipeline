@@ -165,3 +165,22 @@ test('completed book exports and is removed after confirmation', async ({ page }
   await expect(page.getByText('Fixture Book', { exact: true })).toHaveCount(0);
   expect(state.deleted).toBe(true);
 });
+
+test('monitor navigation has three main entries and diagnostics stay collapsed', async ({ page }) => {
+  await installFixture(page);
+  await page.goto('/#/studio');
+  const primary = page.locator('header nav');
+  await expect(primary.getByRole('button')).toHaveCount(3);
+  await expect(primary.getByRole('button', { name: '任务', exact: true })).toBeVisible();
+  await expect(page.getByRole('progressbar', { name: '任务进度' })).toBeVisible();
+  const advanced = page.locator('details').filter({ has: page.getByText('高级运行设置与模型诊断', { exact: true }) });
+  await expect(advanced).not.toHaveAttribute('open');
+  const logs = page.locator('details').filter({ has: page.getByText(/事件日志（最近/) });
+  await expect(logs).not.toHaveAttribute('open');
+  await logs.locator('summary').click();
+  await expect(page.getByRole('checkbox', { name: /跟随最新日志/ })).not.toBeChecked();
+  await primary.getByRole('button', { name: '任务', exact: true }).click();
+  await expect(page).toHaveURL(/#\/queue$/);
+  await page.getByRole('button', { name: '运行详情', exact: true }).click();
+  await expect(page).toHaveURL(/#\/studio$/);
+});

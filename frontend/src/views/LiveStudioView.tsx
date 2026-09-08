@@ -68,6 +68,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const [applyFixes, setApplyFixes] = useState(true);
   const [autonomous, setAutonomous] = useState(true);
   const [layout, setLayout] = useState<'horizontal' | 'preserve'>('horizontal');
+  const [followEvents, setFollowEvents] = useState(false);
+  const [eventsExpanded, setEventsExpanded] = useState(false);
   const [eventFilter, setEventFilter] = useState<'all' | 'pipeline' | 'fallback'>('all');
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [selectedPolicy, setSelectedPolicy] = useState<string>('docs/prompts/france-shoin-90s-classic.md');
@@ -78,8 +80,10 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
   const isPaused = activeTask && activeTask.status === 'paused';
 
   useEffect(() => {
-    feedBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [streamEvents]);
+    if (!followEvents || !eventsExpanded) return;
+    const container = feedBottomRef.current?.parentElement;
+    if (container) container.scrollTop = container.scrollHeight;
+  }, [streamEvents, followEvents, eventsExpanded]);
 
   useEffect(() => {
     Promise.all([
@@ -196,8 +200,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
     (e) => e.data && typeof e.data === 'object' && e.data.task_id && e.data.message
   );
   const liveMessage =
-    latestStatusEvent?.data?.message ||
     activeTask?.message ||
+    latestStatusEvent?.data?.message ||
     (isRunning ? '流水线推进中...' : '就绪');
 
   return (
@@ -272,6 +276,23 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         </div>
       </div>
 
+      <section aria-label="当前运行状态" className="rounded-sm border border-[#E5E0D8] bg-white p-6 space-y-3">
+        <div className="flex flex-wrap justify-between gap-3 text-sm">
+          <span>当前阶段：{({ queued: '排队', initializing: '准备', translating: '翻译', reviewing: '审阅与修订', finalizing: '导出', idle: '就绪' } as Record<string, string>)[activeTask?.phase || 'idle'] || activeTask?.phase}</span>
+          <span>进度 {Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, progressPercent)) : 0}%</span>
+        </div>
+        <progress aria-label="任务进度" className="w-full" max={100} value={Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, progressPercent)) : 0} />
+        {activeTask?.current_chapter && <p className="text-sm">当前章节：{activeTask.current_chapter}（{activeTask.current_chapter_index}/{activeTask.total_chapters}）</p>}
+        {Object.values(activeTask?.reviewer_states || {}).some((state) => state === 'retry_wait' || state === 'retrying') && (
+          <p role="status" className="text-sm text-amber-800">审阅正在自动恢复，无需重复启动任务。</p>
+        )}
+        {activeTask?.status === 'failed' && <p role="alert" className="text-sm text-red-800">任务已停止：{activeTask.error_detail || activeTask.message}</p>}
+        {activeTask?.updated_at && <p className="text-xs text-[#666666]">最近状态更新：{activeTask.updated_at}</p>}
+      </section>
+
+      <details className="rounded-sm border border-[#E5E0D8] bg-white p-4">
+        <summary className="cursor-pointer text-sm font-semibold">高级运行设置与模型诊断</summary>
+        <p className="my-3 text-xs text-[#666666]">运行参数用于下次启动；提示词选择保存为后续任务默认值，不修改正在运行的任务。</p>
       {(() => {
         // Dynamic Role & Provider Resolution from real config
         const primaryName = config?.roles?.primary_translator || 'nemotron';
@@ -619,7 +640,15 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
         );
       })()}
 
-      {/* Live SSE Stream Waterfall Feed */}
+      </details>
+
+      {/* Logs are optional diagnostics, not the default monitoring surface. */}
+      <details onToggle={(event) => setEventsExpanded(event.currentTarget.open)} className="rounded-sm border border-[#E5E0D8] bg-white p-4">
+      <summary className="cursor-pointer text-sm font-semibold">事件日志（最近 {streamEvents.length} 条）</summary>
+      <label className="my-3 flex items-center gap-2 text-xs">
+        <input type="checkbox" checked={followEvents} onChange={(event) => setFollowEvents(event.target.checked)} />
+        跟随最新日志（仅滚动日志区域）
+      </label>
       <div className="bg-white border border-[#E5E0D8] rounded-sm overflow-hidden shadow-sm">
         <div className="px-6 py-4 border-b border-[#E5E0D8] flex items-center justify-between gap-4 bg-[#FAF9F6]">
           <div className="flex items-center gap-2.5">
@@ -833,6 +862,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           <div ref={feedBottomRef} />
         </div>
       </div>
+
+      </details>
 
     </div>
   );

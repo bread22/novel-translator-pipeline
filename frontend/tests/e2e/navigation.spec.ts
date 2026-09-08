@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('five primary views remain addressable by URL', async ({ page }) => {
+test('primary and legacy detail views remain addressable by URL', async ({ page }) => {
   for (const tab of ['queue', 'studio', 'reader', 'knowledge', 'settings']) {
     await page.goto(`/#/${tab}`);
     await expect(page.locator('main')).toBeVisible();

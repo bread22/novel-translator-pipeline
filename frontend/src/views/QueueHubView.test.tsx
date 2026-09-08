@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { QueueHubView } from './QueueHubView';
 
 describe('queue keyboard ordering', () => {
@@ -95,5 +95,33 @@ describe('batch book upload', () => {
     expect(refreshBooks).toHaveBeenCalledOnce();
     expect(refreshQueue).toHaveBeenCalledOnce();
     expect(screen.getByText('成功导入 2/2 本，已加入队列。')).toBeInTheDocument();
+  });
+});
+
+
+describe('duplicate upload queue protection', () => {
+  it.each([false, true])('never enqueues duplicate imports (mixed batch: %s)', async (mixed) => {
+    const user = userEvent.setup();
+    const upload = vi.spyOn(api, 'uploadBook').mockRejectedValueOnce(
+      new ApiError(409, 'DUPLICATE_BOOK', '书籍已存在：old-book（正文指纹相同）；已跳过导入，保留已有译文'),
+    );
+    if (mixed) upload.mockResolvedValueOnce({ id: 'new-book', name: 'New book' } as never);
+    const enqueue = vi.spyOn(api, 'enqueueBooks').mockResolvedValue({} as never);
+    const { container } = render(<QueueHubView
+      books={[]}
+      queueStatus={null}
+      onRefreshBooks={vi.fn(async () => undefined)}
+      onRefreshQueue={vi.fn(async () => undefined)}
+      onSelectBook={vi.fn()}
+    />);
+    const files = [new File(['duplicate'], 'duplicate.txt', { type: 'text/plain' })];
+    if (mixed) files.push(new File(['new'], 'new.txt', { type: 'text/plain' }));
+    await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, files);
+    await screen.findByText(/书籍已存在：old-book/);
+    if (mixed) {
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith({ book_ids: ['new-book'] });
+    } else {
+      expect(enqueue).not.toHaveBeenCalled();
+    }
   });
 });

@@ -17,6 +17,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
+from translator.core.book_fingerprints import BODY_VERSION, FINGERPRINT_FILE, body_sha256, existing_fingerprints, file_sha256
 from translator.core.config import load_config
 from translator.core.book_store import BookRepository
 from translator.core.layout import apply_horizontal_layout, inject_epub_metadata
@@ -262,10 +263,26 @@ async def upload_book(file: UploadFile = File(...), replace: bool = Query(False)
             tmp_path.unlink()
 
 
+def _raise_duplicate_upload(existing_book_id: str, matched_by: str) -> None:
+    label = "原文件 SHA-256" if matched_by == "source_sha256" else "正文指纹"
+    raise HTTPException(status_code=409, detail={
+        "code": "DUPLICATE_BOOK",
+        "detail": f"书籍已存在：{existing_book_id}（{label}相同）；已跳过导入，保留已有译文",
+        "existing_book_id": existing_book_id,
+        "matched_by": matched_by,
+    })
+
+
 def _register_uploaded_book(tmp_path: Path, suffix: str, book_id: str, book_title: str, replace: bool) -> BookSummary:
-    # Reserve before inspecting state, so enqueue and replacement cannot race.
-    with job_manager.book_maintenance(book_id), _export_lock(book_id):
-        existing_manifest = manifest_path(book_id)
+    # A catalog-wide lock covers checking AND publication, including different
+    # IDs for identical content. json_file_lock also serializes server processes
+    # on platforms with flock; per-book reservation still excludes active jobs.
+    existing_manifest = manifest_path(book_id)
+    with (
+        json_file_lock(existing_manifest.parent.parent / "upload-catalog.json"),
+        job_manager.book_maintenance(book_id),
+        _export_lock(book_id),
+    ):
         old_manifest = read_json(existing_manifest, {})
         output_root = get_output_root()
         roots = list(dict.fromkeys([
@@ -275,6 +292,20 @@ def _register_uploaded_book(tmp_path: Path, suffix: str, book_id: str, book_titl
         ]))
         if existing_manifest.exists() and not replace:
             raise HTTPException(status_code=409, detail=f"书籍 ID 已存在：{book_id}；使用 replace=true 显式替换")
+        source_hash = file_sha256(tmp_path)
+        peers = []
+        for peer_path in sorted(existing_manifest.parent.parent.glob("*/manifest.json")):
+            # Explicit replacement applies only to the requested ID, not to a
+            # different existing book discovered through content matching.
+            if peer_path.resolve() == existing_manifest.resolve() or peer_path.parent.is_symlink():
+                continue
+            peer_manifest = read_json(peer_path, {})
+            if not isinstance(peer_manifest, dict) or not peer_manifest:
+                continue
+            fingerprints = existing_fingerprints(peer_path, peer_manifest, output_root)
+            if fingerprints["source_sha256"] == source_hash:
+                _raise_duplicate_upload(peer_path.parent.name, "source_sha256")
+            peers.append((peer_path.parent.name, fingerprints["body_sha256"]))
         with tempfile.TemporaryDirectory(prefix="book-upload-backup-") as backup_dir:
             backups = []
             for index, root in enumerate(roots):
@@ -283,6 +314,7 @@ def _register_uploaded_book(tmp_path: Path, suffix: str, book_id: str, book_titl
                 if existed:
                     shutil.copytree(root, backup, symlinks=True)
                 backups.append((root, backup, existed))
+            workspace_mutated = False
             try:
                 # Register book in novel-translator
                 result = call_novel_translator(
@@ -313,18 +345,37 @@ def _register_uploaded_book(tmp_path: Path, suffix: str, book_id: str, book_titl
                 if not manifest:
                     raise HTTPException(status_code=500, detail=f"未找到已注册书籍 manifest: {registered_id}")
 
+                # add-book supplies the same parsed source used for translation.
+                # A conflict raises inside the transaction and restores the old
+                # data before any output workspace is reset or upload succeeds.
+                body_hash = body_sha256(manifest)
+                if body_hash is not None:
+                    for peer_id, peer_body in peers:
+                        if peer_body == body_hash:
+                            _raise_duplicate_upload(peer_id, "body_sha256")
+
                 output_root = get_output_root()
                 title = manifest.get("title", book_title)
                 workspace = BookWorkspace.at(output_root, title)
                 if workspace.root not in roots:
                     raise ValueError("注册返回了意外的书籍目录")
+                workspace_mutated = True
                 if workspace.root.exists():
                     shutil.rmtree(workspace.root)
                 workspace.initialize(source_epub=tmp_path if suffix == ".epub" else None, book_id=registered_id)
 
+                write_json(existing_manifest.parent / FINGERPRINT_FILE, {
+                    "source_sha256": source_hash,
+                    "body_sha256": body_hash,
+                    "body_version": BODY_VERSION,
+                })
                 return summarize_book(registered_id, manifest, output_root)
             except Exception:
                 for root, backup, existed in reversed(backups):
+                    # Body conflicts precede output writes: do not replace a
+                    # peer workspace with a stale backup of untouched files.
+                    if root != existing_manifest.parent and not workspace_mutated:
+                        continue
                     if root.exists():
                         shutil.rmtree(root)
                     if existed:

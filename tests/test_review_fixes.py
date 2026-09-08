@@ -89,7 +89,8 @@ def epub_bytes(marker):
 
 
 def test_replacement_upload_refreshes_source_and_state(tmp_path, monkeypatch):
-    path = tmp_path / "manifest.json"
+    # Upload scans sibling book directories; keep this fixture in its own catalog.
+    path = tmp_path / "data" / "books" / "fixture" / "manifest.json"
     manifest(path)
     out = tmp_path / "output"
     old = tmp_path / "old.epub"

@@ -1,3 +1,5 @@
+import pytest
+
 from translator.core.workspace import BookWorkspace, read_json, write_json
 from translator.pipeline.chapter_pipeline import IterativePipeline
 
@@ -67,3 +69,12 @@ def test_hard_fix_review_forwards_temporary_context_to_next_window(monkeypatch, 
     assert len(seen) == 2
     assert seen[1]['current_chapter_review_context']['active_entities'] == ['甲']
     assert len(pipeline._knowledge_windows['c1']) == 2
+
+
+@pytest.fixture(autouse=True)
+def isolated_execution_config(monkeypatch):
+    # These regressions must run from a clean checkout without local config.toml.
+    monkeypatch.setattr('translator.pipeline.chapter_pipeline.load_config', lambda: {
+        'roles': {'primary_translator': 'fake', 'reviewer': 'fake'},
+        'pipeline': {}, 'paths': {},
+    })

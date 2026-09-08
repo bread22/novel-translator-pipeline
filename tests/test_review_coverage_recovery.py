@@ -1,3 +1,5 @@
+import pytest
+
 from pathlib import Path
 
 from translator.core.workspace import BookWorkspace, read_json, write_json
@@ -52,3 +54,12 @@ def test_pipeline_accumulates_partial_coverage_and_preserves_polish(tmp_path: Pa
     assert calls == [None, ['p2']]
     assert set(result['checked_ids']) == {'p0', 'p1', 'p2'}
     assert result['fixes'][0]['replacement'] == polish['replacement']
+
+
+@pytest.fixture(autouse=True)
+def isolated_execution_config(monkeypatch):
+    # These regressions must run from a clean checkout without local config.toml.
+    monkeypatch.setattr('translator.pipeline.chapter_pipeline.load_config', lambda: {
+        'roles': {'primary_translator': 'fake', 'reviewer': 'fake'},
+        'pipeline': {}, 'paths': {},
+    })

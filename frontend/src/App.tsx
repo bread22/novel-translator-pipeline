@@ -13,6 +13,11 @@ import { createRequestCache } from './lib/requestCache';
 const VALID_TABS = ['queue', 'studio', 'reader', 'knowledge', 'settings'];
 const STREAM_EVENTS_STORAGE_KEY = 'stream_events_by_book_v1';
 const MAX_STREAM_EVENTS_PER_BOOK = 30;
+const MAX_EVENT_BOOKS = 20;
+
+function boundedEvents(events: Record<string, StreamEvent[]>): Record<string, StreamEvent[]> {
+  return Object.fromEntries(Object.entries(events).slice(-MAX_EVENT_BOOKS));
+}
 
 function isStreamEvent(value: unknown): value is StreamEvent {
   return Boolean(
@@ -46,13 +51,13 @@ function loadPersistedEvents(): Record<string, StreamEvent[]> {
   try {
     const parsed = JSON.parse(localStorage.getItem(STREAM_EVENTS_STORAGE_KEY) || '{}');
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
+    return boundedEvents(Object.fromEntries(
       Object.entries(parsed).flatMap(([bookId, events]) => (
         Array.isArray(events)
           ? [[bookId, mergeEventHistory(events)]]
           : []
       )),
-    );
+    ));
   } catch {
     return {};
   }
@@ -62,33 +67,9 @@ function persistEvents(eventsByBook: Record<string, StreamEvent[]>): void {
   try {
     localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(eventsByBook));
   } catch (err) {
-    const snapshot = Object.fromEntries(
-      Object.entries(eventsByBook).map(([bookId, events]) => [
-        bookId,
-        mergeEventHistory(events),
-      ]),
-    ) as Record<string, StreamEvent[]>;
-
-    // Keep the newest events when a browser's localStorage quota is already full.
-    // The server history remains the durable source and will hydrate this cache later.
-    let remainingEvents = Object.values(snapshot).reduce((total, events) => total + events.length, 0);
-    while (remainingEvents >= 0) {
-      const largestBook = Object.entries(snapshot)
-        .filter(([, events]) => events.length > 0)
-        .sort(([, left], [, right]) => right.length - left.length)[0];
-      if (!largestBook) {
-        console.warn('Failed to persist stream events:', err);
-        return;
-      }
-      snapshot[largestBook[0]] = snapshot[largestBook[0]].slice(1);
-      remainingEvents -= 1;
-      try {
-        localStorage.setItem(STREAM_EVENTS_STORAGE_KEY, JSON.stringify(snapshot));
-        return;
-      } catch {
-        // continue pruning
-      }
-    }
+    // History is durable on the server. Do not repeatedly serialize/prune on
+    // the UI thread when storage is unavailable or its quota is exhausted.
+    console.warn('Failed to persist stream events:', err);
   }
 }
 
@@ -110,20 +91,37 @@ export const App: React.FC = () => {
   const requestCache = useRef(createRequestCache()).current;
   const booksRevision = useRef(0);
   const queueRevision = useRef(0);
+  const taskRevision = useRef(0);
+  const eventsRef = useRef(eventsByBook);
+  const eventsDirty = useRef(false);
+  const taskRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     selectedBookRef.current = selectedBookId;
+    taskRevision.current += 1;
+    dispatchServer({ type: 'task', value: null });
   }, [selectedBookId]);
 
   useEffect(() => {
-    try {
-      persistEvents(eventsByBook);
-    } catch (err) {
-      console.warn('Failed to persist stream events:', err);
-    }
+    eventsRef.current = eventsByBook;
+    eventsDirty.current = true;
   }, [eventsByBook]);
 
-  // Refresh Books
+  useEffect(() => {
+    const flush = () => {
+      if (!eventsDirty.current) return;
+      eventsDirty.current = false;
+      persistEvents(eventsRef.current);
+    };
+    const timer = setInterval(flush, 500);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, []);
+
   const refreshBooks = useCallback(async () => {
     const revision = ++booksRevision.current;
     try {
@@ -162,14 +160,31 @@ export const App: React.FC = () => {
 
   // Refresh active task status
   const refreshTask = useCallback(async () => {
-    if (!selectedBookId) return;
+    const bookId = selectedBookRef.current;
+    if (!bookId) return;
+    const revision = ++taskRevision.current;
     try {
-      const task = await requestCache(`task:${selectedBookId}`, () => api.getTaskStatus(selectedBookId)).catch(() => null);
-      dispatchServer({ type: 'task', value: task });
+      const task = await requestCache(`task:${bookId}`, () => api.getTaskStatus(bookId));
+      if (bookId === selectedBookRef.current && revision === taskRevision.current) {
+        dispatchServer({ type: 'task', value: task });
+      }
     } catch (err) {
-      console.error('Failed to fetch task status:', err);
+      // A transient fetch failure must not turn a running task into "idle".
+      console.debug('Task status refresh failed:', err);
     }
-  }, [requestCache, selectedBookId]);
+  }, [requestCache]);
+
+  const scheduleTaskRefresh = useCallback(() => {
+    if (taskRefreshTimer.current) return;
+    taskRefreshTimer.current = setTimeout(() => {
+      taskRefreshTimer.current = null;
+      void refreshTask();
+    }, 600);
+  }, [refreshTask]);
+
+  useEffect(() => () => {
+    if (taskRefreshTimer.current) clearTimeout(taskRefreshTimer.current);
+  }, []);
 
   // Refresh Queue
   const refreshQueue = useCallback(async () => {
@@ -227,10 +242,9 @@ export const App: React.FC = () => {
       if (Array.isArray(serverEvents) && serverEvents.length > 0) {
         setEventsByBook((prev) => {
           const combined = mergeEventHistory(serverEvents, prev[bookId] || []);
-          return {
-            ...prev,
-            [bookId]: combined,
-          };
+          const next = { ...prev };
+          delete next[bookId];
+          return boundedEvents({ ...next, [bookId]: combined });
         });
       }
     } catch (err) {
@@ -265,10 +279,9 @@ export const App: React.FC = () => {
           if (next.length === existing.length && next.every((event, index) => event === existing[index])) {
             return prev;
           }
-          return {
-            ...prev,
-            [targetBookId]: next,
-          };
+          const history = { ...prev };
+          delete history[targetBookId];
+          return boundedEvents({ ...history, [targetBookId]: next });
         });
       }
 
@@ -282,11 +295,18 @@ export const App: React.FC = () => {
         debouncedRefreshBooks();
       }
 
-      // 2. Direct activeTask state update from event payload if present
-      if (evt.data && typeof evt.data === 'object' && evt.data.task_id && evt.data.status) {
-        if (!selectedBookRef.current || evt.data.book_id === selectedBookRef.current) {
-          dispatchServer({ type: 'task', value: evt.data as TaskStatusResponse });
+      // Use complete task snapshots directly; partial events trigger one
+      // bounded refresh rather than one HTTP request per progress event.
+      const hasTaskSnapshot = Boolean(evt.data?.task_id && evt.data?.status
+        && typeof evt.data?.overall_progress === 'number'
+        && typeof evt.data?.total_chapters === 'number');
+      if (hasTaskSnapshot && targetBookId === selectedBookRef.current) {
+        taskRevision.current += 1;
+        if (taskRefreshTimer.current) {
+          clearTimeout(taskRefreshTimer.current);
+          taskRefreshTimer.current = null;
         }
+        dispatchServer({ type: 'task', value: { ...evt.data, book_id: targetBookId } as TaskStatusResponse });
       }
 
       // 3. If pipeline state changed or chapter completed, sync task, books, and queue
@@ -304,11 +324,7 @@ export const App: React.FC = () => {
         'pipeline_stopped',
       ];
       if (pipelineEvents.includes(evt.event)) {
-        if (selectedBookRef.current) {
-          requestCache(`task:${selectedBookRef.current}`, () => api.getTaskStatus(selectedBookRef.current!))
-            .then((value) => dispatchServer({ type: 'task', value }))
-            .catch(() => dispatchServer({ type: 'task', value: null }));
-        }
+        if (!hasTaskSnapshot && targetBookId === selectedBookRef.current) scheduleTaskRefresh();
         const boundaryEvents = [
           'chapter_started',
           'chapter_completed',
@@ -328,18 +344,25 @@ export const App: React.FC = () => {
       if (state === 'live') {
         refreshBooks();
         refreshQueue();
-        if (selectedBookRef.current) {
-          requestCache(`task:${selectedBookRef.current}`, () => api.getTaskStatus(selectedBookRef.current!))
-            .then((value) => dispatchServer({ type: 'task', value }))
-            .catch(() => dispatchServer({ type: 'task', value: null }));
-        }
+        void refreshTask();
       }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [refreshBooks, refreshQueue, debouncedRefreshBooks, debouncedRefreshQueue, requestCache]);
+  }, [refreshBooks, refreshQueue, debouncedRefreshBooks, debouncedRefreshQueue, refreshTask, scheduleTaskRefresh]);
+
+  useEffect(() => {
+    if (sseState === 'live') return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshBooks();
+      void refreshQueue();
+      void refreshTask();
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [sseState, refreshBooks, refreshQueue, refreshTask]);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
 

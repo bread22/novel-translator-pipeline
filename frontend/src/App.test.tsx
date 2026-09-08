@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './lib/api';
 import { App } from './App';
@@ -99,8 +99,8 @@ describe('global application state', () => {
     render(<App />);
 
     expect(await screen.findByText('events:1')).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}')['selected-book'])
-      .toHaveLength(1);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}')['selected-book'])
+      .toHaveLength(1));
   });
 
   it('keeps global queue events out of the selected book waterfall', async () => {
@@ -155,8 +155,50 @@ describe('global application state', () => {
     });
 
     expect(screen.getByText('events:30')).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}')['selected-book'])
-      .toHaveLength(30);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}')['selected-book'])
+      .toHaveLength(30));
   });
+  it('uses complete task events without issuing another status request', async () => {
+    let emit!: (event: any) => void;
+    vi.spyOn(api, 'getBooks').mockResolvedValue([{ id: 'selected-book' }] as any);
+    vi.spyOn(api, 'getQueue').mockResolvedValue(emptyQueue);
+    const status = vi.spyOn(api, 'getTaskStatus').mockResolvedValue(null as any);
+    vi.spyOn(api, 'subscribeEvents').mockImplementation((handler) => {
+      emit = handler;
+      return () => undefined;
+    });
+    render(<App />);
+    await screen.findByText('pending:0');
+    const before = status.mock.calls.length;
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        emit({ event: 'pipeline_progress', book_id: 'selected-book', timestamp: 'now', event_id: `s${i}`,
+          data: { task_id: 'task', book_id: 'selected-book', status: 'running', overall_progress: i / 10, total_chapters: 10 } });
+        await Promise.resolve();
+      }
+    });
+    expect(status).toHaveBeenCalledTimes(before);
+  });
+
+  it('bounds persisted history across books and batches storage writes', async () => {
+    let emit!: (event: any) => void;
+    vi.spyOn(api, 'getBooks').mockResolvedValue([{ id: 'selected-book' }] as any);
+    vi.spyOn(api, 'getQueue').mockResolvedValue(emptyQueue);
+    vi.spyOn(api, 'getTaskStatus').mockResolvedValue(null as any);
+    vi.spyOn(api, 'subscribeEvents').mockImplementation((handler) => { emit = handler; return () => undefined; });
+    const storage = vi.spyOn(Storage.prototype, 'setItem');
+    const page = render(<App />);
+    await screen.findByText('pending:0');
+    storage.mockClear();
+    for (let i = 0; i < 25; i++) {
+      act(() => emit({ event: 'translation_attempt', book_id: `book-${i}`, timestamp: 'now', event_id: `${i}`, data: {} }));
+    }
+    expect(storage.mock.calls.filter(([key]) => key === 'stream_events_by_book_v1')).toHaveLength(0);
+    page.unmount();
+    const history = JSON.parse(localStorage.getItem('stream_events_by_book_v1') || '{}');
+    expect(Object.keys(history)).toHaveLength(20);
+    expect(history['book-24']).toHaveLength(1);
+  });
+
 });
 

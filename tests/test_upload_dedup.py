@@ -56,8 +56,9 @@ def upload(name, data, replace=False):
     return asyncio.run(books.upload_book(UploadFile(filename=name, file=io.BytesIO(data)), replace=replace))
 
 
-def tree_bytes(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+def tree_bytes(root, *, fingerprints=True):
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*")
+            if p.is_file() and (fingerprints or p.name != FINGERPRINT_FILE)}
 
 
 def assert_duplicate(name, data, existing, matched_by, **kwargs):
@@ -71,11 +72,11 @@ def assert_duplicate(name, data, existing, matched_by, **kwargs):
 def test_renamed_identical_file_is_blocked_before_registration(storage):
     root, output, manager, calls = storage
     upload("old-name.txt", b"First paragraph.\n\nSecond paragraph.")
-    before = tree_bytes(root / "old-name"), tree_bytes(output)
+    before = tree_bytes(root / "old-name", fingerprints=False), tree_bytes(output)
     assert_duplicate("new-name.txt", b"First paragraph.\n\nSecond paragraph.", "old-name", "source_sha256")
     assert len(calls) == 1
     assert not (root / "new-name").exists()
-    assert before == (tree_bytes(root / "old-name"), tree_bytes(output))
+    assert before == (tree_bytes(root / "old-name", fingerprints=False), tree_bytes(output))
     assert manager.get_status().total_items == 0
     saved = read_json(root / "old-name" / FINGERPRINT_FILE)
     assert saved["source_sha256"] == file_sha256(root / "old-name" / "source.txt")
@@ -89,10 +90,10 @@ def test_repacked_epub_body_conflict_rolls_back(storage):
     repacked = epub(title="Changed metadata", compression=zipfile.ZIP_DEFLATED)
     assert original != repacked
     upload("old.epub", original)
-    before = tree_bytes(root / "old"), tree_bytes(output)
+    before = tree_bytes(root / "old", fingerprints=False), tree_bytes(output)
     assert_duplicate("renamed.epub", repacked, "old", "body_sha256")
     assert not (root / "renamed").exists()
-    assert before == (tree_bytes(root / "old"), tree_bytes(output))
+    assert before == (tree_bytes(root / "old", fingerprints=False), tree_bytes(output))
 
 
 def test_legacy_id_with_completed_translations_and_no_hashes(storage):
@@ -104,10 +105,10 @@ def test_legacy_id_with_completed_translations_and_no_hashes(storage):
         paragraph["translated"] = "Completed translation"
     write_json(path, manifest)
     (root / "old-id" / FINGERPRINT_FILE).unlink()
-    before = tree_bytes(root / "old-id"), tree_bytes(output)
+    before = tree_bytes(root / "old-id", fingerprints=False), tree_bytes(output)
     assert_duplicate("新版カナ.txt", b"Original prose.\n\nMore text.", "old-id", "source_sha256")
     assert_duplicate("another.txt", b"Original   prose.\r\n\r\nMore text.\r\n", "old-id", "body_sha256")
-    assert before == (tree_bytes(root / "old-id"), tree_bytes(output))
+    assert before == (tree_bytes(root / "old-id", fingerprints=False), tree_bytes(output))
 
 
 def test_legacy_missing_source_still_matches_original_manifest(storage):
@@ -252,3 +253,146 @@ def test_body_conflict_does_not_restore_untouched_peer_workspace(storage, monkey
     assert_duplicate("new-id.txt", b"Original   prose.\n", "old-id", "body_sha256")
     assert read_json(workspace.progress_path) == {"state": "advanced"}
     assert not (root / "new-id").exists()
+
+
+def test_legacy_check_persists_and_reuses_cache_after_memory_cache_clear(storage, monkeypatch):
+    from translator.core import book_fingerprints as fp
+
+    root, output, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    path = root / "legacy" / "manifest.json"
+    cache = path.parent / FINGERPRINT_FILE
+    cache.unlink()
+    before = tree_bytes(path.parent, fingerprints=False), tree_bytes(output)
+    result = fp.existing_fingerprints(path, read_json(path), output)
+    assert read_json(cache) == result
+    assert result["source_sha256"] and result["body_sha256"]
+    assert result["manifest_stat"] and result["source_stat"]
+    mtime = cache.stat().st_mtime_ns
+    fp._file_sha256.cache_clear()
+
+    def unexpected(*args):
+        pytest.fail("Unchanged persisted fingerprints should be reused")
+
+    monkeypatch.setattr(fp, "file_sha256", unexpected)
+    monkeypatch.setattr(fp, "body_sha256", unexpected)
+    assert fp.existing_fingerprints(path, read_json(path), output) == result
+    assert cache.stat().st_mtime_ns == mtime
+    assert before == (tree_bytes(path.parent, fingerprints=False), tree_bytes(output))
+
+
+@pytest.mark.parametrize("changed", ["source", "manifest", "version"])
+def test_persistent_cache_invalidates_changed_inputs(storage, monkeypatch, changed):
+    from translator.core import book_fingerprints as fp
+    from unittest.mock import Mock
+
+    root, output, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    path = root / "legacy" / "manifest.json"
+    old = fp.existing_fingerprints(path, read_json(path), output)
+    if changed == "source":
+        (path.parent / "source.txt").write_bytes(b"Modified prose.")
+    elif changed == "manifest":
+        manifest = read_json(path)
+        manifest["chapters"][0]["paragraphs"][0]["source"] = "Revised paragraph."
+        write_json(path, manifest)
+    else:
+        write_json(path.parent / FINGERPRINT_FILE, {**old, "body_version": "old-version"})
+    file_spy, body_spy = Mock(wraps=fp.file_sha256), Mock(wraps=fp.body_sha256)
+    monkeypatch.setattr(fp, "file_sha256", file_spy)
+    monkeypatch.setattr(fp, "body_sha256", body_spy)
+    new = fp.existing_fingerprints(path, read_json(path), output)
+    assert read_json(path.parent / FINGERPRINT_FILE) == new
+    assert file_spy.call_count == (changed in {"source", "version"})
+    assert body_spy.call_count == (changed in {"manifest", "version"})
+    assert (new["source_sha256"] != old["source_sha256"]) == (changed == "source")
+    assert (new["body_sha256"] != old["body_sha256"]) == (changed == "manifest")
+
+
+@pytest.mark.parametrize("corrupt", ['{broken', '[]', '{"body_sha256": "invalid"}'])
+def test_corrupt_cache_is_rebuilt(storage, corrupt):
+    from translator.core import book_fingerprints as fp
+
+    root, output, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    path = root / "legacy" / "manifest.json"
+    cache = path.parent / FINGERPRINT_FILE
+    cache.write_text(corrupt)
+    result = fp.existing_fingerprints(path, read_json(path), output)
+    assert read_json(cache) == result
+    assert len(result["source_sha256"]) == len(result["body_sha256"]) == 64
+
+
+def test_cache_write_failure_still_blocks_duplicate(storage, monkeypatch, caplog):
+    from translator.core import book_fingerprints as fp
+
+    root, _, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    cache = root / "legacy" / FINGERPRINT_FILE
+    cache.unlink()
+
+    def fail(*args):
+        raise OSError("fixture read-only cache")
+
+    monkeypatch.setattr(fp, "write_json", fail)
+    assert_duplicate("renamed.txt", b"Original prose.", "legacy", "source_sha256")
+    assert not cache.exists()
+    assert not (root / "renamed").exists()
+    assert "Fingerprint cache write failed" in caplog.text
+
+
+def test_missing_source_backfills_body_then_reappearing_source_is_hashed(storage):
+    from translator.core import book_fingerprints as fp
+
+    root, output, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    path = root / "legacy" / "manifest.json"
+    source = path.parent / "source.txt"
+    source.unlink()
+    (path.parent / FINGERPRINT_FILE).unlink()
+    result = fp.existing_fingerprints(path, read_json(path), output)
+    assert result["source_sha256"] is None and result["body_sha256"]
+    assert read_json(path.parent / FINGERPRINT_FILE) == result
+    source.write_bytes(b"Original prose.")
+    updated = fp.existing_fingerprints(path, read_json(path), output)
+    assert updated["source_sha256"] == fp.file_sha256(source)
+    assert updated["body_sha256"] == result["body_sha256"]
+
+
+def test_stale_manifest_argument_never_poisoned_cache(storage):
+    from translator.core import book_fingerprints as fp
+
+    root, output, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    path = root / "legacy" / "manifest.json"
+    stale = read_json(path)
+    newer = read_json(path)
+    newer["chapters"][0]["paragraphs"][0]["source"] = "Updated source."
+    write_json(path, newer)
+    result = fp.existing_fingerprints(path, stale, output)
+    assert result["body_sha256"] == fp.body_sha256(newer)
+    assert result["body_sha256"] != fp.body_sha256(stale)
+
+
+def test_manifest_changes_during_hash_retry_before_persist(storage, monkeypatch):
+    from translator.core import book_fingerprints as fp
+
+    root, output, _, _ = storage
+    upload("legacy.txt", b"Original prose.")
+    path = root / "legacy" / "manifest.json"
+    original = fp.body_sha256
+    calls = []
+
+    def interleave(manifest):
+        calls.append(1)
+        if len(calls) == 1:
+            updated = read_json(path)
+            updated["chapters"][0]["paragraphs"][0]["source"] = "Concurrent update."
+            write_json(path, updated)
+        return original(manifest)
+
+    monkeypatch.setattr(fp, "body_sha256", interleave)
+    result = fp.existing_fingerprints(path, read_json(path), output)
+    assert len(calls) == 2
+    assert result["body_sha256"] == original(read_json(path))
+    assert read_json(path.parent / FINGERPRINT_FILE) == result

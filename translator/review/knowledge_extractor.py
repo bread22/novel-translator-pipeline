@@ -717,6 +717,84 @@ def aggregate_candidates(
     return result
 
 
+def ground_candidates_with_text(
+    candidates: Sequence[Mapping[str, Any]],
+    evidence_texts: Mapping[str, Any] | None,
+    current_chapter_id: str = "",
+    *,
+    max_grounded_evidence: int = 20,
+) -> list[dict[str, Any]]:
+    """Deterministically ground candidates against chapter/book text and link name aliases."""
+    if not candidates or not evidence_texts:
+        return [dict(c) for c in candidates if isinstance(c, Mapping)]
+
+    text_items: list[tuple[str, str, str]] = []
+    for pid_raw, ptext in evidence_texts.items():
+        pid = str(pid_raw).strip()
+        if not pid or not ptext:
+            continue
+        text_norm = unicodedata.normalize("NFKC", str(ptext))
+        ch_id = pid.split("-p")[0] if "-p" in pid else current_chapter_id
+        text_items.append((pid, ch_id, text_norm))
+
+    grounded: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str, str]] = set()
+
+    for raw in candidates:
+        if not isinstance(raw, Mapping):
+            continue
+        c = dict(raw)
+        kind = str(c.get("kind", "glossary")).strip().lower()
+        if kind != "glossary":
+            grounded.append(c)
+            continue
+
+        src = unicodedata.normalize("NFKC", str(c.get("source", "")).strip())
+        tgt = unicodedata.normalize("NFKC", str(c.get("target", "")).strip())
+        cat = canonical_category(c.get("category", ""))
+        c_key = (kind, cat, src.casefold(), tgt.casefold())
+        seen_keys.add(c_key)
+
+        if src:
+            matched_pids: list[tuple[str, str]] = []
+            for pid, ch_id, text_norm in text_items:
+                if src in text_norm:
+                    matched_pids.append((pid, ch_id))
+
+            if matched_pids:
+                if current_chapter_id:
+                    matched_pids.sort(key=lambda item: (0 if item[1] == current_chapter_id else 1, item[0]))
+
+                existing_pids = set(c.get("evidence_ids", []) or []) | set(c.get("source_paragraph_ids", []) or [])
+                existing_provenance = [dict(item) for item in c.get("evidence_provenance", []) if isinstance(item, Mapping)]
+                existing_provenance_keys = {
+                    (str(item.get("chapter_id", "")), str(item.get("paragraph_id", "")))
+                    for item in existing_provenance
+                }
+
+                added_pids: list[str] = []
+                for pid, ch_id in matched_pids[:max_grounded_evidence]:
+                    if pid not in existing_pids:
+                        existing_pids.add(pid)
+                        added_pids.append(pid)
+                    if (ch_id, pid) not in existing_provenance_keys:
+                        existing_provenance_keys.add((ch_id, pid))
+                        existing_provenance.append({
+                            "chapter_id": ch_id,
+                            "paragraph_id": pid,
+                            "reporter": "deterministic_grounding",
+                            "confidence": float(c.get("confidence", 0) or 1.0),
+                        })
+
+                c["source_paragraph_ids"] = list(dict.fromkeys((c.get("source_paragraph_ids", []) or []) + added_pids))
+                c["evidence_ids"] = list(dict.fromkeys((c.get("evidence_ids", []) or []) + added_pids))
+                c["evidence_provenance"] = existing_provenance
+
+        grounded.append(c)
+
+    return grounded
+
+
 def build_finalization_payload(
     candidates: Sequence[Mapping[str, Any]],
     conflicts: Sequence[Mapping[str, Any]],
@@ -1387,6 +1465,11 @@ def _apply_knowledge_delta_locked(
             )
         prepared_candidates.append(candidate)
 
+    if evidence_texts:
+        prepared_candidates = ground_candidates_with_text(
+            prepared_candidates, evidence_texts, current_chapter_id=chapter_id
+        )
+
     aggregated_candidates = aggregate_candidates(
         prepared_candidates,
         historical_candidates=historical_candidates,
@@ -1600,6 +1683,7 @@ def _apply_knowledge_delta_locked(
 
 __all__ = [
     "EvidenceProvenance", "WindowKnowledgeOutput", "FinalKnowledgeOutput", "aggregate_candidates",
+    "ground_candidates_with_text",
     "build_finalization_payload", "compact_finalization_payload", "finalization_prompt_chars",
     "partition_finalization_candidates",
     "run_knowledge_extractor_window", "run_knowledge_finalization",

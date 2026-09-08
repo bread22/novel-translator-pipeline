@@ -136,7 +136,7 @@ def _gate_met(term: Mapping[str, Any], tier: CategoryTier | None) -> bool:
         return False
     if tier not in {CategoryTier.DIRECT_ALLOWED, CategoryTier.GATED_ALLOWED}:
         return False
-    return has_independent_support(dict(term)) and float(term.get("confidence", 0) or 0) >= 0.92
+    return has_independent_support(dict(term))
 
 
 def _add_evidence(term: dict[str, Any], evidence: Sequence[Mapping[str, Any]]) -> int:

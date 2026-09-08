@@ -60,6 +60,7 @@ from translator.review.knowledge_extractor import (
 )
 from translator.review.prescan import deterministic_known_hit_scan
 from translator.review.reviewer import (
+    _combine_chunk_reviews,
     evaluate_apply_gate,
     finalize_writeback_states,
     has_hangul,
@@ -1592,13 +1593,18 @@ class IterativePipeline:
             raise ValueError(f"章节审阅结果不是 JSON 对象：{output_path}")
         expected_ids = {str(item["id"]) for item in items}
         for retry in range(1, 3):
-            if not missing_checked_ids(review, expected_ids):
+            missing = missing_checked_ids(review, expected_ids)
+            if not missing:
                 break
+            retry_input = read_json(input_path)
+            retry_input["review_target_ids"] = sorted(missing)
+            retry_input_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}-input.json"
+            write_json(retry_input_path, retry_input)
             retry_path = self.workspace.reviews_dir / f"{chapter_id}-retry-{retry:02d}.json"
             if self._builtin_reviewer:
                 if self.chapter_reviewer is run_chapter_review:
                     self.execution_context.review(
-                        input_path,
+                        retry_input_path,
                         retry_path,
                         factory=run_chapter_review,
                         autonomous=self.autonomous,
@@ -1607,11 +1613,18 @@ class IterativePipeline:
                         cancel_check=self.cancellation_token.check,
                     )
                 else:
-                    self.chapter_reviewer(input_path, retry_path)
+                    self.chapter_reviewer(retry_input_path, retry_path)
             else:
-                self.chapter_reviewer(input_path, retry_path)
+                self.chapter_reviewer(retry_input_path, retry_path)
             self._checkpoint()
-            review = read_json(retry_path)
+            supplemental = read_json(retry_path)
+            # Custom integrations may still return the whole chapter. Only
+            # accept the missing targets; preserve earlier approved polishing.
+            supplemental = {**supplemental,
+                "checked_ids": [value for value in supplemental.get("checked_ids", []) if str(value) in missing],
+                "fixes": [value for value in supplemental.get("fixes", []) if str(value.get("id", "")) in missing],
+            }
+            review = _combine_chunk_reviews(review, supplemental)
         review = validate_chapter_review_payload(
             review,
             expected_ids,

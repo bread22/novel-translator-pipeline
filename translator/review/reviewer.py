@@ -1683,6 +1683,9 @@ def run_chapter_review(
 
     items = input_payload.get("items", [])
     expected_ids = {str(item["id"]) for item in items if isinstance(item, dict) and item.get("id")}
+    requested_ids = input_payload.get("review_target_ids")
+    if isinstance(requested_ids, list):
+        expected_ids &= {str(value) for value in requested_ids}
     pipeline_config = config.get("pipeline", {})
     effective_min_chars = int(
         chunk_min_chars if chunk_min_chars is not None
@@ -1726,6 +1729,20 @@ def run_chapter_review(
         for chunk in chunks:
             spans.append((cursor, cursor + len(chunk)))
             cursor += len(chunk)
+    if isinstance(requested_ids, list):
+        # Keep the original chapter sequence for context, but never ask the
+        # provider to review already-covered targets again.
+        targeted_spans = []
+        for start, end in spans:
+            run_start = None
+            for index in range(start, end + 1):
+                wanted = index < end and str(items[index].get("id", "")) in expected_ids
+                if wanted and run_start is None:
+                    run_start = index
+                elif not wanted and run_start is not None:
+                    targeted_spans.append((run_start, index))
+                    run_start = None
+        spans = targeted_spans
     if not spans:
         spans = [(0, 0)]
 
@@ -1792,7 +1809,7 @@ def run_chapter_review(
             except Exception as exc:  # knowledge extraction is advisory to review
                 window_diagnostics.append({"window_index": chunk_index, "status": "failed", "error": str(exc)})
 
-        if effective_backtrack:
+        if effective_backtrack and requested_ids is None:
             context_ids = {
                 str(item.get("id", ""))
                 for item in window["context_before"]

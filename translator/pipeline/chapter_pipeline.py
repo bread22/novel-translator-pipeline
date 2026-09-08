@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -325,6 +326,8 @@ class IterativePipeline:
         self._knowledge_candidates: dict[str, list[dict[str, Any]]] = {}
         self._knowledge_conflicts: dict[str, list[dict[str, Any]]] = {}
         self._knowledge_windows: dict[str, list[dict[str, Any]]] = {}
+        self._provisional_knowledge_windows: dict[str, list[dict[str, Any]]] = {}
+        self._knowledge_window_cache: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._deferred_knowledge_windows: dict[str, list[tuple[dict[str, list[dict[str, Any]]], int, int]]] = {}
         self._translation_recovery: dict[str, dict[str, Any]] = {}
         self._repair_events: dict[str, list[dict[str, Any]]] = {}
@@ -1191,6 +1194,8 @@ class IterativePipeline:
         review: dict[str, Any],
         window_index: int,
         total_windows: int,
+        *,
+        provisional: bool = False,
     ) -> dict[str, Any]:
         """Extract one temporary window result without touching formal stores."""
         # The window starts from manifest-backed accepted text. Only fixes whose
@@ -1205,7 +1210,8 @@ class IterativePipeline:
         projected = self._project_window_fixes(accepted_window, review, apply=self.review_apply_enabled)
         window_id = f"{chapter_id}:window:{window_index:04d}"
         rolling_context: dict[str, list[str]] = {}
-        for previous_window in self._knowledge_windows.get(chapter_id, []):
+        windows = self._provisional_knowledge_windows if provisional else self._knowledge_windows
+        for previous_window in windows.get(chapter_id, []):
             delta = previous_window.get("rolling_context_delta", {}) if isinstance(previous_window, dict) else {}
             if not isinstance(delta, dict):
                 continue
@@ -1224,9 +1230,16 @@ class IterativePipeline:
             "context_after": projected.get("context_after", []),
             "current_chapter_review_context": rolling_context,
         }
-        output_path = self.workspace.reviews_dir / f"{chapter_id}-window-{window_index:04d}-knowledge.json"
+        suffix = "-provisional" if provisional else ""
+        output_path = self.workspace.reviews_dir / f"{chapter_id}-window-{window_index:04d}-knowledge{suffix}.json"
+        cached = self._knowledge_window_cache.get(window_id)
         try:
-            if self.knowledge_extractor is not None:
+            if cached is not None and cached[0] == payload and cached[1].get("status") == "completed":
+                # Reuse only when accepted text AND preceding rolling context
+                # are unchanged. A revised earlier window invalidates dependents.
+                result = deepcopy(cached[1])
+                write_json(output_path, result)
+            elif self.knowledge_extractor is not None:
                 try:
                     result = self.knowledge_extractor("window", payload)
                 except TypeError:
@@ -1257,6 +1270,14 @@ class IterativePipeline:
         for conflict in result["conflicts"] if isinstance(result["conflicts"], list) else []:
             if isinstance(conflict, dict):
                 conflict.setdefault("source_window", window_id)
+        self._knowledge_window_cache[window_id] = (deepcopy(payload), deepcopy(result))
+        if provisional:
+            self._provisional_knowledge_windows.setdefault(chapter_id, []).append(result)
+            # Candidates are not admitted to finalization until the post-write
+            # pass verifies their input. Only temporary context reaches review.
+            return {"status": result.get("status", "failed"),
+                    "provisional": True,
+                    "rolling_context_delta": deepcopy(result.get("rolling_context_delta", {}))}
         self._knowledge_candidates.setdefault(chapter_id, []).extend(
             item for item in result["knowledge_candidates"] if isinstance(item, dict)
         )
@@ -1545,6 +1566,9 @@ class IterativePipeline:
         self._knowledge_candidates[chapter_id] = []
         self._knowledge_conflicts[chapter_id] = []
         self._knowledge_windows[chapter_id] = []
+        self._provisional_knowledge_windows[chapter_id] = []
+        self._deferred_knowledge_windows[chapter_id] = []
+        self._knowledge_window_cache = {}
         chapter = self._chapter(chapter_id)
         paragraphs = [p for p in chapter.get("paragraphs", []) if isinstance(p, dict) and p.get("id")]
         items = [{"id": str(p["id"]), "source": str(p.get("source", "")), "translated": str(p.get("translated", ""))} for p in paragraphs if str(p.get("translated", "")).strip()]
@@ -1570,7 +1594,9 @@ class IterativePipeline:
             def window_callback(review_result: dict[str, Any], window: dict[str, list[dict[str, Any]]], index: int, total: int) -> dict[str, Any]:
                 if self.review_apply_enabled:
                     self._deferred_knowledge_windows.setdefault(chapter_id, []).append((window, index, total))
-                    return {}
+                    return self._extract_window_knowledge(
+                        chapter_id, window, {}, index, total, provisional=True,
+                    )
                 return self._extract_window_knowledge(chapter_id, window, review_result, index, total)
             if self.chapter_reviewer is run_chapter_review:
                 self.execution_context.review(

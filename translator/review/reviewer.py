@@ -1797,6 +1797,7 @@ def run_chapter_review(
                     window_diagnostics.append({
                         "window_index": chunk_index,
                         "status": window_knowledge.get("status", "completed"),
+                        "provisional": bool(window_knowledge.get("provisional", False)),
                         "candidate_count": len(window_knowledge.get("knowledge_candidates", []) or []),
                         "conflict_count": len(window_knowledge.get("conflicts", []) or []),
                         "rolling_context_fields": sorted(

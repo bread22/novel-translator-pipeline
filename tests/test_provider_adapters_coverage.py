@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -169,6 +170,14 @@ def test_opencode_helpers_and_health(monkeypatch) -> None:
         '{"type":"assistant","content":[{"text":"C"}]}',
     ])
     assert opencode._event_text(events) == "ABC"
+    error_event = json.dumps({
+        "type": "session.error",
+        "properties": {"error": {"name": "APIError", "data": {"message": "Free tier limit reached"}}},
+    })
+    assert "Free tier limit reached" in opencode._event_error_text(error_event)
+    assert opencode._failure_reason(error_event, "") == "rate_limit"
+    assert opencode._failure_reason("", "usage_limit exceeded") == "rate_limit"
+    assert opencode._failure_reason("", "You exceeded your current quota") == "rate_limit"
     assert opencode.parse_json_object('prefix {"ok":true} suffix') == {"ok": True}
     with pytest.raises(ValueError):
         opencode.parse_json_object("none")
@@ -183,18 +192,18 @@ def test_opencode_helpers_and_health(monkeypatch) -> None:
 
 def test_opencode_prompt_and_provider_paths(tmp_path: Path, monkeypatch) -> None:
     success = SimpleNamespace(returncode=0, stdout='{"type":"text","text":"{\\"items\\":[{\\"id\\":\\"p1\\",\\"text\\":\\"ok\\"}]}"}\n', stderr="")
-    monkeypatch.setattr(opencode.subprocess, "run", lambda *_args, **_kwargs: success)
+    monkeypatch.setattr(opencode, "_run_command", lambda *_args, **_kwargs: success)
     assert "items" in opencode.run_prompt("translate", binary="opencode", model="m", agent="a", max_retries=1)
     with pytest.raises(ValueError):
         opencode.run_prompt("x", timeout=0, binary="opencode")
 
     blocked = SimpleNamespace(returncode=1, stdout="content policy", stderr="")
-    monkeypatch.setattr(opencode.subprocess, "run", lambda *_args, **_kwargs: blocked)
+    monkeypatch.setattr(opencode, "_run_command", lambda *_args, **_kwargs: blocked)
     with pytest.raises(opencode.OpenCodeError) as exc:
         opencode.run_prompt("x", binary="opencode", max_retries=1)
     assert exc.value.reason == "content_filter"
     empty = SimpleNamespace(returncode=0, stdout="", stderr="")
-    monkeypatch.setattr(opencode.subprocess, "run", lambda *_args, **_kwargs: empty)
+    monkeypatch.setattr(opencode, "_run_command", lambda *_args, **_kwargs: empty)
     with pytest.raises(opencode.OpenCodeError) as exc:
         opencode.run_prompt("x", binary="opencode", max_retries=1)
     assert exc.value.reason == "output_format"
@@ -221,10 +230,27 @@ def test_opencode_prompt_and_provider_paths(tmp_path: Path, monkeypatch) -> None
 def test_opencode_retries_timeout(monkeypatch) -> None:
     monkeypatch.setattr(opencode.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
-        opencode.subprocess,
-        "run",
+        opencode,
+        "_run_command",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("opencode", 1)),
     )
     with pytest.raises(opencode.OpenCodeError) as exc:
         opencode.run_prompt("x", binary="opencode", timeout=1, max_retries=2)
     assert exc.value.reason == "timeout"
+
+
+def test_opencode_detects_live_rate_limit_without_waiting_for_timeout(tmp_path: Path) -> None:
+    fake = tmp_path / "fake-opencode"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "echo 'ERROR stream error: [rate_limit_exceeded] Rate limit exceeded' >&2\n"
+        "sleep 10\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    started = time.monotonic()
+    with pytest.raises(opencode.OpenCodeError) as exc:
+        opencode.run_prompt("x", binary=str(fake), timeout=5, max_retries=2)
+    assert exc.value.reason == "rate_limit"
+    assert time.monotonic() - started < 2

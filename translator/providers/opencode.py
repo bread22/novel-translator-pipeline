@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import time
 from typing import Any
@@ -20,6 +21,35 @@ from translator.providers.base import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+_CONTENT_FILTER_MARKERS = (
+    "content policy",
+    "sensitive words",
+    "prohibited use policy",
+    "content_filter",
+    "provider_blocked",
+)
+_RATE_LIMIT_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "rate-limit",
+    "too many requests",
+    "quota exceeded",
+    "quota_exceeded",
+    "quota reached",
+    "quota_reached",
+    "quota",
+    "free limit",
+    "free_limit",
+    "free tier limit",
+    "free usage",
+    "usage limit",
+    "usage_limit",
+    "resource exhausted",
+    "resource_exhausted",
+    "insufficient quota",
+    "insufficient_quota",
+)
 
 
 class OpenCodeError(RuntimeError):
@@ -90,6 +120,115 @@ def _event_text(stdout: str) -> str:
     return "".join(chunks).strip()
 
 
+def _event_error_text(stdout: str) -> str:
+    """Extract errors from OpenCode's JSON event stream without scanning model text."""
+    errors: list[str] = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type", ""))
+        error: Any = None
+        if event_type in {"session.error", "error"}:
+            properties = event.get("properties")
+            error = properties.get("error") if isinstance(properties, dict) else event.get("error")
+        elif event_type == "message.updated":
+            properties = event.get("properties")
+            info = properties.get("info") if isinstance(properties, dict) else None
+            error = info.get("error") if isinstance(info, dict) else None
+        if error is not None:
+            errors.append(json.dumps(error, ensure_ascii=False) if not isinstance(error, str) else error)
+    return "\n".join(errors)
+
+
+def _failure_reason(stdout: str, stderr: str, *, include_plain_stdout: bool = False) -> str | None:
+    material = "\n".join(
+        part
+        for part in (
+            stderr,
+            _event_error_text(stdout),
+            stdout if include_plain_stdout else "",
+        )
+        if part
+    ).casefold()
+    if any(marker in material for marker in _CONTENT_FILTER_MARKERS):
+        return "content_filter"
+    if any(marker in material for marker in _RATE_LIMIT_MARKERS):
+        return "rate_limit"
+    return None
+
+
+def _as_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _stop_process(process: subprocess.Popen[str]) -> None:
+    """Stop the OpenCode process and any children it launched."""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+        process.wait()
+
+
+def _run_command(command: list[str], prompt: str, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run OpenCode while inspecting JSON errors and ERROR logs as they arrive."""
+    process = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + timeout
+    stdout = ""
+    stderr = ""
+    first_poll = True
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_process(process)
+                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            try:
+                out, err = process.communicate(
+                    input=prompt if first_poll else None,
+                    timeout=min(0.5, remaining),
+                )
+                stdout, stderr = _as_text(out), _as_text(err)
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired as exc:
+                # TimeoutExpired carries all output collected so far; communicate() can
+                # safely be called again after it.
+                stdout = _as_text(exc.output)
+                stderr = _as_text(exc.stderr)
+                reason = _failure_reason(stdout, stderr)
+                if reason is not None:
+                    _stop_process(process)
+                    combined = "\n".join(part for part in (stdout, stderr) if part)
+                    label = "blocked" if reason == "content_filter" else "rate limit"
+                    raise OpenCodeError(f"opencode {label}: {combined[-2000:]}", reason=reason)
+                first_poll = False
+    except BaseException:
+        _stop_process(process)
+        raise
+
+
 def run_prompt(
     prompt: str,
     *,
@@ -105,7 +244,17 @@ def run_prompt(
     command_executable = binary or executable()
     if not command_executable:
         raise OpenCodeError("opencode executable not found in PATH", reason="executable")
-    command = [command_executable, "run", "--format", "json", "--dir", str(ROOT)]
+    command = [
+        command_executable,
+        "run",
+        "--format",
+        "json",
+        "--print-logs",
+        "--log-level",
+        "ERROR",
+        "--dir",
+        str(ROOT),
+    ]
     chosen_model = model if model is not None else model_for(role)
     if chosen_model:
         command.extend(["--model", chosen_model])
@@ -115,15 +264,7 @@ def run_prompt(
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            result = subprocess.run(
-                command,
-                cwd=ROOT,
-                input=prompt,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                check=False,
-            )
+            result = _run_command(command, prompt, timeout)
         except subprocess.TimeoutExpired as exc:
             last_error = OpenCodeError(f"opencode timed out after {timeout}s", reason="timeout")
             if attempt < max_retries - 1:
@@ -137,10 +278,10 @@ def run_prompt(
                 continue
             raise last_error from exc
         combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
-        lowered = combined.casefold()
-        if any(marker in lowered for marker in ("content policy", "sensitive words", "prohibited use policy", "content_filter", "provider_blocked")):
+        failure_reason = _failure_reason(result.stdout, result.stderr, include_plain_stdout=result.returncode != 0)
+        if failure_reason == "content_filter":
             raise OpenCodeError(f"opencode blocked: {combined[-2000:]}", reason="content_filter")
-        if any(marker in lowered for marker in ("rate limit", "rate_limit", "rate_limit_exceeded", "too many requests")):
+        if failure_reason == "rate_limit":
             raise OpenCodeError(f"opencode rate limit: {combined[-2000:]}", reason="rate_limit")
         if result.returncode != 0:
             last_error = OpenCodeError(f"opencode exited {result.returncode}: {combined[-2000:]}", reason="process")

@@ -22,7 +22,7 @@ class OpenCodeBackendTests(unittest.TestCase):
             ]
         )
         with patch("translator.providers.opencode.executable", return_value="/usr/bin/opencode"), patch(
-            "translator.providers.opencode.subprocess.run",
+            "translator.providers.opencode._run_command",
             return_value=Mock(returncode=0, stdout=stdout, stderr=""),
         ) as run:
             result = run_prompt("health", role="reviewer", timeout=3)
@@ -143,4 +143,3 @@ class OpenCodeBackendTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

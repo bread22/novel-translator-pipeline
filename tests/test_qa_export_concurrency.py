@@ -63,7 +63,9 @@ def test_concurrent_exports_both_publish_valid_artifacts(tmp_path: Path, monkeyp
 
     def run_export() -> None:
         try:
-            result: dict | HTTPException = books.export_book("book-1", layout="preserve")
+            # Exercise the transaction itself rather than the route's process-local
+            # book-id lock. Queue finalization calls a different entry point.
+            result: dict | HTTPException = books._export_book_locked("book-1", layout="preserve")
         except HTTPException as exc:
             result = exc
         with result_lock:

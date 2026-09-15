@@ -7,8 +7,10 @@ from typing import Any, Mapping, Sequence
 from xml.etree import ElementTree as ET
 import hashlib
 import html
+import os
 import posixpath
 import re
+import tempfile
 from urllib.parse import unquote
 import zipfile
 
@@ -1715,56 +1717,80 @@ def export_epub(book: Book, output: Path, epub_config: EpubConfig | None = None,
     anchor_map_by_path = _chapter_anchor_map(chapters_by_path, book.chapters)
     title_translations = _chapter_title_translations(book)
     source = Path(book.source_file)
-    with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(output, "w") as dst:
-        opf_path = book.metadata.get("epub", {}).get("opf_path", "")
-        nav_path = book.metadata.get("epub", {}).get("nav_path", "")
-        toc_path = book.metadata.get("epub", {}).get("toc_path", "")
-        infos = src.infolist()
-        mimetype_info = next((info for info in infos if info.filename == "mimetype"), None)
-        if mimetype_info is not None:
-            _write_epub_member(dst, mimetype_info, src.read(mimetype_info.filename), force_stored=True)
-        for info in infos:
-            if info.filename == "mimetype":
-                continue
-            data = src.read(info.filename)
-            is_nav = config.translate_nav and info.filename == nav_path
-            is_toc = config.translate_toc and info.filename == toc_path
-            if info.filename == opf_path:
-                data = _update_opf_for_export(data, book, title_translations)
-            elif is_nav or is_toc:
-                if info.filename == nav_path or info.filename == toc_path:
-                    data = _repair_navigation_targets(data, info.filename, anchor_map_by_path)
-                chapters = chapters_by_path.get(info.filename)
-                if chapters:
-                    document_role = chapters[0].role
-                    data, chapter_warnings = _replace_chapters_by_locator(
-                        data,
-                        chapters,
-                        config,
-                        bilingual=bilingual,
-                        document_role=document_role,
-                        source_path=info.filename,
-                    )
-                    warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
-                if title_translations:
-                    data, nav_warnings = _replace_navigation_text(data, title_translations)
-                    warnings.extend(f"{info.filename}: {message}" for message in nav_warnings)
-            else:
-                chapters = chapters_by_path.get(info.filename)
-                if chapters:
-                    document_role = chapters[0].role
-                    data, chapter_warnings = _replace_chapters_by_locator(
-                        data,
-                        chapters,
-                        config,
-                        bilingual=bilingual,
-                        ignored_nodes=ignored_nodes_by_path.get(info.filename, ()),
-                        chapter_anchor_ids=dict(anchor_map_by_path.get(info.filename, ())),
-                        document_role=document_role,
-                        source_path=info.filename,
-                    )
-                    warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
-            _write_epub_member(dst, info, data)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(temporary_path, "w") as dst:
+            opf_path = book.metadata.get("epub", {}).get("opf_path", "")
+            nav_path = book.metadata.get("epub", {}).get("nav_path", "")
+            toc_path = book.metadata.get("epub", {}).get("toc_path", "")
+            infos = src.infolist()
+            mimetype_info = next((info for info in infos if info.filename == "mimetype"), None)
+            if mimetype_info is not None:
+                _write_epub_member(dst, mimetype_info, src.read(mimetype_info.filename), force_stored=True)
+            for info in infos:
+                if info.filename == "mimetype":
+                    continue
+                data = src.read(info.filename)
+                is_nav = config.translate_nav and info.filename == nav_path
+                is_toc = config.translate_toc and info.filename == toc_path
+                if info.filename == opf_path:
+                    data = _update_opf_for_export(data, book, title_translations)
+                elif is_nav or is_toc:
+                    if info.filename == nav_path or info.filename == toc_path:
+                        data = _repair_navigation_targets(data, info.filename, anchor_map_by_path)
+                    chapters = chapters_by_path.get(info.filename)
+                    if chapters:
+                        document_role = chapters[0].role
+                        data, chapter_warnings = _replace_chapters_by_locator(
+                            data,
+                            chapters,
+                            config,
+                            bilingual=bilingual,
+                            document_role=document_role,
+                            source_path=info.filename,
+                        )
+                        warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
+                    if title_translations:
+                        data, nav_warnings = _replace_navigation_text(data, title_translations)
+                        warnings.extend(f"{info.filename}: {message}" for message in nav_warnings)
+                else:
+                    chapters = chapters_by_path.get(info.filename)
+                    if chapters:
+                        document_role = chapters[0].role
+                        data, chapter_warnings = _replace_chapters_by_locator(
+                            data,
+                            chapters,
+                            config,
+                            bilingual=bilingual,
+                            ignored_nodes=ignored_nodes_by_path.get(info.filename, ()),
+                            chapter_anchor_ids=dict(anchor_map_by_path.get(info.filename, ())),
+                            document_role=document_role,
+                            source_path=info.filename,
+                        )
+                        warnings.extend(f"{info.filename}: {message}" for message in chapter_warnings)
+                _write_epub_member(dst, info, data)
+        with zipfile.ZipFile(temporary_path, "r") as archive:
+            names = set(archive.namelist())
+            bad_member = archive.testzip()
+            if bad_member is not None:
+                raise ValueError(f"EPUB 成员 CRC 校验失败：{bad_member}")
+            if "mimetype" not in names or "META-INF/container.xml" not in names:
+                raise ValueError("EPUB 缺少 mimetype 或 META-INF/container.xml")
+            if archive.read("mimetype").strip() != b"application/epub+zip":
+                raise ValueError("EPUB mimetype 无效")
+        with temporary_path.open("rb") as exported_file:
+            os.fsync(exported_file.fileno())
+        temporary_path.replace(output)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return {"warnings": warnings, "warning_count": len(warnings)}
 
 

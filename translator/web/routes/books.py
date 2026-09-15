@@ -24,7 +24,7 @@ from translator.core.layout import apply_horizontal_layout, inject_epub_metadata
 from translator.core.metadata import extract_book_metadata, sanitize_epub_filename
 from translator.core.novel_tool import NOVEL_TRANSLATOR_ROOT, call_novel_translator
 from translator.core.paths import PathResolver
-from translator.core.workspace import BookWorkspace, json_file_lock, read_json, safe_book_name, utc_now, write_json
+from translator.core.workspace import BookWorkspace, artifact_file_lock, is_valid_epub, json_file_lock, read_json, safe_book_name, utc_now, write_json
 from translator.pipeline.chapter_pipeline import manifest_path, paragraph_map
 from translator.core.job_manager import job_manager
 from translator.web.models import (
@@ -72,11 +72,7 @@ def _has_valid_epub(path: Path) -> bool:
             if cache_key in _EPUB_VALIDITY_CACHE:
                 return _EPUB_VALIDITY_CACHE[cache_key]
 
-        if not zipfile.is_zipfile(path):
-            valid = False
-        else:
-            with zipfile.ZipFile(path) as archive:
-                valid = "META-INF/container.xml" in archive.namelist()
+        valid = is_valid_epub(path)
 
         with _EPUB_VALIDITY_CACHE_LOCK:
             if len(_EPUB_VALIDITY_CACHE) > 500:
@@ -529,48 +525,49 @@ def _export_book_locked(book_id: str, layout: str = Query("horizontal", pattern=
     workspace = BookWorkspace.at(output_root, title)
     workspace.initialize(book_id=book_id)
 
-    # Call novel-translator export
-    exported = call_novel_translator(
-        "export",
-        "--book",
-        book_id,
-        "--format",
-        "epub",
-        "--output",
-        str(workspace.epub_path),
-        "--monolingual",
-    )
-    if exported.get("status") not in {"ok", "success", "exported"}:
-        raise HTTPException(status_code=502, detail=f"EPUB export payload 未通过：{exported}")
-    if not workspace.epub_path.is_file() or workspace.epub_path.stat().st_size == 0 or not zipfile.is_zipfile(workspace.epub_path):
-        raise HTTPException(status_code=502, detail="EPUB export 产物无效")
-    meta = extract_book_metadata(book_id, manifest, workspace)
-    if layout == "horizontal":
-        apply_horizontal_layout(workspace.epub_path, metadata=meta)
-    else:
-        inject_epub_metadata(workspace.epub_path, metadata=meta)
+    # Queue finalization and HTTP export share this workspace-level transaction lock.
+    with artifact_file_lock(workspace.epub_path):
+        exported = call_novel_translator(
+            "export",
+            "--book",
+            book_id,
+            "--format",
+            "epub",
+            "--output",
+            str(workspace.epub_path),
+            "--monolingual",
+        )
+        if exported.get("status") not in {"ok", "success", "exported"}:
+            raise HTTPException(status_code=502, detail=f"EPUB export payload 未通过：{exported}")
+        if not is_valid_epub(workspace.epub_path):
+            raise HTTPException(status_code=502, detail="EPUB export 产物无效")
+        meta = extract_book_metadata(book_id, manifest, workspace)
+        if layout == "horizontal":
+            apply_horizontal_layout(workspace.epub_path, metadata=meta)
+        else:
+            inject_epub_metadata(workspace.epub_path, metadata=meta)
 
-    validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
-    if (
-        not isinstance(validated, dict)
-        or validated.get("status") not in {"ok", "success", "valid", "warning"}
-        or bool(validated.get("errors"))
-    ):
-        raise HTTPException(status_code=502, detail=f"EPUB validate payload 未通过：{validated}")
+        validated = call_novel_translator("validate-epub", "--path", str(workspace.epub_path))
+        if (
+            not isinstance(validated, dict)
+            or validated.get("status") not in {"ok", "success", "valid", "warning"}
+            or bool(validated.get("errors"))
+        ):
+            raise HTTPException(status_code=502, detail=f"EPUB validate payload 未通过：{validated}")
 
-    # Copy to translated/ root directory
-    translated_dir = PathResolver.for_config().translated_root(load_config())
-    translated_dir.mkdir(parents=True, exist_ok=True)
-    target_name = sanitize_epub_filename(meta.get("title_zh", title), meta.get("author_zh", ""))
-    target_epub = translated_dir / target_name
-    temporary_target = translated_dir / f".{target_epub.name}.{uuid.uuid4().hex}.tmp"
-    shutil.copy2(workspace.epub_path, temporary_target)
-    source_hash = hashlib.sha256(workspace.epub_path.read_bytes()).hexdigest()
-    copied_hash = hashlib.sha256(temporary_target.read_bytes()).hexdigest()
-    if source_hash != copied_hash:
-        temporary_target.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail="EPUB 临时交付副本 hash 不一致")
-    temporary_target.replace(target_epub)
+        # Publish only the validated artifact to translated/.
+        translated_dir = PathResolver.for_config().translated_root(load_config())
+        translated_dir.mkdir(parents=True, exist_ok=True)
+        target_name = sanitize_epub_filename(meta.get("title_zh", title), meta.get("author_zh", ""))
+        target_epub = translated_dir / target_name
+        temporary_target = translated_dir / f".{target_epub.name}.{uuid.uuid4().hex}.tmp"
+        shutil.copy2(workspace.epub_path, temporary_target)
+        source_hash = hashlib.sha256(workspace.epub_path.read_bytes()).hexdigest()
+        copied_hash = hashlib.sha256(temporary_target.read_bytes()).hexdigest()
+        if source_hash != copied_hash:
+            temporary_target.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="EPUB 临时交付副本 hash 不一致")
+        temporary_target.replace(target_epub)
 
     return {
         "status": "exported",

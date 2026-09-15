@@ -590,6 +590,7 @@ class PipelineFunctionTests(unittest.TestCase):
                 if args[0] == "export":
                     with zipfile.ZipFile(Path(args[args.index("--output") + 1]), "w") as archive:
                         archive.writestr("mimetype", "application/epub+zip")
+                        archive.writestr("META-INF/container.xml", "<container/>")
                 return {"status": "ok", "summary": {"command": args[0]}}
 
             pipeline = IterativePipeline(

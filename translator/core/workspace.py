@@ -46,8 +46,8 @@ def safe_book_name(value: str) -> str:
 
 
 @contextmanager
-def json_file_lock(path: Path):
-    """Serialize read-modify-write operations for one JSON path."""
+def artifact_file_lock(path: Path):
+    """Serialize a complete artifact transaction across threads and processes."""
     resolved = path.expanduser().resolve()
     with _JSON_LOCKS_GUARD:
         thread_lock = _JSON_LOCKS.setdefault(resolved, threading.RLock())
@@ -71,6 +71,29 @@ def json_file_lock(path: Path):
                 held.remove(resolved)
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def json_file_lock(path: Path):
+    """Serialize read-modify-write operations for one JSON path."""
+    with artifact_file_lock(path):
+        yield
+
+
+def is_valid_epub(path: Path) -> bool:
+    """Return whether path is a complete, readable EPUB container."""
+    try:
+        if not path.is_file() or path.stat().st_size == 0 or not zipfile.is_zipfile(path):
+            return False
+        with zipfile.ZipFile(path, "r") as archive:
+            names = set(archive.namelist())
+            return (
+                archive.testzip() is None
+                and {"mimetype", "META-INF/container.xml"}.issubset(names)
+                and archive.read("mimetype").strip() == b"application/epub+zip"
+            )
+    except (KeyError, OSError, zipfile.BadZipFile):
+        return False
 
 
 def write_json(path: Path, payload: Any) -> Path:

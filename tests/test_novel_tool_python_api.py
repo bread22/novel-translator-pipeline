@@ -7,6 +7,7 @@ import unittest
 import zipfile
 
 from translator.core.novel_tool import call_novel_translator
+from translator.core import novel_tool
 
 
 VENDOR_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "novel-translator"
@@ -142,6 +143,32 @@ class NovelToolPythonApiTests(unittest.TestCase):
             novel_tool._VENDOR_API_CACHE[self.runtime.resolve()],
             novel_tool._vendor_api(self.runtime),
         )
+
+    def test_failed_epub_export_preserves_existing_artifact(self) -> None:
+        source = self.root / "source.epub"
+        output = self.root / "translated.epub"
+        write_epub(source)
+        write_epub(output)
+        previous = output.read_bytes()
+
+        api = novel_tool._vendor_api(self.runtime)
+        export_globals = api.export_epub.__globals__
+        book = export_globals["load_source_book"](source)
+        original_write = export_globals["_write_epub_member"]
+
+        def interrupted_write(*args: object, **kwargs: object) -> None:
+            original_write(*args, **kwargs)
+            raise RuntimeError("injected export interruption")
+
+        export_globals["_write_epub_member"] = interrupted_write
+        try:
+            with self.assertRaises(RuntimeError):
+                api.export_epub(book, output)
+        finally:
+            export_globals["_write_epub_member"] = original_write
+
+        self.assertEqual(output.read_bytes(), previous)
+        self.assertEqual(list(output.parent.glob(f".{output.name}.*.tmp")), [])
 
 
 if __name__ == "__main__":

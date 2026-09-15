@@ -37,7 +37,9 @@ from translator.core.paths import PathResolver
 from translator.core.report import generate_work_report
 from translator.core.workspace import (
     BookWorkspace,
+    artifact_file_lock,
     empty_book_memory,
+    is_valid_epub,
     memory_for_chapter,
     read_json,
     utc_now,
@@ -2000,48 +2002,49 @@ class IterativePipeline:
             raise ValueError(f"章节审阅状态不完整，无法导出：{', '.join(missing_reviews)}")
         output = self.workspace.epub_path
         self._checkpoint()
-        exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
-        if not isinstance(exported, dict) or exported.get("status") not in {"ok", "success", "exported"}:
-            raise ValueError(f"EPUB export payload 未通过：{exported}")
-        if not output.is_file() or output.stat().st_size == 0 or not zipfile.is_zipfile(output):
-            raise ValueError(f"EPUB export 产物无效：{output}")
-        self._checkpoint()
-        meta = extract_book_metadata(
-            self.book,
-            manifest,
-            self.workspace,
-            primary_provider=self.primary_translator,
-            fallback_providers=self.fallback_translators,
-        )
-        self._checkpoint()
+        with artifact_file_lock(output):
+            exported = self.tool_call("export", "--book", self.book, "--format", "epub", "--output", str(output), "--monolingual")
+            if not isinstance(exported, dict) or exported.get("status") not in {"ok", "success", "exported"}:
+                raise ValueError(f"EPUB export payload 未通过：{exported}")
+            if not is_valid_epub(output):
+                raise ValueError(f"EPUB export 产物无效：{output}")
+            self._checkpoint()
+            meta = extract_book_metadata(
+                self.book,
+                manifest,
+                self.workspace,
+                primary_provider=self.primary_translator,
+                fallback_providers=self.fallback_translators,
+            )
+            self._checkpoint()
 
-        if self.layout == "horizontal":
-            apply_horizontal_layout(output, metadata=meta)
-        else:
-            inject_epub_metadata(output, metadata=meta)
-        self._checkpoint()
+            if self.layout == "horizontal":
+                apply_horizontal_layout(output, metadata=meta)
+            else:
+                inject_epub_metadata(output, metadata=meta)
+            self._checkpoint()
 
-        validation = self.tool_call("validate-epub", "--path", str(output))
-        if (
-            not isinstance(validation, dict)
-            or validation.get("status") not in {"ok", "success", "valid", "warning"}
-            or bool(validation.get("errors"))
-        ):
-            raise ValueError(f"EPUB validate payload 未通过：{validation}")
-        self._checkpoint()
+            validation = self.tool_call("validate-epub", "--path", str(output))
+            if (
+                not isinstance(validation, dict)
+                or validation.get("status") not in {"ok", "success", "valid", "warning"}
+                or bool(validation.get("errors"))
+            ):
+                raise ValueError(f"EPUB validate payload 未通过：{validation}")
+            self._checkpoint()
 
-        self.translated_root.mkdir(parents=True, exist_ok=True)
-        target_filename = sanitize_epub_filename(meta.get("title_zh", ""), meta.get("author_zh", ""))
-        destination = self.translated_root / target_filename
-        temporary_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-        self._checkpoint()
-        shutil.copy2(output, temporary_destination)
-        source_hash = hashlib.sha256(output.read_bytes()).hexdigest()
-        copied_hash = hashlib.sha256(temporary_destination.read_bytes()).hexdigest()
-        if source_hash != copied_hash:
-            temporary_destination.unlink(missing_ok=True)
-            raise ValueError("EPUB 临时交付副本 hash 不一致")
-        temporary_destination.replace(destination)
+            self.translated_root.mkdir(parents=True, exist_ok=True)
+            target_filename = sanitize_epub_filename(meta.get("title_zh", ""), meta.get("author_zh", ""))
+            destination = self.translated_root / target_filename
+            temporary_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+            self._checkpoint()
+            shutil.copy2(output, temporary_destination)
+            source_hash = hashlib.sha256(output.read_bytes()).hexdigest()
+            copied_hash = hashlib.sha256(temporary_destination.read_bytes()).hexdigest()
+            if source_hash != copied_hash:
+                temporary_destination.unlink(missing_ok=True)
+                raise ValueError("EPUB 临时交付副本 hash 不一致")
+            temporary_destination.replace(destination)
         self._checkpoint()
         report_path = generate_work_report(
             workspace=self.workspace.root,

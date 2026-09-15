@@ -44,6 +44,7 @@ class ScriptResidueFinding:
 
 
 _QUOTE_PAIRS = (
+    ("〝", "〟"),
     ("「", "」"),
     ("『", "』"),
     ("“", "”"),
@@ -54,6 +55,7 @@ _QUOTE_PAIRS = (
     ("(", ")"),
     ("【", "】"),
 )
+_KANA_ROW_REGEX = re.compile(rf"(?P<row>[{_KANA_CHARS}])行")
 _SOURCE_CONTEXT_TERMS = re.compile(
     r"(?:原文|原字|文字|字形|字样|字体|假名|平假名|片假名|变体假名|日文(?:字|文字)?|表记|书写|書|描|えが|写|"
     r"言葉|ことば|コトバ|語(?:源|彙|義)?|用語|熟語|呼称|呼(?:ぶ|ばれ|ばれる|んだ|び|名)|"
@@ -100,14 +102,25 @@ def _quoted_context(text: str, token: str, *, source: bool) -> str | None:
     return None
 
 
+def _kana_row_context(text: str, token: str) -> str | None:
+    """Recognize a kana named as a row or compared within that row."""
+    for match in _KANA_ROW_REGEX.finditer(text):
+        window = text[max(0, match.start() - 25):min(len(text), match.end() + 25)]
+        if token == match.group("row"):
+            return "kana_row_reference"
+        if any(f"{opening}{token}{closing}" in window for opening, closing in _QUOTE_PAIRS):
+            return "kana_row_reference"
+    return None
+
+
 def _source_character_context(token: str, source: str) -> str | None:
     """Require explicit source character context, not a bare occurrence."""
-    return _quoted_context(source, token, source=True)
+    return _quoted_context(source, token, source=True) or _kana_row_context(source, token)
 
 
 def _target_character_context(token: str, text: str) -> str | None:
     """Require quoted retention plus a nearby explanation of that character."""
-    return _quoted_context(text, token, source=False)
+    return _quoted_context(text, token, source=False) or _kana_row_context(text, token)
 
 
 def _is_kana_reference(text: str, source: str, start: int, end: int) -> bool:

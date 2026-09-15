@@ -215,3 +215,22 @@ def test_linguistic_and_etymological_quotes_classified_as_explicit_reference() -
     assert has_target_script_residue(onomatopoeia_target, source=onomatopoeia_source)
 
 
+def test_kana_row_explanation_with_double_prime_quotes_is_explicit_reference() -> None:
+    source = (
+        "尻の穴から出るのが〝屁〟である。その穴より一つ上の方から出るので、"
+        "ハ行の〝ヘ〟より一つ上の〝フ〟をとり、俗に〝フ〟と呼ばれる歓喜音であった。"
+        "恥ずかしいフを連発すると、貴子は全身から力が抜けたように、ガックリと果てたのだった。"
+    )
+    target = (
+        "从屁眼里出来的便是“屁”。而从比那个穴再往上一个的穴里出来的，"
+        "便取ハ行中比“ヘ”高一位的“フ”，俗称欢喜之音“フ”。"
+        "羞耻的“フ”连连迸发，贵子便像全身力气都被抽光一般，颓然瘫软了下去。"
+    )
+
+    findings = inspect_target_script(target, source=source)
+
+    assert [finding.token for finding in findings] == ["ハ", "ヘ", "フ", "フ", "フ"]
+    assert all(finding.classification == "explicit_source_reference" for finding in findings)
+    assert findings[0].context_match == "kana_row_reference"
+    assert not has_target_script_residue(target, source=source)
+

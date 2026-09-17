@@ -21,16 +21,14 @@ def normalize_target_punctuation(text: str) -> str:
 
 
 def provider_block_reason(text: str) -> str:
+    """Detect explicit provider blocks, never subject matter in valid prose."""
     lowered = text.casefold()
     if any(marker in lowered for marker in (
         "sensitive words",
         "prohibited use policy",
-        "content policy",
         "content_filter",
         "provider_blocked",
-        "safety policy",
         "violated safety guidelines",
-        "explicit sexual content",
         "cannot help with this request",
         "can't help with this request",
         "i can't help with this",
@@ -48,8 +46,6 @@ def provider_block_reason(text: str) -> str:
         "as an ai language model",
         "falls under content i won't produce",
         "falls under content i cannot produce",
-        "depicts a non-consensual",
-        "non-consensual sexual",
         "regardless of the framing as fiction",
         "我无法翻译",
         "我不能翻译",
@@ -62,24 +58,10 @@ def provider_block_reason(text: str) -> str:
         "属于禁止生成",
         "禁止生成的范围",
         "禁止生成范畴",
-        "安全政策",
         "违反安全政策",
-        "未成年人的性",
-        "未成年人的露骨性内容",
-        "违背道德",
-        "色情内容",
-        "露骨色情",
-        "涉及未成年人",
         "翻訳できません",
         "生成・翻訳には応じられない",
-        "生成・翻訳",
-        "応じられません",
-        "翻訳には応じられ",
         "翻訳をお手伝いできません",
-        "性的コンテンツ",
-        "性的描写",
-        "ポリシー",
-        "ガイドライン",
     )):
         return "content_filter"
     return ""

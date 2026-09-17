@@ -37,6 +37,34 @@ class _MockHTTPResponse:
 
 
 class UniversalProviderTests(unittest.TestCase):
+    def test_block_detection_ignores_subject_matter_in_valid_translation(self) -> None:
+        valid_translation = json.dumps({
+            "items": [{
+                "id": "p1",
+                "text": "她认为这种行为违背道德，报道同时讨论了色情内容与安全政策。",
+            }],
+        }, ensure_ascii=False)
+        self.assertEqual(provider_block_reason(valid_translation), "")
+        self.assertEqual(provider_block_reason("我无法翻译该请求，因为它违反安全政策。"), "content_filter")
+
+        provider = OpenAIProvider("custom_api", {
+            "type": "openai",
+            "base_url": "https://api.example.com/v1",
+            "model": "deepseek-chat",
+            "api_key": "sk-test",
+        })
+        response = _MockHTTPResponse({
+            "choices": [{"message": {"content": valid_translation}, "finish_reason": "stop"}],
+        })
+        with patch("translator.providers.openai_provider.urlopen", return_value=response):
+            items, result = provider.translate(
+                {"items": [{"id": "p1", "text": "原文"}]},
+                "翻译系统提示词",
+                max_tokens=1024,
+            )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(items[0]["text"], "她认为这种行为违背道德，报道同时讨论了色情内容与安全政策。")
+
     def test_openai_helper_and_api_key_selection_branches(self) -> None:
         self.assertEqual(_load_json_from_text("not json"), {})
         self.assertIsNone(_plain_single_translation("text", []))

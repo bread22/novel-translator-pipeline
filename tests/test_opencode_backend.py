@@ -31,6 +31,15 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(command[:3], ["/usr/bin/opencode", "run", "--format"])
         self.assertIn("--dir", command)
 
+        with patch("translator.providers.opencode.executable", return_value="/usr/bin/opencode"), patch(
+            "translator.providers.opencode._run_command",
+            return_value=Mock(returncode=0, stdout=stdout, stderr=""),
+        ) as run_variant:
+            run_prompt("health", role="reviewer", variant="low", timeout=3)
+        cmd_variant = run_variant.call_args.args[0]
+        self.assertIn("--variant", cmd_variant)
+        self.assertEqual(cmd_variant[cmd_variant.index("--variant") + 1], "low")
+
     def test_parse_json_object_accepts_fenced_output(self) -> None:
         self.assertEqual(parse_json_object("```json\n{\"ok\":true}\n```"), {"ok": True})
         self.assertEqual(
@@ -139,6 +148,20 @@ class OpenCodeBackendTests(unittest.TestCase):
             with self.assertRaises(OpenCodeError):
                 provider.review("chapter", {"items": []}, schema_path)
             self.assertEqual(mock_run.call_count, 1)
+
+    def test_opencode_provider_passes_variant(self) -> None:
+        from translator.providers.opencode import OpenCodeProvider
+        provider = OpenCodeProvider("opencode", {
+            "binary": "opencode",
+            "model": "openai/gpt-5.6-sol",
+            "variant": "low",
+            "timeout": 30,
+        })
+        schema_path = Path(__file__).resolve().parents[1] / "schemas" / "chapter-review-output.schema.json"
+        with patch("translator.providers.opencode.run_prompt", return_value=json.dumps({"checked_ids": [], "fixes": []})) as mock_run:
+            provider.review("chapter", {"items": []}, schema_path)
+            self.assertEqual(mock_run.call_args.kwargs["variant"], "low")
+            self.assertEqual(mock_run.call_args.kwargs["max_retries"], 1)
 
 
 if __name__ == "__main__":

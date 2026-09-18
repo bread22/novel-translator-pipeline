@@ -237,7 +237,8 @@ def run_prompt(
     model: str | None = None,
     binary: str | None = None,
     agent: str | None = None,
-    max_retries: int = 2,
+    variant: str | None = None,
+    max_retries: int = 1,
 ) -> str:
     if timeout <= 0:
         raise ValueError("OpenCode timeout 必须大于 0")
@@ -261,6 +262,8 @@ def run_prompt(
     chosen_agent = agent if agent is not None else _agent_for(role)
     if chosen_agent:
         command.extend(["--agent", chosen_agent])
+    if variant:
+        command.extend(["--variant", variant])
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
@@ -345,6 +348,7 @@ class OpenCodeProvider(BaseProvider):
         self.binary = str(config.get("binary", "opencode"))
         self.model = str(config.get("model", ""))
         self.agent = str(config.get("agent", ""))
+        self.variant = str(config.get("variant", "") or "").strip()
         self.timeout = int(config.get("timeout", 600))
 
     def health_check(self, timeout: int = 10) -> dict[str, Any]:
@@ -357,6 +361,7 @@ class OpenCodeProvider(BaseProvider):
                 model=self.model or None,
                 binary=self.binary or None,
                 agent=self.agent,
+                variant=self.variant or None,
                 max_retries=1,
             )
             payload = parse_json_object(raw)
@@ -405,6 +410,8 @@ class OpenCodeProvider(BaseProvider):
                 model=self.model or None,
                 binary=self.binary or None,
                 agent=self.agent,
+                variant=self.variant or None,
+                max_retries=1,
             )
         except OpenCodeError as exc:
             return [], {
@@ -448,5 +455,7 @@ class OpenCodeProvider(BaseProvider):
             model=self.model or None,
             binary=self.binary or None,
             agent=self.agent,
+            variant=self.variant or None,
+            max_retries=1,
         )
         return parse_json_object(content)

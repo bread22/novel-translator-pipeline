@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import selectors
 import shutil
 import signal
 import subprocess
@@ -169,7 +170,7 @@ def _as_text(value: str | bytes | None) -> str:
     return value
 
 
-def _stop_process(process: subprocess.Popen[str]) -> None:
+def _stop_process(process: subprocess.Popen[Any]) -> None:
     """Stop the OpenCode process and any children it launched."""
     if process.poll() is not None:
         return
@@ -181,49 +182,127 @@ def _stop_process(process: subprocess.Popen[str]) -> None:
             os.killpg(process.pid, signal.SIGKILL)
         except OSError:
             process.kill()
-        process.wait()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def _run_command(command: list[str], prompt: str, timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run OpenCode while inspecting JSON errors and ERROR logs as they arrive."""
+    """Run OpenCode while continuously streaming stdin/stdout/stderr without deadlock."""
     process = subprocess.Popen(
         command,
         cwd=ROOT,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
         start_new_session=True,
     )
+    prompt_bytes = prompt.encode("utf-8")
+    stdin_offset = 0
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
     deadline = time.monotonic() + timeout
-    stdout = ""
-    stderr = ""
-    first_poll = True
+
+    if process.stdin:
+        os.set_blocking(process.stdin.fileno(), False)
+    if process.stdout:
+        os.set_blocking(process.stdout.fileno(), False)
+    if process.stderr:
+        os.set_blocking(process.stderr.fileno(), False)
+
     try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _stop_process(process)
-                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
-            try:
-                out, err = process.communicate(
-                    input=prompt if first_poll else None,
-                    timeout=min(0.5, remaining),
-                )
-                stdout, stderr = _as_text(out), _as_text(err)
-                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-            except subprocess.TimeoutExpired as exc:
-                # TimeoutExpired carries all output collected so far; communicate() can
-                # safely be called again after it.
-                stdout = _as_text(exc.output)
-                stderr = _as_text(exc.stderr)
-                reason = _failure_reason(stdout, stderr)
+        with selectors.DefaultSelector() as selector:
+            if process.stdin and prompt_bytes:
+                selector.register(process.stdin, selectors.EVENT_WRITE)
+            elif process.stdin:
+                process.stdin.close()
+
+            if process.stdout:
+                selector.register(process.stdout, selectors.EVENT_READ)
+            if process.stderr:
+                selector.register(process.stderr, selectors.EVENT_READ)
+
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _stop_process(process)
+                    stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+                    stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+                    raise subprocess.TimeoutExpired(command, timeout, output=stdout_str, stderr=stderr_str)
+
+                events = selector.select(timeout=min(0.5, remaining))
+                for key, _ in events:
+                    if key.fileobj is process.stdin:
+                        chunk = prompt_bytes[stdin_offset : stdin_offset + 65536]
+                        try:
+                            written = os.write(process.stdin.fileno(), chunk)
+                            stdin_offset += written
+                            if stdin_offset >= len(prompt_bytes):
+                                selector.unregister(process.stdin)
+                                process.stdin.close()
+                        except (BrokenPipeError, OSError):
+                            selector.unregister(process.stdin)
+                            process.stdin.close()
+                    elif key.fileobj is process.stdout:
+                        try:
+                            data = os.read(process.stdout.fileno(), 65536)
+                        except (BlockingIOError, InterruptedError):
+                            continue
+                        except OSError:
+                            data = b""
+                        if not data:
+                            selector.unregister(process.stdout)
+                            process.stdout.close()
+                        else:
+                            stdout_chunks.append(data)
+                    elif key.fileobj is process.stderr:
+                        try:
+                            data = os.read(process.stderr.fileno(), 65536)
+                        except (BlockingIOError, InterruptedError):
+                            continue
+                        except OSError:
+                            data = b""
+                        if not data:
+                            selector.unregister(process.stderr)
+                            process.stderr.close()
+                        else:
+                            stderr_chunks.append(data)
+
+                if process.poll() is not None and process.stdin and not process.stdin.closed:
+                    try:
+                        selector.unregister(process.stdin)
+                    except Exception:
+                        pass
+                    process.stdin.close()
+
+                stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+                stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+                reason = _failure_reason(stdout_str, stderr_str)
                 if reason is not None:
                     _stop_process(process)
-                    combined = "\n".join(part for part in (stdout, stderr) if part)
+                    combined = "\n".join(part for part in (stdout_str, stderr_str) if part)
                     label = "blocked" if reason == "content_filter" else "rate limit"
                     raise OpenCodeError(f"opencode {label}: {combined[-2000:]}", reason=reason)
-                first_poll = False
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _stop_process(process)
+            stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+            stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+            raise subprocess.TimeoutExpired(command, timeout, output=stdout_str, stderr=stderr_str)
+
+        try:
+            process.wait(timeout=max(0.0, remaining))
+        except subprocess.TimeoutExpired:
+            _stop_process(process)
+            stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+            stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+            raise subprocess.TimeoutExpired(command, timeout, output=stdout_str, stderr=stderr_str)
+
+        stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        return subprocess.CompletedProcess(command, process.returncode, stdout_str, stderr_str)
     except BaseException:
         _stop_process(process)
         raise

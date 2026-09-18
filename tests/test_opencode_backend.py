@@ -164,5 +164,21 @@ class OpenCodeBackendTests(unittest.TestCase):
             self.assertEqual(mock_run.call_args.kwargs["max_retries"], 1)
 
 
+    def test_run_command_large_prompt_no_deadlock(self) -> None:
+        import sys
+        from translator.providers.opencode import _run_command
+
+        # Process sleeps longer than 0.5s before consuming stdin
+        cmd = [
+            sys.executable,
+            "-c",
+            "import sys, time; time.sleep(0.7); data = sys.stdin.read(); sys.stdout.write(f'OK:{len(data)}')"
+        ]
+        large_prompt = "X" * 150000
+        result = _run_command(cmd, large_prompt, timeout=5)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "OK:150000")
+
+
 if __name__ == "__main__":
     unittest.main()

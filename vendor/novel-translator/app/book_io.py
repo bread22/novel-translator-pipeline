@@ -1275,6 +1275,8 @@ def _parse_epub_chapters_result(
     parser_name = "stdlib"
     try:
         root = ET.fromstring(data)
+        if _normalize_tail_text_tree(root):
+            parser_name = "stdlib-tail-normalized"
         nodes = [
             _EpubNode(
                 text=_element_text(element),
@@ -1524,6 +1526,46 @@ def _document_title(root: ET.Element, document_role: str, index: int) -> str:
             if text:
                 return text
     return _DOCUMENT_ROLE_LABELS.get(document_role, f"Document {index}")
+
+
+def _normalize_tail_text_tree(root: ET.Element) -> bool:
+    """Rewrite a tail-dominant XML tree in-place so that _translatable_elements works correctly.
+
+    Some Calibre-converted Amazon XMDF EPUBs store all prose as the ``.tail``
+    of empty ``<p>`` elements rather than inside any element's ``.text``.
+    ``ET.itertext()`` (and therefore ``_element_text``) ignores sibling tails,
+    so ``_translatable_elements`` finds zero nodes and the whole book collapses
+    to a single chapter with no paragraphs.
+
+    Detection heuristic: the document is tail-dominant when every block-level
+    element has no inner text of its own, yet *more than half* of them carry a
+    non-whitespace ``.tail``.
+
+    Normalisation: move each non-whitespace ``.tail`` into the ``.text`` of the
+    same element (since the element is otherwise empty) and clear the tail so
+    the standard pipeline sees normal text-bearing ``<p>`` nodes.
+
+    Returns True if the tree was modified.
+    """
+    candidate_tags = TRANSLATABLE_TAGS - {"div"}
+    elements = [el for el in root.iter() if _local_name(el.tag) in candidate_tags]
+    if not elements:
+        return False
+
+    tail_count = sum(1 for el in elements if (el.tail or "").strip())
+    text_count = sum(1 for el in elements if ("".join(el.itertext())).strip())
+
+    # Only rewrite when tails dominate and inner text is essentially absent.
+    if tail_count == 0 or text_count > tail_count * 0.25:
+        return False
+
+    for el in elements:
+        tail = (el.tail or "").strip()
+        if tail and not ("".join(el.itertext())).strip():
+            el.text = tail
+            el.tail = None
+
+    return True
 
 
 def _translatable_elements(root: ET.Element, *, document_role: str = "chapter") -> list[ET.Element]:

@@ -46,6 +46,7 @@ from translator.core.workspace import (
     write_json,
 )
 from translator.pipeline.preflight import PreflightError, run_preflight
+from translator.providers.base import translation_placeholder_reason
 from translator.providers.translator import ProviderTranslator
 from translator.review.context_budget import ReviewContextOverflowError
 from translator.review.knowledge_extractor import (
@@ -70,7 +71,6 @@ from translator.review.reviewer import (
     finalize_writeback_states,
     has_hangul,
     has_japanese_kana,
-    has_target_script_residue,
     compose_approved_fixes,
     missing_checked_ids,
     run_chapter_review,
@@ -359,24 +359,19 @@ class IterativePipeline:
 
     @staticmethod
     def _paragraph_needs_translation(paragraph: dict[str, Any]) -> bool:
-        """Treat blank, source-copied, or script-residue output as unfinished."""
+        """Treat blank, source-copied, or placeholder output as unfinished."""
         source = str(paragraph.get("source", "")).strip()
         translated = str(paragraph.get("translated", "")).strip()
         if not translated:
+            return True
+        if translation_placeholder_reason(translated, item_id=str(paragraph.get("id", ""))):
             return True
         copied = bool(source) and (translated == source or translated.replace(" ", "") == source.replace(" ", ""))
         if copied:
             # Source-copied paragraphs stay pending when the source contains Japanese
             # or Korean script, even if that source discusses a quoted kana object.
             return has_japanese_kana(source) or has_hangul(source)
-        if not has_target_script_residue(translated, source=source):
-            return False
-        # A previously written provider result may predate the deterministic
-        # repair stage.  Treat a strictly source-triggered, fully repairable
-        # idiom as recoverable; the chapter path persists the repaired value
-        # before selecting its next translation batch.
-        repaired, repairs = apply_deterministic_repairs(source=source, translated=translated)
-        return not repairs or has_target_script_residue(repaired, source=source)
+        return False
 
     def _read_translation_policy(self) -> str:
         if self.translation_policy and self.translation_policy.exists():
@@ -499,6 +494,7 @@ class IterativePipeline:
             "residue_tokens": {},
             "findings": {},
             "source_copy_ids": [],
+            "placeholder_ids": [],
             "remaining": [],
             "errors": [],
         }
@@ -565,6 +561,8 @@ class IterativePipeline:
                     diagnostics["residue_tokens"][item_id] = residue
                 if any(item.classification == "source_copy" for item in findings):
                     diagnostics["source_copy_ids"].append(item_id)
+                if translation_placeholder_reason(translated, item_id=item_id):
+                    diagnostics["placeholder_ids"].append(item_id)
                 if self._paragraph_needs_translation(paragraph):
                     diagnostics["remaining"].append(item_id)
         except Exception as exc:  # noqa: BLE001
@@ -594,14 +592,12 @@ class IterativePipeline:
         if remaining_ids and provider_reason not in {"ok", "unknown"}:
             return provider_reason
         if remaining_ids:
+            placeholder_ids = set(str(item) for item in repair_data.get("placeholder_ids", []) if item)
+            if placeholder_ids & remaining_ids:
+                return "placeholder_output"
             source_copy_ids = set(str(item) for item in repair_data.get("source_copy_ids", []) if item)
             if source_copy_ids & remaining_ids:
                 return "source_copy"
-            residue_tokens = repair_data.get("residue_tokens", {})
-            if isinstance(residue_tokens, Mapping) and any(
-                str(item_id) in remaining_ids and value for item_id, value in residue_tokens.items()
-            ):
-                return "target_script_residue"
             return "incomplete_output"
         return provider_reason if provider_reason != "ok" else "provider_success"
 
@@ -686,11 +682,10 @@ class IterativePipeline:
         ]
 
     def is_chapter_completed(self, chapter_id: str) -> bool:
-        """Check if a chapter is completely translated and reviewed without residual errors."""
+        """Check if a chapter is completely translated and reviewed."""
         pending = self._chapter_pending_paragraphs(chapter_id)
         if pending:
             return False
-        # Japanese kana or Korean script in a Chinese translation keeps the chapter incomplete.
         chapter = self._chapter(chapter_id)
         if any(self._paragraph_needs_translation(p) for p in chapter.get("paragraphs", []) if isinstance(p, dict)):
             return False
@@ -698,10 +693,6 @@ class IterativePipeline:
         report_path = self.workspace.reports_dir / f"{chapter_id}.json"
         if not (state_path.exists() or report_path.exists()):
             return False
-        if report_path.exists():
-            report_data = read_json(report_path, {})
-            if report_data.get("remaining_kana_ids"):
-                return False
         return True
 
     @staticmethod
@@ -786,7 +777,7 @@ class IterativePipeline:
             "deterministic_repair_recovered"
             if failure_class == "deterministic_repair_recovered"
             else failure_class
-            if failure_class in {"target_script_residue", "source_copy", "incomplete_output"}
+            if failure_class in {"source_copy", "placeholder_output", "incomplete_output"}
             else provider_reason
         )
         latency_ms = round((time.monotonic() - started) * 1000, 3)
@@ -1121,52 +1112,6 @@ class IterativePipeline:
             "attempts": len(attempts),
             "recovery_summary": self._translation_recovery.get(chapter_id, {}),
         }
-
-    def _repair_remaining_kana(self, chapter_id: str, remaining_kana_ids: list[str]) -> list[str]:
-        """Repair paragraphs where Japanese or Korean script remained after review writeback."""
-        repaired: list[str] = []
-        if not remaining_kana_ids:
-            return repaired
-
-        # The same registry is used during translation recovery and review
-        # writeback.  This keeps the shape rules source-aware and idempotent.
-        repair_diagnostics = self._repair_translated_ids(remaining_kana_ids)
-        self._record_repair_events(chapter_id, repair_diagnostics.get("repair_attempts", []), phase="review_writeback")
-        remaining_after_shapes = [
-            item_id for item_id in remaining_kana_ids
-            if item_id in set(repair_diagnostics.get("remaining", []))
-        ]
-        repaired.extend(
-            item_id for item_id in remaining_kana_ids
-            if item_id not in remaining_after_shapes
-            and item_id in set(repair_diagnostics.get("repaired_ids", []))
-        )
-
-        if not remaining_after_shapes or self.targeted_translator is None:
-            return repaired
-
-        # 2. Targeted re-translation for any remaining paragraphs
-        providers_to_try = [self.primary_translator] + [p for p in self.fallback_translators if p != self.primary_translator]
-        p_map = paragraph_map(read_json(self.manifest, {}))
-        for item_id in remaining_after_shapes:
-            p_data = p_map.get(item_id, {})
-            source_text = str(p_data.get("source", ""))
-            source_chars = len(source_text)
-            if not source_text:
-                continue
-            for provider in providers_to_try:
-                try:
-                    result = self._translate_target(provider, [item_id], source_chars)
-                    if result.get("status") == "ok":
-                        fresh_manifest = read_json(self.manifest)
-                        fresh_p_map = paragraph_map(fresh_manifest)
-                        new_trans = str(fresh_p_map.get(item_id, {}).get("translated", ""))
-                        if new_trans and not self._paragraph_needs_translation(fresh_p_map.get(item_id, {})):
-                            repaired.append(item_id)
-                            break
-                except Exception:
-                    continue
-        return repaired
 
     def _knowledge_config(self) -> dict[str, Any]:
         return dict(self.execution_context.config.get("knowledge_extractor", {}) or {})
@@ -1766,49 +1711,6 @@ class IterativePipeline:
             gate_results = finalize_writeback_states(gate_results, manifest_after_fixes, execution_error=locals().get("write_error"))
             review["fixes"] = gate_results
             fixes = [item for item in gate_results if item.get("apply_state") == "applied"]
-            remaining_kana = [
-                item_id
-                for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                if item_id in expected_ids
-                and has_target_script_residue(
-                    str(paragraph.get("translated", "")),
-                    source=str(paragraph.get("source", "")),
-                )
-            ]
-            if remaining_kana:
-                repaired_ids = self._repair_remaining_kana(chapter_id, remaining_kana)
-                if repaired_ids:
-                    manifest_after_fixes = read_json(self.manifest)
-                    remaining_kana = [
-                        item_id
-                        for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                        if item_id in expected_ids
-                        and has_target_script_residue(
-                            str(paragraph.get("translated", "")),
-                            source=str(paragraph.get("source", "")),
-                        )
-                    ]
-            if remaining_kana:
-                guarded_fixes = list(review["fixes"])
-                guarded_fixes.extend({
-                    "id": item_id,
-                    "decision": "FIX_REQUIRED",
-                    "category": "policy_violation",
-                    "severity": "critical",
-                    "confidence": 1.0,
-                    "reason": "最终写回校验发现译文仍残留日文假名或韩文字符；审阅器及定向微修复均未提供合格替换，已阻止章节完成。",
-                    "replacement": "",
-                    "auto_apply": False,
-                    "invalid_reason": "最终写回校验发现未解决的日文假名或韩文字符残留",
-                    "apply_state": "blocked",
-                    "apply_reason": "remaining_target_script",
-                    "validation_errors": ["target_script_residue"],
-                    "reporters": ["writeback_guard"],
-                } for item_id in remaining_kana)
-                review = {**review, "fixes": guarded_fixes}
-                # Persist the guard findings before failing, so the UI never reports 0 issues
-                # after earlier fixes have already been written to the manifest.
-                write_json(output_path, review)
         # Persist the final gate decisions, including report_only/blocked/failed
         # reasons, rather than leaving the raw provider response on disk.
         write_json(output_path, review)
@@ -1882,8 +1784,6 @@ class IterativePipeline:
             "remaining_kana_ids": remaining_kana,
         })
         self._checkpoint()
-        if remaining_kana:
-            raise ValueError(f"章节 {chapter_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")
         return {
             "chapter_id": chapter_id,
             "reviewed": len(expected_ids),

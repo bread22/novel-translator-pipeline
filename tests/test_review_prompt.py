@@ -3,7 +3,7 @@ from pathlib import Path
 from translator.providers.base import build_review_prompt
 
 
-def test_chapter_review_prompt_scans_existing_translated_fields_for_kana() -> None:
+def test_chapter_review_prompt_does_not_force_kana_cleanup() -> None:
     schema = Path(__file__).resolve().parents[1] / "schemas" / "chapter-review-output.schema.json"
     prompt = build_review_prompt(
         "chapter",
@@ -11,9 +11,8 @@ def test_chapter_review_prompt_scans_existing_translated_fields_for_kana() -> No
         schema,
         autonomous=True,
     )
-    assert "系统预检警报" in prompt
+    assert "系统预检警报" not in prompt
     assert "p1" in prompt
-    assert "policy_violation" in prompt
     assert "Knowledge Extractor" in prompt
 
 

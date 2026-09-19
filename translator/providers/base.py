@@ -7,12 +7,13 @@ from pathlib import Path
 import re
 from typing import Any
 
-from translator.script_residue import has_target_script_residue
-
-
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER_SCHEMA = ROOT / "schemas" / "chapter-review-output.schema.json"
 GLOBAL_SCHEMA = ROOT / "schemas" / "global-consistency-output.schema.json"
+PARAGRAPH_ID_PLACEHOLDER_RE = re.compile(r"(?i)^c\d{4}-p\d{5}$")
+GENERIC_TRANSLATION_PLACEHOLDER_RE = re.compile(
+    r"(?i)^(?:translation|translated|todo|placeholder|待翻译|待译|译文待补|翻译待补)$"
+)
 
 
 def normalize_target_punctuation(text: str) -> str:
@@ -169,6 +170,25 @@ def normalized_text(text: str) -> str:
     return re.sub(r"\s+", "", text.replace("\\n", "\n"))
 
 
+def translation_placeholder_reason(
+    text: str,
+    *,
+    item_id: str = "",
+    expected_ids: list[str] | tuple[str, ...] | set[str] = (),
+) -> str:
+    """Return a stable reason when a non-empty translation is only a placeholder."""
+    candidate = str(text or "").strip().strip("`\"'[]{}()<>《》【】")
+    compact = re.sub(r"\s+", "", candidate)
+    known_ids = {str(value).strip() for value in expected_ids if str(value).strip()}
+    if item_id:
+        known_ids.add(str(item_id).strip())
+    if compact in known_ids or PARAGRAPH_ID_PLACEHOLDER_RE.fullmatch(compact):
+        return "paragraph_id_placeholder"
+    if GENERIC_TRANSLATION_PLACEHOLDER_RE.fullmatch(compact):
+        return "generic_placeholder"
+    return ""
+
+
 def repeated_content(text: str) -> dict[str, Any] | None:
     lines = [
         re.sub(r"\s+", " ", line).strip()
@@ -223,6 +243,18 @@ def validate_translation_items(items: list[dict[str, str]], payload: dict[str, A
         text = str(item.get("text", "")).strip()
         if not text:
             return {"kind": "empty_translation", "id": item_id}
+        placeholder_reason = translation_placeholder_reason(
+            text,
+            item_id=item_id,
+            expected_ids=set(sources),
+        )
+        if placeholder_reason:
+            return {
+                "kind": "placeholder_translation",
+                "id": item_id,
+                "reason": placeholder_reason,
+                "text": text[:160],
+            }
         source = sources.get(item_id, "")
         max_chars = max(512, len(source) * 6 + 256)
         if len(text) > max_chars:
@@ -244,25 +276,10 @@ def validate_translation_items(items: list[dict[str, str]], payload: dict[str, A
 
 def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: Path, autonomous: bool) -> str:
     if kind == "chapter":
-        items = input_payload.get("items", []) if isinstance(input_payload, dict) else []
-        flagged_kana_ids = [
-            str(item.get("id"))
-            for item in items
-            if isinstance(item, dict)
-            and has_target_script_residue(
-                str(item.get("translated", "")),
-                source=str(item.get("source", "")),
-            )
-        ]
-        kana_warning = ""
-        if flagged_kana_ids:
-            kana_warning = f"\n  * 【系统预检警报 - 检测到以下段落译文残留未被原文语境支持的日文假名或韩文字符，必须逐一在 fixes 中输出 policy_violation 修复并提供 replacement】：\n    {', '.join(flagged_kana_ids)}"
-
         instructions = f"""
 这是章节级语义审阅，知识提取由独立的 Knowledge Extractor 负责。
 - 顶层只输出 {{"schema_version":"2.0", "checked_ids":[...], "fixes":[...], "context_findings":[...]}}。
 - 知识库、记忆库和章节状态字段全部交给独立提取器；本角色只返回语义审阅与润色结果。
-- {kana_warning}
 - 证据边界：只依据输入中的 source、translated、context、translation_policy 和 glossary 判断。不得把模型记忆、未经提供的出版社惯例、年代惯例、文库惯例或所谓中文出版惯例当作规则；除非该规则明确写在 translation_policy 或 glossary 中，否则不得据此要求修改。
 - 检查错译、漏译、增译、主客体、指代、否定、条件、因果、时间、关系、专名和 replacement 完整性。
 - 每条 fix 只描述一个可独立验证的具体问题；同一段落存在多个问题时，输出多条 fix，并为每条填写独立的 fix_id。
@@ -280,7 +297,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
 - 置信度是基于证据的记录，不是校准后的正确率，也不是自动写回许可。不得仅凭 confidence=0.8、0.9 或更高创建或升级 finding；客观错误必须指出 source 与 translated 的具体语义矛盾，style 润色必须指出具体的中文表达问题及其 translation_policy 依据。
 - 如果某个词在 current_fragment 与 proposed_fragment 中保持相同，即使 replacement 的其他位置发生变化，也只能把其他位置作为独立 finding；该词本身按 PASS 处理。
 - **透明的外来语不得默认音译。** 对标题和片假名按意义优先：`レイプ` → 强暴/强奸，`ホテル` → 酒店，`ナイフ` → 刀，`セックス` → 性爱；不要机械写成“雷普”“厚泰鲁”“奈夫”“塞库斯”。只有人名、品牌、虚构专名、无法自然意译的名称，或 Glossary 已明确指定音译时，才考虑音译。书名也一样；片假名书名若是有明确意义的普通英语词组合，默认优先传达标题意义，而不是机械保留声音。
-- `terminology` 只能用于 source、translation_policy 或 glossary 能直接证明的术语错误，不能用来包装润色；译文中确实残留未翻译的日文/韩文字符仍按 policy_violation 处理，但 source 中的片假名本身不是译文错误。
+- `terminology` 只能用于 source、translation_policy 或 glossary 能直接证明的术语错误，不能用来包装润色。
 - fixes.category 只能使用 style、mistranslation、subject_object、pronoun_reference、omission、addition、terminology、factual_conflict、context_conflict、policy_violation。
 """.strip()
     elif kind == "knowledge_window":
@@ -335,7 +352,7 @@ def build_review_prompt(kind: str, input_payload: dict[str, Any], schema_path: P
         auto_rule = "输入使用短 candidate_id；每个候选恰好输出一次，只需 candidate_id 与 action，reason 非必要时留空。"
     else:
         auto_rule = (
-            "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整段落，不得含多个答案、编辑说明、Markdown、未被原文语境支持的日文或韩文字符，或遮掩符号；原文明确讨论文字、写法、字形或引用内容时，可保留对应假名并附带中文说明。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
+            "全自动模式下，只有 decision=FIX_REQUIRED 的明确客观错误才设置 auto_apply=true；style 永远不得自动写回。replacement 必须是单一完整段落，不得含多个答案、编辑说明、Markdown 或遮掩符号。confidence 只能作为辅助记录，绝不能单独触发 auto_apply。"
             if autonomous
             else "只报告明确客观错误；普通润色和同义表达必须 PASS。证据不足时使用 REPORT_ONLY 且 auto_apply=false。"
         )

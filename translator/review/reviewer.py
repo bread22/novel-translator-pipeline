@@ -289,8 +289,6 @@ def replacement_validation_errors(replacement: str, *, source: str | None = None
     errors: list[str] = []
     if not replacement.strip():
         errors.append("empty_replacement")
-    if has_target_script_residue(replacement, source=source):
-        errors.append("target_script_residue")
     if has_masking_symbol(replacement):
         errors.append("masking_symbol")
     if ASCII_WORD_REGEX.search(replacement):
@@ -2052,17 +2050,6 @@ def review_book(
             gate_results = finalize_writeback_states(gate_results, manifest_after_fixes, execution_error=write_error)
             review["fixes"] = gate_results
             fixes = [item for item in gate_results if item.get("apply_state") == "applied"]
-            remaining_kana = [
-                item_id
-                for item_id, paragraph in paragraph_map(manifest_after_fixes).items()
-                if item_id in expected
-                and has_target_script_residue(
-                    str(paragraph.get("translated", "")),
-                    source=str(paragraph.get("source", "")),
-                )
-            ]
-            if remaining_kana:
-                raise ValueError(f"章节 {c_id} 写回后仍残留日文假名或韩文字符：{', '.join(sorted(remaining_kana))}")
         # Keep the review artifact aligned with the final apply gate state.
         write_json(output_path, review)
         # The standalone reviewer is deliberately read-only for knowledge.

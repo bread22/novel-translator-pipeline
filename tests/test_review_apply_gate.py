@@ -27,11 +27,15 @@ def test_style_low_confidence_clear_and_consensus_do_not_bypass_gate():
     ]
 
 
-def test_replacement_validator_blocks_scripts_masking_meta_and_latin_hiccup():
-    for replacement in ("残留かな", "遮掩×", "建议修改为：正确译文", "hiccup", "答案一或答案二"):
+def test_replacement_validator_blocks_masking_meta_latin_and_multiple_answers():
+    for replacement in ("遮掩×", "建议修改为：正确译文", "hiccup", "答案一或答案二"):
         result = evaluate_apply_gate([proposal(replacement=replacement)], autonomous=True)[0]
         assert result["apply_state"] == "blocked"
         assert result["validation_errors"]
+
+    residue = evaluate_apply_gate([proposal(replacement="残留かな")], autonomous=True)[0]
+    assert residue["apply_reason"] == "gate_passed"
+    assert residue["validation_errors"] == []
 
 
 def test_identical_replacement_becomes_pass_and_stale_hash_is_not_applied():

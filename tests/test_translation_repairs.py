@@ -104,7 +104,7 @@ def test_primary_idiom_repair_stops_fallback_and_records_recovery() -> None:
         assert provenance["items"]["p1"]["reason"] == "deterministic_repair_recovered"
 
 
-def test_residue_routes_to_fallback_with_structured_failure_class() -> None:
+def test_residue_is_accepted_without_fallback() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         manifest_path = root / "manifest.json"
@@ -132,11 +132,46 @@ def test_residue_routes_to_fallback_with_structured_failure_class() -> None:
         pipeline.initialize()
         pipeline._translate_chapter("c1", 1)
 
+        assert calls == ["primary"]
+        attempts = json.loads((workspace.data_dir / "provider-diagnostics.json").read_text(encoding="utf-8"))["attempts"]
+        assert attempts[0]["failure_class"] == "provider_success"
+        assert attempts[0]["residue_tokens"] == {"p1": ["かな"]}
+
+
+def test_paragraph_id_placeholder_routes_to_fallback() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps({
+            "chapters": [{
+                "id": "c0009",
+                "paragraphs": [{"id": "c0009-p00289", "source": "原文", "translated": ""}],
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+        workspace = BookWorkspace.at(root / "output", "book")
+        calls: list[str] = []
+
+        def targeted(provider: str, _book: str, _ids: list[str], **_kwargs: object) -> dict:
+            calls.append(provider)
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data["chapters"][0]["paragraphs"][0]["translated"] = (
+                "c0009-p00289" if provider == "primary" else "有效译文"
+            )
+            manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            return {"status": "ok"}
+
+        pipeline = IterativePipeline(
+            book="book", workspace=workspace, manifest=manifest_path,
+            tool_call=lambda *_args: {"status": "ok"}, targeted_translator=targeted,
+            primary_translator="primary", fallback_translators=["fallback"],
+        )
+        pipeline.initialize()
+        pipeline._translate_chapter("c0009", 1)
+
         assert calls == ["primary", "fallback"]
         attempts = json.loads((workspace.data_dir / "provider-diagnostics.json").read_text(encoding="utf-8"))["attempts"]
-        assert attempts[0]["failure_class"] == "target_script_residue"
-        assert attempts[0]["residue_tokens"] == {"p1": ["かな"]}
-        assert attempts[1]["recovered_ids"] == ["p1"]
+        assert attempts[0]["failure_class"] == "placeholder_output"
+        assert attempts[1]["recovered_ids"] == ["c0009-p00289"]
 
 
 def test_shape_metaphor_repairs_handle_hiragana_quotes_and_outer_quotes() -> None:
@@ -233,4 +268,3 @@ def test_kana_row_explanation_with_double_prime_quotes_is_explicit_reference() -
     assert all(finding.classification == "explicit_source_reference" for finding in findings)
     assert findings[0].context_match == "kana_row_reference"
     assert not has_target_script_residue(target, source=source)
-

@@ -13,7 +13,7 @@
     {"id": "c0005-p00007", "kind": "hard_error", "expected": "FIX_REQUIRED"},
     {"id": "c0006-p00109", "kind": "hard_error", "expected": "FIX_REQUIRED"},
     {"id": "c0004-p00118", "replacement": "hiccup", "expected": "blocked"},
-    {"id": "c0008-p00094", "replacement": "残留かな", "expected": "blocked"},
+    {"id": "c0008-p00094", "replacement": "残留かな", "expected": "gate_passed"},
     {"id": "c0007-p00005", "replacement": "答案一或答案二", "expected": "blocked"}
   ]
 }

@@ -37,6 +37,15 @@ class _MockHTTPResponse:
 
 
 class UniversalProviderTests(unittest.TestCase):
+    def test_translation_validation_rejects_paragraph_id_placeholder(self) -> None:
+        payload = {"items": [{"id": "c0009-p00289", "text": "原文"}]}
+        validation = validate_translation_items(
+            [{"id": "c0009-p00289", "text": "c0009-p00289"}],
+            payload,
+        )
+        self.assertEqual(validation["kind"], "placeholder_translation")
+        self.assertEqual(validation["reason"], "paragraph_id_placeholder")
+
     def test_block_detection_ignores_subject_matter_in_valid_translation(self) -> None:
         valid_translation = json.dumps({
             "items": [{

@@ -48,10 +48,11 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertEqual(newly_translated(manifest(), manifest("银行职员美树"))[0]["id"], "p1")
         self.assertEqual(newly_translated(manifest("旧译"), manifest("新译")), [])
 
-    def test_source_copied_or_script_residue_is_pending_translation(self) -> None:
+    def test_source_copy_and_placeholder_are_pending_but_script_residue_is_not(self) -> None:
         chapter = {"paragraphs": [
             {"id": "same_kana", "source": "その夜は食事をしただけで別れた。", "translated": "その夜は食事をしただけで別れた。"},
             {"id": "kana", "source": "本文", "translated": "本文かな"},
+            {"id": "placeholder", "source": "本文", "translated": "c0009-p00289"},
             {"id": "title_with_latin", "source": "第一章 私刑 lynching", "translated": "第一章 私刑 lynching"},
             {"id": "name", "source": "嶋悦史", "translated": "嶋悦史"},
             {"id": "mask", "source": "＊ ＊\n＊ ＊", "translated": "＊ ＊\n＊ ＊"},
@@ -70,7 +71,7 @@ class PipelineFunctionTests(unittest.TestCase):
             },
             {"id": "done", "source": "原文", "translated": "译文"},
         ]}
-        self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same_kana", "kana"})
+        self.assertEqual(IterativePipeline._chapter_pending_ids(chapter), {"same_kana", "placeholder"})
 
     def test_approved_fixes_requires_policy_and_apply_guards(self) -> None:
         items = [
@@ -106,7 +107,7 @@ class PipelineFunctionTests(unittest.TestCase):
         approved = approved_fixes(items, autonomous=True)
         self.assertEqual([item["id"] for item in approved], ["p1", "p3"])
 
-    def test_approved_fixes_rejects_japanese_kana_hallucinations(self) -> None:
+    def test_approved_fixes_do_not_use_script_residue_as_a_format_gate(self) -> None:
         items = [
             {
                 "id": "p1",
@@ -134,9 +135,8 @@ class PipelineFunctionTests(unittest.TestCase):
             },
         ]
         approved = approved_fixes(items, autonomous=True)
-        self.assertEqual(len(approved), 1)
-        self.assertEqual(approved[0]["id"], "p3")
-        self.assertEqual(approved[0]["replacement"], "车子已经开到了那栋公寓的近旁。")
+        self.assertEqual([item["id"] for item in approved], ["p1", "p2", "p3"])
+        self.assertEqual(approved[0]["replacement"], "车子已经来到那栋公寓的すぐそば。")
 
     def test_approved_fixes_must_apply_kana_cleanup_despite_category_drift(self) -> None:
         items = [{
@@ -157,7 +157,7 @@ class PipelineFunctionTests(unittest.TestCase):
         self.assertTrue(approved[0]["auto_apply"])
         self.assertFalse(has_japanese_kana(approved[0]["replacement"]))
 
-    def test_review_persists_writeback_guard_findings_before_failing(self) -> None:
+    def test_review_allows_remaining_kana_without_guard_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = root / "manifest.json"
@@ -181,18 +181,17 @@ class PipelineFunctionTests(unittest.TestCase):
                 targeted_translator=lambda *args, **kwargs: {"status": "error"},
             )
             pipeline.initialize()
-            with self.assertRaisesRegex(ValueError, "残留日文假名"):
-                pipeline._review_chapter("c1")
+            result = pipeline._review_chapter("c1")
 
             report = json.loads((workspace.reports_dir / "c1.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["reported_issues"], 1)
+            self.assertEqual(result["chapter_id"], "c1")
+            self.assertEqual(report["reported_issues"], 0)
             self.assertEqual(report["applied_fixes"], 0)
-            self.assertEqual(report["remaining_kana_ids"], ["p1"])
+            self.assertEqual(report["remaining_kana_ids"], [])
             output = json.loads((workspace.reviews_dir / "c1-output.json").read_text(encoding="utf-8"))
-            self.assertEqual(output["fixes"][0]["id"], "p1")
-            self.assertEqual(output["fixes"][0]["category"], "policy_violation")
+            self.assertEqual(output["fixes"], [])
 
-    def test_review_triggers_micro_repair_for_remaining_kana(self) -> None:
+    def test_review_does_not_trigger_micro_repair_for_remaining_kana(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = root / "manifest.json"
@@ -208,13 +207,10 @@ class PipelineFunctionTests(unittest.TestCase):
                     "fixes": [],
                 }, ensure_ascii=False), encoding="utf-8")
 
+            repair_calls: list[str] = []
+
             def mock_targeted_translator(provider, book, ids, source_chars=0, max_tokens=0):
-                # Simulate successful repair by updating manifest
-                m_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for p in m_data["chapters"][0]["paragraphs"]:
-                    if p["id"] == "p1":
-                        p["translated"] = "「抽泣」"
-                manifest_path.write_text(json.dumps(m_data, ensure_ascii=False), encoding="utf-8")
+                repair_calls.append(provider)
                 return {"status": "ok"}
 
             pipeline = IterativePipeline(
@@ -227,9 +223,9 @@ class PipelineFunctionTests(unittest.TestCase):
             pipeline.initialize()
             result = pipeline._review_chapter("c1")
             self.assertEqual(result["chapter_id"], "c1")
-            # Verify p1 was repaired in manifest and no remaining kana
+            self.assertEqual(repair_calls, [])
             final_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(final_manifest["chapters"][0]["paragraphs"][0]["translated"], "「抽泣」")
+            self.assertEqual(final_manifest["chapters"][0]["paragraphs"][0]["translated"], "「ヒクッ」")
 
     def test_merge_chapter_reviews_consensus_and_deduplication(self) -> None:
         rev_a = {

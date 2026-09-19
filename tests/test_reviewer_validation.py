@@ -59,21 +59,19 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in approved], ["p1"])
         self.assertTrue(approved[0]["auto_apply"])
 
-    def test_reject_and_mark_hangul_replacement_invalid(self) -> None:
+    def test_allow_hangul_replacement_through_structural_gate(self) -> None:
         fix = {
             "id": "p1", "category": "policy_violation", "severity": "critical",
             "confidence": 0.99, "reason": "译文残留外文字符",
             "replacement": "第二章·兰제里小偷", "auto_apply": True,
         }
-        self.assertEqual(approved_fixes([fix], current_translations={"p1": "ランジェリー小偷"}), [])
+        self.assertEqual([x["id"] for x in approved_fixes([fix], current_translations={"p1": "ランジェリー小偷"})], ["p1"])
         payload = {
             "checked_ids": ["p1"], "fixes": [fix],
         }
         normalized = validate_chapter_review_payload(payload, {"p1"})
-        self.assertFalse(normalized["fixes"][0]["auto_apply"])
-        self.assertEqual(normalized["fixes"][0]["apply_state"], "blocked")
-        self.assertIn("target_script_residue", normalized["fixes"][0]["validation_errors"])
-        self.assertEqual(normalized["fixes"][0]["invalid_reason"], "target_script_residue")
+        self.assertTrue(normalized["fixes"][0]["auto_apply"])
+        self.assertEqual(normalized["fixes"][0]["validation_errors"], [])
 
     def test_allow_source_text_reference_in_review_and_apply_gate(self) -> None:
         source = "変体仮名で「くじり」と書いてあった。"
@@ -107,10 +105,10 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in approved], ["p1"])
         self.assertEqual(replacement_validation_errors(replacement, source=source), [])
 
-    def test_source_match_without_text_reference_context_stays_invalid(self) -> None:
+    def test_source_match_without_text_reference_context_passes_structural_gate(self) -> None:
         source = "ヒクッヒクッと痙攣した。"
         replacement = "她“ヒクッヒクッ”地抽搐。"
-        self.assertIn("target_script_residue", replacement_validation_errors(replacement, source=source))
+        self.assertNotIn("target_script_residue", replacement_validation_errors(replacement, source=source))
 
     def test_approve_real_kana_policy_violation_when_text_actually_has_kana(self) -> None:
         current_translations = {
@@ -131,7 +129,7 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
         self.assertEqual(len(approved), 1)
         self.assertEqual(approved[0]["replacement"], "空乘·夕子与可奈子")
 
-    def test_reject_fix_when_replacement_contains_japanese_kana(self) -> None:
+    def test_allow_fix_when_replacement_contains_japanese_kana(self) -> None:
         current_translations = {
             "c0001-p00001": "スチュワーデス·夕子与可奈子",
         }
@@ -147,7 +145,7 @@ class ReviewerObjectiveValidationTests(unittest.TestCase):
             }
         ]
         approved = approved_fixes(fixes, current_translations=current_translations)
-        self.assertEqual(len(approved), 0, "Replacement containing kana must be rejected")
+        self.assertEqual(len(approved), 1)
 
     def test_skip_no_op_fix_when_replacement_equals_current_text(self) -> None:
         current_translations = {

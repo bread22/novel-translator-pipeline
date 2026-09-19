@@ -20,6 +20,7 @@ from translator.providers.base import (
     previous_context_overlap,
     provider_block_reason,
     repeated_content,
+    translation_placeholder_reason,
     validate_translation_items,
 )
 from translator.providers.registry import get_provider
@@ -244,6 +245,19 @@ class ProviderTranslator:
         for item_id, text in translations.items():
             if not text:
                 return {"status": "error", "provider": provider, "reason": "empty_translation", "id": item_id}
+            placeholder_reason = translation_placeholder_reason(
+                text,
+                item_id=item_id,
+                expected_ids=expected,
+            )
+            if placeholder_reason:
+                return {
+                    "status": "error",
+                    "provider": provider,
+                    "reason": "placeholder_output",
+                    "id": item_id,
+                    "placeholder_reason": placeholder_reason,
+                }
         try:
             repository.update_paragraphs(translations, baseline=baseline)
         except VersionConflict as exc:

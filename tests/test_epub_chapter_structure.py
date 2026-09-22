@@ -248,6 +248,38 @@ def test_monolithic_epub_validates_missing_fragments_and_exports_all_same_file_c
     assert output_validation["errors"] == []
 
 
+def test_tail_dominant_xhtml_exports_without_locator_warnings(tmp_path: Path) -> None:
+    epub = tmp_path / "tail-dominant.epub"
+    write_monolithic_epub(epub)
+    with zipfile.ZipFile(epub, "r") as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    body = members["OEBPS/text00002.html"].decode("utf-8")
+    for text in ("第一章 序幕", "第一段。", "第二章 秘密", "第二段。", "第三章 转折", "第三段。", "第二章", "第三章后续。", "第四章 终章", "第四段。"):
+        body = body.replace(f"<p>{text}</p>", f"<p/>{text}")
+    members["OEBPS/text00002.html"] = body.encode("utf-8")
+    with zipfile.ZipFile(epub, "w") as target:
+        for name, data in members.items():
+            target.writestr(name, data, compress_type=zipfile.ZIP_STORED if name == "mimetype" else zipfile.ZIP_DEFLATED)
+
+    runtime = _api_root(tmp_path)
+    call_novel_translator(
+        "add-book", "--path", str(epub), "--title", "Tail Dominant Fixture", "--id", "tail-dominant", novel_root=runtime
+    )
+    manifest_path = runtime / "data" / "books" / "tail-dominant" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["chapters"][2]["paragraphs"][1]["translated"] = "第一段译文。"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    output = tmp_path / "tail-dominant-translated.epub"
+    exported = call_novel_translator(
+        "export", "--book", "tail-dominant", "--format", "epub", "--output", str(output), "--monolingual", novel_root=runtime
+    )
+    assert exported["status"] == "ok"
+    assert exported["summary"]["warning_count"] == 0
+    with zipfile.ZipFile(output) as archive:
+        assert "第一段译文。" in archive.read("OEBPS/text00002.html").decode("utf-8")
+
+
 def test_decorated_split_epub_uses_toc_fragments_and_attaches_leading_continuation(tmp_path: Path) -> None:
     epub = tmp_path / "decorated-split.epub"
     write_decorated_split_epub(epub)
@@ -379,4 +411,3 @@ def test_decorated_split_epub_first_target_without_fragment_exports_and_validate
     validation = call_novel_translator("validate-epub", "--path", str(output), novel_root=runtime)
     assert validation["summary"]["toc_broken_links"] == 0
     assert validation["errors"] == []
-

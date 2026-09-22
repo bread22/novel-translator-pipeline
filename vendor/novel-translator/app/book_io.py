@@ -1942,6 +1942,13 @@ def _replace_chapters_by_locator(
         if soup_result is not None:
             return soup_result
         return data, ["章节 XML 无法解析，且增强解析器不可用，已保留原文"]
+    # Keep export node numbering identical to the import path.  Some EPUBs
+    # (notably Calibre/Amazon-converted books) store paragraph text in the
+    # tail of an otherwise empty <p> element.  The loader normalizes that
+    # representation before assigning node_index values; without doing the
+    # same here, the raw document appears to have zero translatable nodes and
+    # every translated paragraph is reported as "节点定位失效".
+    _normalize_tail_text_tree(root)
     nodes = _translatable_elements(root, document_role=document_role)
     paragraphs = [
         paragraph

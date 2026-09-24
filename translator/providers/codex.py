@@ -10,6 +10,7 @@ from typing import Any
 from translator.providers.base import (
     BaseProvider,
     build_review_prompt,
+    parse_json_object,
     parse_translation_items,
     provider_block_reason,
     validate_translation_items,
@@ -39,18 +40,10 @@ class CodexProvider(BaseProvider):
         executable = shutil.which(self.binary)
         if not executable:
             return {"name": f"provider:{self.name}", "status": "error", "error": "codex executable not found in PATH"}
-        schema = {
-            "type": "object",
-            "properties": {"ok": {"type": "boolean"}},
-            "required": ["ok"],
-            "additionalProperties": False,
-        }
         try:
             with tempfile.TemporaryDirectory(prefix="codex-health-") as temporary:
                 root = Path(temporary)
-                schema_path = root / "schema.json"
                 output_path = root / "result.json"
-                schema_path.write_text(json.dumps(schema), encoding="utf-8")
                 command = [
                     executable,
                     "exec",
@@ -64,7 +57,6 @@ class CodexProvider(BaseProvider):
                 if self.reasoning_effort:
                     command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
                 command.extend([
-                    "--output-schema", str(schema_path),
                     "-o", str(output_path),
                     "-C", str(ROOT),
                     'Return exactly {"ok":true}. Do not include any other fields or text.',
@@ -77,10 +69,10 @@ class CodexProvider(BaseProvider):
                         "error": f"codex exited {result.returncode}: {(result.stderr or result.stdout)[-600:]}",
                     }
                 try:
-                    payload = json.loads(output_path.read_text(encoding="utf-8"))
-                except (FileNotFoundError, json.JSONDecodeError) as exc:
+                    payload = parse_json_object(output_path.read_text(encoding="utf-8"))
+                except (FileNotFoundError, ValueError) as exc:
                     return {"name": f"provider:{self.name}", "status": "error", "error": f"invalid health response: {exc}"}
-                if not isinstance(payload, dict) or payload.get("ok") is not True:
+                if payload.get("ok") is not True or set(payload) != {"ok"}:
                     return {"name": f"provider:{self.name}", "status": "error", "error": f"unexpected health response: {payload!r}"}
         except subprocess.TimeoutExpired:
             return {"name": f"provider:{self.name}", "status": "error", "error": f"codex health check timed out after {timeout}s"}
@@ -95,36 +87,18 @@ class CodexProvider(BaseProvider):
         max_tokens: int,
         timeout: int | None = None,
     ) -> tuple[list[dict[str, str]], dict[str, Any]]:
-        translation_schema = {
-            "type": "object",
-            "required": ["items"],
-            "additionalProperties": False,
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "required": ["id", "text"],
-                        "properties": {
-                            "id": {"type": "string"},
-                            "text": {"type": "string"},
-                        },
-                    },
-                },
-            },
-        }
         prompt = (
             "你是日译中小说翻译专家。严格将输入的 JSON payload 中每个 source 翻译为中文。\n"
+            "只输出一个 JSON 对象，格式为 {\"items\":[{\"id\":\"段落ID\",\"text\":\"译文\"}]}。\n"
+            "每个 items 项只能包含 id 和 text，二者都必须是字符串；不要输出 Markdown、解释或 JSON 之外的文字。\n"
             f"翻译要求：\n{system_prompt}\n\n"
             f"JSON payload：\n{json.dumps(payload, ensure_ascii=False)}\n\n"
-            "必须覆盖 payload.items 中的每个 id。"
+            f"最多输出约 {max_tokens} 个 token；必须按原顺序覆盖 payload.items 中的每个 id，id 原样保留，不得遗漏、重复或添加其他 id。"
         )
         try:
             with tempfile.TemporaryDirectory(prefix="codex-trans-") as temp_dir:
                 root = Path(temp_dir)
-                schema_path = root / "schema.json"
                 output_path = root / "result.json"
-                schema_path.write_text(json.dumps(translation_schema), encoding="utf-8")
                 command = [
                     self._executable(),
                     "exec",
@@ -138,7 +112,6 @@ class CodexProvider(BaseProvider):
                 if self.reasoning_effort:
                     command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
                 command.extend([
-                    "--output-schema", str(schema_path),
                     "-o", str(output_path),
                     "-C", str(ROOT),
                     prompt,
@@ -207,7 +180,6 @@ class CodexProvider(BaseProvider):
             if self.reasoning_effort:
                 command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
             command.extend([
-                "--output-schema", str(schema_path),
                 "-o", str(output_path),
                 "-C", str(ROOT),
                 prompt,
@@ -223,6 +195,6 @@ class CodexProvider(BaseProvider):
             if result.returncode != 0:
                 raise RuntimeError(f"Codex review failed ({result.returncode}):\n{result.stderr}\n{result.stdout}")
             try:
-                return json.loads(output_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError) as exc:
+                return parse_json_object(output_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, ValueError) as exc:
                 raise RuntimeError(f"Codex review produced invalid output: {exc}") from exc

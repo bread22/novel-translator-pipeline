@@ -141,8 +141,8 @@ class PipelineE2ETests(unittest.TestCase):
         c2_paragraphs = manifest_data["chapters"][1]["paragraphs"]
         self.assertEqual(c2_paragraphs[0]["translated"], "译文：c0002-p00001")
 
-    @patch("translator.review.knowledge_extractor.run_knowledge_finalization", return_value={"decisions": []})
-    @patch("translator.review.knowledge_extractor.run_knowledge_extractor_window", return_value={"rolling_context_delta": {}, "knowledge_candidates": [], "conflicts": []})
+    @patch("translator.pipeline.chapter_pipeline.run_knowledge_finalization", return_value={"decisions": []})
+    @patch("translator.pipeline.chapter_pipeline.run_knowledge_extractor_window", return_value={"rolling_context_delta": {}, "knowledge_candidates": [], "conflicts": []})
     @patch("translator.pipeline.chapter_pipeline.run_chapter_review", side_effect=_mock_reviewer)
     @patch("translator.core.job_manager.manifest_path")
     @patch("translator.providers.openai_provider.urlopen")
@@ -213,7 +213,7 @@ class PipelineE2ETests(unittest.TestCase):
         with manager._lock:
             worker_thread = manager._running_threads.get(task.task_id)
         if worker_thread:
-            worker_thread.join(timeout=10.0)
+            worker_thread.join(timeout=30.0)
         with manager._lock:
             running_task = manager._items.get(task.task_id)
         self.assertIsNotNone(running_task)

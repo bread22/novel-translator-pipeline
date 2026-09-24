@@ -19,8 +19,17 @@ def get_provider(name: str, config: dict[str, Any] | None = None) -> BaseProvide
         if matching:
             p_config = dict(providers[matching[0]])
             name = matching[0]
-        elif name in {"opencode", "antigravity", "codex", "online_api", "openai", "lmstudio"}:
-            p_config = {"type": "openai" if name in {"online_api", "openai", "lmstudio"} else name}
+        elif name == "lmstudio":
+            p_config = {
+                "type": "openai",
+                "base_url": "http://127.0.0.1:1234/v1",
+                "model": "murasaki-14b-v0.2",
+                "context_tokens": 8192,
+                "timeout": 600,
+                "api_key": "lm-studio",
+            }
+        elif name in {"opencode", "antigravity", "codex", "online_api", "openai"}:
+            p_config = {"type": "openai" if name in {"online_api", "openai"} else name}
         else:
             raise ValueError(f"未在 config.toml 的 [providers] 中找到 provider: '{name}'")
     else:

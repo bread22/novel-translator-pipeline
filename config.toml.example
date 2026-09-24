@@ -157,6 +157,23 @@ context_tokens = 1048576
 timeout = 180
 api_key = "$NVIDIA_API_KEY"
 
+[providers.stealth-openrouter]
+type = "openai"
+model = "stealth/space-bunny-alpha"
+base_url = "https://openrouter.ai/api/v1"
+temperature = 0.3
+context_tokens = 1000000
+timeout = 600
+api_key = "$OPENROUTER_API_KEY"
+
+[providers.stealth-openrouter.headers]
+"HTTP-Referer" = "https://github.com/bread22/novel-translator-pipeline"
+"X-Title" = "Novel Translator Pipeline"
+
+[providers.stealth-openrouter.extra_body.reasoning]
+effort = "low"
+exclude = true
+
 [knowledge_extractor]
 enabled = true
 provider = "gemini_lite"

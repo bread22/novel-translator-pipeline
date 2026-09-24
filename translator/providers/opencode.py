@@ -427,7 +427,7 @@ class OpenCodeProvider(BaseProvider):
         self.binary = str(config.get("binary", "opencode"))
         self.model = str(config.get("model", ""))
         self.agent = str(config.get("agent", ""))
-        self.variant = str(config.get("variant", "") or "").strip()
+        self.variant = str(config.get("variant", "low") or "low").strip() or "low"
         self.timeout = int(config.get("timeout", 600))
 
     def health_check(self, timeout: int = 10) -> dict[str, Any]:

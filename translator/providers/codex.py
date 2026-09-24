@@ -26,7 +26,7 @@ class CodexProvider(BaseProvider):
         super().__init__(name, config)
         self.binary = str(config.get("binary", "codex"))
         self.model = str(config.get("model", ""))
-        self.reasoning_effort = str(config.get("reasoning_effort", ""))
+        self.reasoning_effort = str(config.get("reasoning_effort", "low") or "low").strip() or "low"
         self.timeout = int(config.get("timeout", 600))
 
     def _executable(self) -> str:

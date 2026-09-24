@@ -75,6 +75,7 @@ type = "opencode"
 binary = "/absolute/path/to/opencode"
 model = "opencode/muse-spark-1.2-contributor-free"
 agent = ""
+variant = "low"
 timeout = 600
 
 [providers.opencode_reviewer]
@@ -82,18 +83,21 @@ type = "opencode"
 binary = "/absolute/path/to/opencode"
 model = "opencode/muse-spark-1.2-contributor-free"
 agent = ""
+variant = "low"
 timeout = 600
 
 [providers.codex]
 type = "codex"
 binary = "/absolute/path/to/codex"
 model = ""
+reasoning_effort = "low"
 timeout = 600
 
 [providers.hy3]
 type = "opencode"
 binary = "/absolute/path/to/opencode"
 model = "opencode/hy3-free"
+variant = "low"
 agent = ""
 timeout = 600
 
@@ -101,6 +105,7 @@ timeout = 600
 type = "opencode"
 binary = "/absolute/path/to/opencode"
 model = "opencode/mimo-v2.5-free"
+variant = "low"
 agent = ""
 timeout = 600
 
@@ -108,6 +113,7 @@ timeout = 600
 type = "opencode"
 binary = "/absolute/path/to/opencode"
 model = "opencode/muse-spark-1.2-contributor-free"
+variant = "low"
 agent = ""
 timeout = 600
 

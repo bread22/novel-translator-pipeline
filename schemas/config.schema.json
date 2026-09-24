@@ -165,6 +165,12 @@
         "type": {"enum": ["opencode", "codex"]},
         "binary": {"type": "string", "minLength": 1},
         "model": {"type": "string"},
+        "variant": {"type": "string", "default": "low"},
+        "reasoning_effort": {
+          "type": "string",
+          "enum": ["minimal", "low", "medium", "high", "xhigh"],
+          "default": "low"
+        },
         "timeout": {"type": "integer", "minimum": 1}
       }
     },

@@ -51,6 +51,7 @@ export const SettingsView: React.FC = () => {
   const [newExecutablePath, setNewExecutablePath] = useState('');
   const [newTemperature, setNewTemperature] = useState(0.3);
   const [newContextTokens, setNewContextTokens] = useState(32768);
+  const [newThinkingLevel, setNewThinkingLevel] = useState('low');
 
   // Prompt Management State
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
@@ -73,8 +74,13 @@ export const SettingsView: React.FC = () => {
     setConfigLoadError(null);
     try {
       const cfg = await api.getConfig();
-      setConfig(cfg);
-      lastSavedConfig.current = structuredClone(cfg);
+      const normalizedConfig = structuredClone(cfg);
+      Object.values(normalizedConfig.providers || {}).forEach((provider) => {
+        if (provider.type === 'opencode' && !provider.variant) provider.variant = 'low';
+        if (provider.type === 'codex' && !provider.reasoning_effort) provider.reasoning_effort = 'low';
+      });
+      setConfig(normalizedConfig);
+      lastSavedConfig.current = structuredClone(normalizedConfig);
     } catch (err: any) {
       console.error('Failed to load config:', err);
       setConfigLoadError(err instanceof Error ? err.message : '配置加载失败');
@@ -358,9 +364,11 @@ export const SettingsView: React.FC = () => {
     } else if (newProviderType === 'opencode') {
       providerObj.binary = newExecutablePath.trim();
       providerObj.agent = '';
+      providerObj.variant = newThinkingLevel;
       providerObj.timeout = 600;
     } else if (newProviderType === 'codex') {
       providerObj.binary = newExecutablePath.trim();
+      providerObj.reasoning_effort = newThinkingLevel;
       providerObj.timeout = 600;
     }
 
@@ -376,6 +384,7 @@ export const SettingsView: React.FC = () => {
     setNewProviderId('');
     setNewApiKey('');
     setNewExecutablePath('');
+    setNewThinkingLevel('low');
   };
 
   const selectedPrompt = prompts.find((p) => p.id === selectedPromptId);
@@ -1064,6 +1073,42 @@ export const SettingsView: React.FC = () => {
                             </div>
                           )}
 
+                          {p.type === 'opencode' && (
+                            <div>
+                              <label className="text-[#666666] block mb-1 font-medium font-serif">Thinking level / variant</label>
+                              <select
+                                aria-label={`${pId} Thinking level / variant`}
+                                value={p.variant || 'low'}
+                                onChange={(e) => handleUpdateProvider(pId, 'variant', e.target.value)}
+                                className="w-full bg-white border border-[#E5E0D8] rounded-sm p-2 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                              >
+                                {!['low', 'medium', 'high'].includes(p.variant || 'low') && <option value={p.variant}>{p.variant}</option>}
+                                <option value="low">low</option>
+                                <option value="medium">medium</option>
+                                <option value="high">high</option>
+                              </select>
+                            </div>
+                          )}
+
+                          {p.type === 'codex' && (
+                            <div>
+                              <label className="text-[#666666] block mb-1 font-medium font-serif">Reasoning effort</label>
+                              <select
+                                aria-label={`${pId} Reasoning effort`}
+                                value={p.reasoning_effort || 'low'}
+                                onChange={(e) => handleUpdateProvider(pId, 'reasoning_effort', e.target.value)}
+                                className="w-full bg-white border border-[#E5E0D8] rounded-sm p-2 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                              >
+                                {!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(p.reasoning_effort || 'low') && <option value={p.reasoning_effort}>{p.reasoning_effort}</option>}
+                                <option value="minimal">minimal</option>
+                                <option value="low">low</option>
+                                <option value="medium">medium</option>
+                                <option value="high">high</option>
+                                <option value="xhigh">xhigh</option>
+                              </select>
+                            </div>
+                          )}
+
                           {/* API Key (if openai type) */}
                           {p.type === 'openai' && (
                             <div>
@@ -1445,6 +1490,7 @@ export const SettingsView: React.FC = () => {
                   onChange={(e) => {
                     setNewProviderType(e.target.value);
                     setNewExecutablePath('');
+                    setNewThinkingLevel('low');
                   }}
                   className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-[#1A1A1A] focus:outline-none focus:border-[#1D4ED8]"
                 >
@@ -1518,6 +1564,26 @@ export const SettingsView: React.FC = () => {
                   className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
                 />
               </div>
+
+              {['opencode', 'codex'].includes(newProviderType) && (
+                <div>
+                  <label className="text-[#4A4A4A] block mb-1 font-medium font-serif">
+                    {newProviderType === 'codex' ? 'Reasoning effort' : 'Thinking level / variant'}
+                  </label>
+                  <select
+                    aria-label={newProviderType === 'codex' ? 'Reasoning effort' : 'Thinking level / variant'}
+                    value={newThinkingLevel}
+                    onChange={(e) => setNewThinkingLevel(e.target.value)}
+                    className="w-full bg-[#FAF9F6] border border-[#E5E0D8] rounded-sm p-2.5 text-[#1A1A1A] font-mono focus:outline-none focus:border-[#1D4ED8]"
+                  >
+                    {newProviderType === 'codex' && <option value="minimal">minimal</option>}
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    {newProviderType === 'codex' && <option value="xhigh">xhigh</option>}
+                  </select>
+                </div>
+              )}
 
               {newProviderType === 'openai' && (
                 <div className="grid grid-cols-2 gap-3">

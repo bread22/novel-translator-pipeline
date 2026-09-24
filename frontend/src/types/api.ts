@@ -318,6 +318,8 @@ export interface SystemConfig {
     temperature?: number;
     context_tokens?: number;
     timeout?: number;
+    variant?: string;
+    reasoning_effort?: string;
     binary?: string;
     agy?: string;
     effort?: string;

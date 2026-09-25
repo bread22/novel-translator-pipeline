@@ -882,8 +882,12 @@ def _join_zip_path(base: str, href: str) -> str:
 
 
 _CHAPTER_MARKER_RE = re.compile(
-    r"^\s*第\s*(?P<number>[0-9０-９一二三四五六七八九十百千]+)\s*"
-    r"(?P<unit>章|話|節|部)(?P<suffix>.*)$"
+    r"^\s*(?:"
+    r"第\s*(?P<number_kanji>[0-9０-９一二三四五六七八九十百千]+)\s*(?P<unit_kanji>章|話|節|部)"
+    r"|"
+    r"(?P<unit_latin>Lesson|Chapter|Episode|Act|Scene|Case|Track|Part|Stage)\s*(?P<number_latin>[0-9０-９一二三四五六七八九十百千]+)"
+    r")(?P<suffix>.*)$",
+    re.IGNORECASE,
 )
 
 _DECORATOR_PAIRS = (
@@ -933,7 +937,8 @@ def _chapter_marker(text: str, tag: str, node_index: int) -> _ChapterMarker | No
     match = _CHAPTER_MARKER_RE.match(matching_text)
     if not match:
         return None
-    number = _parse_chapter_number(match.group("number"))
+    num_str = match.group("number_kanji") or match.group("number_latin")
+    number = _parse_chapter_number(num_str)
     if number is None:
         return None
     suffix = _normalize_text(match.group("suffix")).lstrip(" :：、.-—–")

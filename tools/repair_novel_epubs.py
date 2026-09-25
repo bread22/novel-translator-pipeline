@@ -26,7 +26,7 @@ def local(tag: str) -> str:
 
 
 def is_chapter_label(label: str) -> bool:
-    return bool(re.match(r"^\s*第\s*[0-9０-９一二三四五六七八九十百千]+\s*章", label))
+    return bool(re.match(r"^\s*(?:第\s*[0-9０-９一二三四五六七八九十百千]+\s*[章話節部]|(?:Lesson|Chapter|Episode|Act|Scene|Case|Track|Part|Stage)\s*[0-9０-９一二三四五六七八九十百千]+)", label, re.IGNORECASE))
 
 
 def first_chapter_id(data: bytes) -> str:
@@ -42,6 +42,92 @@ def first_chapter_id(data: bytes) -> str:
         if is_chapter_label(text) and element.get("id"):
             return element.get("id", "")
     return ""
+def transform_br_to_paragraphs(root: ET.Element) -> bool:
+    body = next((element for element in root.iter() if local(element.tag) == "body"), None)
+    if body is None:
+        return False
+    head = next((element for element in root.iter() if local(element.tag) == "head"), None)
+
+    has_p = any(local(el.tag) == "p" for el in body.iter())
+    br_count = sum(1 for el in body.iter() if local(el.tag) == "br")
+    if has_p or br_count < 3:
+        return False
+
+    def collect_tokens(container):
+        tokens = []
+        if container.text and container.text.strip():
+            tokens.append(("text", container.text.strip()))
+        for child in list(container):
+            tag = local(child.tag)
+            if tag == "br":
+                tokens.append(("break",))
+            elif tag in {"span", "div"} and any(local(c.tag) == "br" for c in child.iter()):
+                tokens.extend(collect_tokens(child))
+            elif tag == "div" and not any(child.itertext()) and not list(child):
+                tokens.append(("break",))
+            else:
+                tokens.append(("elem", child))
+            if child.tail and child.tail.strip():
+                tokens.append(("text", child.tail.strip()))
+        return tokens
+
+    tokens = collect_tokens(body)
+    paragraphs = []
+    current_para = []
+    for tok in tokens:
+        if tok[0] == "break":
+            if current_para:
+                paragraphs.append(current_para)
+                current_para = []
+        else:
+            current_para.append(tok)
+    if current_para:
+        paragraphs.append(current_para)
+
+    new_p_elems = []
+    for para_tokens in paragraphs:
+        p = ET.Element(f"{{{XHTML}}}p")
+        last_elem = None
+        for tok in para_tokens:
+            if tok[0] == "text":
+                if last_elem is None:
+                    p.text = (p.text or "") + tok[1]
+                else:
+                    last_elem.tail = (last_elem.tail or "") + tok[1]
+            elif tok[0] == "elem":
+                child = tok[1]
+                child.tail = None
+                p.append(child)
+                last_elem = child
+        if ("".join(p.itertext())).strip():
+            new_p_elems.append(p)
+    if not new_p_elems:
+        return False
+    body.clear()
+    for p in new_p_elems:
+        body.append(p)
+
+    all_text = " ".join("".join(p.itertext()).split())
+    if len(re.findall(r"第[一二三四五六七八九十百千0-9０-９]+章", all_text)) >= 3 and len(all_text) < 5000:
+        body.set(f"{{{OPS}}}type", "toc")
+        if head is not None:
+            title_el = next((el for el in head.iter() if local(el.tag) == "title"), None)
+            if title_el is None:
+                title_el = ET.Element(f"{{{XHTML}}}title")
+                head.insert(0, title_el)
+            title_el.text = "目录"
+    elif head is not None:
+        title_el = next((el for el in head.iter() if local(el.tag) == "title"), None)
+        if title_el is None or not (title_el.text or "").strip():
+            first_text = ("".join(new_p_elems[0].itertext())).strip()
+            if first_text and len(first_text) < 100:
+                if title_el is None:
+                    title_el = ET.Element(f"{{{XHTML}}}title")
+                    head.insert(0, title_el)
+                title_el.text = first_text
+
+    return True
+
 
 
 def repair_epub(path: Path) -> None:
@@ -131,6 +217,7 @@ def repair_epub(path: Path) -> None:
             root = ET.fromstring(data)
         except ET.ParseError:
             continue
+        transform_br_to_paragraphs(root)
         role = ""
         text = " ".join("".join(root.itertext()).split())
         lower_name = name.casefold()
@@ -238,8 +325,26 @@ def refresh_manifest(book_dir: Path) -> tuple[int, int]:
 
 
 def main() -> None:
-    prefixes = ("新-凌辱女子学園[123]-", "姦禁性裁-", "トー-クン三部作-", "みだらな肉筆-", "女教師-魔淫の教壇-")
-    for book_dir in sorted(p for p in BOOKS.iterdir() if p.is_dir() and p.name.startswith(prefixes)):
+    prefixes = (
+        "新-凌辱女子学園[123]-",
+        "姦禁性裁-",
+        "トー-クン三部作-",
+        "みだらな肉筆-",
+        "女教師-魔淫の教壇-",
+        "美熟女の休日-",
+        "彼女-の美母-",
+    )
+    if len(sys.argv) > 1:
+        targets = [
+            BOOKS / arg if (BOOKS / arg).is_dir() else Path(arg)
+            for arg in sys.argv[1:]
+        ]
+    else:
+        targets = [p for p in BOOKS.iterdir() if p.is_dir() and p.name.startswith(prefixes)]
+
+    for book_dir in sorted(targets):
+        if not book_dir.is_dir() or not (book_dir / "source.epub").exists():
+            continue
         repair_epub(book_dir / "source.epub")
         chapters, paragraphs = refresh_manifest(book_dir)
         print(book_dir.name, chapters, paragraphs)

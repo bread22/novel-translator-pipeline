@@ -30,6 +30,7 @@ class OpenCodeBackendTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["/usr/bin/opencode", "run", "--format"])
         self.assertNotIn("--dir", command)
+        self.assertEqual(command[command.index("--log-level") + 1], "error")
 
         with patch("translator.providers.opencode.executable", return_value="/usr/bin/opencode"), patch(
             "translator.providers.opencode._run_command",

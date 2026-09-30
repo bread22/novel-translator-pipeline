@@ -331,7 +331,7 @@ def run_prompt(
         "json",
         "--print-logs",
         "--log-level",
-        "ERROR",
+        "error",
     ]
     chosen_model = model if model is not None else model_for(role)
     chosen_variant = (variant or "").strip()

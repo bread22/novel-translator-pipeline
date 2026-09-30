@@ -332,17 +332,18 @@ def run_prompt(
         "--print-logs",
         "--log-level",
         "ERROR",
-        "--dir",
-        str(ROOT),
     ]
     chosen_model = model if model is not None else model_for(role)
+    chosen_variant = (variant or "").strip()
+    if chosen_model and chosen_variant:
+        # OpenCode v2 encodes a model variant in the model identifier instead
+        # of accepting the v1 `--variant` flag.
+        chosen_model = f"{chosen_model.partition('#')[0]}#{chosen_variant}"
     if chosen_model:
         command.extend(["--model", chosen_model])
     chosen_agent = agent if agent is not None else _agent_for(role)
     if chosen_agent:
         command.extend(["--agent", chosen_agent])
-    if variant:
-        command.extend(["--variant", variant])
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:

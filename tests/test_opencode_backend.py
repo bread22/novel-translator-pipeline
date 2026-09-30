@@ -29,16 +29,16 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(result, '{\\"ok\\":true}')
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["/usr/bin/opencode", "run", "--format"])
-        self.assertIn("--dir", command)
+        self.assertNotIn("--dir", command)
 
         with patch("translator.providers.opencode.executable", return_value="/usr/bin/opencode"), patch(
             "translator.providers.opencode._run_command",
             return_value=Mock(returncode=0, stdout=stdout, stderr=""),
         ) as run_variant:
-            run_prompt("health", role="reviewer", variant="low", timeout=3)
+            run_prompt("health", role="reviewer", model="provider/model", variant="low", timeout=3)
         cmd_variant = run_variant.call_args.args[0]
-        self.assertIn("--variant", cmd_variant)
-        self.assertEqual(cmd_variant[cmd_variant.index("--variant") + 1], "low")
+        self.assertNotIn("--variant", cmd_variant)
+        self.assertEqual(cmd_variant[cmd_variant.index("--model") + 1], "provider/model#low")
 
     def test_parse_json_object_accepts_fenced_output(self) -> None:
         self.assertEqual(parse_json_object("```json\n{\"ok\":true}\n```"), {"ok": True})

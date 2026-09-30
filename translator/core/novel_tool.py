@@ -256,11 +256,13 @@ def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
         if command == "snapshot":
             book_id = _flag_value(args, "--book") or ""
             book = api.load_book(books_dir, book_id)
+            book.id = book_id
             return _python_api_result(api.create_snapshot(books_dir, book, _flag_value(args, "--name") or ""))
 
         if command == "apply-review-fixes":
             book_id = _flag_value(args, "--book") or ""
             book = api.load_book(books_dir, book_id)
+            book.id = book_id
             input_path = Path(_flag_value(args, "--input") or "").expanduser().resolve()
             return _python_api_result(api.apply_review_fixes(books_dir, book, input_path))
 
@@ -269,6 +271,7 @@ def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
             output = Path(_flag_value(args, "--output") or "").expanduser().resolve()
             export_format = (_flag_value(args, "--format") or "").casefold()
             book = api.load_book(books_dir, book_id)
+            book.id = book_id
             bilingual = _has_flag(args, "--bilingual") and not _has_flag(args, "--monolingual")
             if export_format == "txt":
                 api.export_txt(book, output, bilingual=bilingual)
@@ -300,6 +303,7 @@ def _call_python_api(root: Path, args: tuple[str, ...]) -> dict[str, Any]:
         if command == "reset-translations":
             book_id = _flag_value(args, "--book") or ""
             book = api.load_book(books_dir, book_id)
+            book.id = book_id
             input_value = _flag_value(args, "--input", required=False)
             return _python_api_result(
                 api.reset_translations(

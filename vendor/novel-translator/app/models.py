@@ -70,7 +70,9 @@ def load_book(root_books_dir: Path, book_id: str) -> Book:
     if not manifest.exists():
         raise FileNotFoundError(f"未找到书籍：{book_id}")
     raw = json.loads(manifest.read_text(encoding="utf-8"))
-    return book_from_dict(raw)
+    book = book_from_dict(raw)
+    book.id = book_id
+    return book
 
 
 def book_from_dict(raw: dict[str, Any]) -> Book:

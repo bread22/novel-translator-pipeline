@@ -189,6 +189,9 @@ def _inject_metadata_to_opf(root: ET.Element, meta: dict[str, Any]) -> None:
             metadata_el.append(creator_el)
         creator_el.text = author_zh
         creator_el.set("id", "creator")
+        for key in list(creator_el.attrib.keys()):
+            if "file-as" in key:
+                del creator_el.attrib[key]
         if author_ja:
             creator_el.set(f"{{{OPF_NS}}}file-as", author_ja)
 

@@ -670,7 +670,7 @@ def _looks_like_toc(texts: Sequence[str]) -> bool:
     if len(texts) < 2:
         return False
     marker_count = sum(_chapter_marker(text, "toc", index) is not None for index, text in enumerate(texts))
-    return marker_count >= 2 and marker_count / len(texts) >= 0.6
+    return marker_count >= 2 and marker_count / len(texts) > 0.6
 
 
 def _classify_spine_item(
@@ -704,17 +704,17 @@ def _classify_spine_item(
         if any(value.casefold() in identifier for value in values):
             return role
 
-    if spine_item.path in navigation_paths:
-        return "chapter"
-
     texts = _document_texts(data)
     normalized_navigation = {_normalized_label(label) for label in navigation_labels if label}
-    if _looks_like_toc(texts):
-        return "toc"
     if normalized_navigation and len(texts) >= 2:
         matching_labels = sum(_normalized_label(text) in normalized_navigation for text in texts)
-        if matching_labels >= 2 and matching_labels / len(texts) >= 0.6:
+        if matching_labels >= 2 and matching_labels / len(texts) > 0.6:
             return "toc"
+
+    if spine_item.path in navigation_paths:
+        return "chapter"
+    if _looks_like_toc(texts):
+        return "toc"
 
     # Some converters use generic text00000/text00001 names and omit all
     # semantic EPUB properties.  Position plus content shape is the fallback
@@ -1050,7 +1050,7 @@ def _build_epub_chapters_result(
         first_marker_number = markers[0].number
     else:
         starts = [0]
-        titles = [markers[0].title if markers else (default_title or _DOCUMENT_ROLE_LABELS.get(document_role, "Chapter"))]
+        titles = [markers[0].title if markers else (navigation_titles[0] if navigation_titles else (default_title or _DOCUMENT_ROLE_LABELS.get(document_role, "Chapter")))]
         if markers:
             first_marker_node_index = markers[0].node_index
             first_marker_number = markers[0].number
@@ -1515,9 +1515,15 @@ def _parse_epub_chapter_with_soup(
 def _chapter_title(root: ET.Element) -> str:
     for element in root.iter():
         local_name = _local_name(element.tag)
-        if local_name in {"h1", "h2", "title"}:
+        if local_name in {"h1", "h2"}:
             text = _element_text(element)
             if text:
+                return text
+    for element in root.iter():
+        local_name = _local_name(element.tag)
+        if local_name == "title":
+            text = _element_text(element)
+            if text and text.casefold() not in {"unknown", "不明"}:
                 return text
     return ""
 

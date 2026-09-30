@@ -273,23 +273,237 @@ def repair_epub(path: Path) -> None:
             role = "colophon"
         elif "奴隷女教師-嬲る" in book_name and 3 <= next((int(m.group(1)) for m in [re.search(r"/part(\d{4})\.html$", name)] if m), -1) <= 14:
             role = "chapter"
+        # Custom book transforms
+        if "新-凌辱女子学園2" in book_name:
+            if name.endswith("part0001.html"):
+                role = "toc"
+            elif name.endswith("part0002.html"):
+                role = "frontmatter"
+            elif name.endswith("part0003_split_000.html"):
+                role = "chapter"
+        elif "新-凌辱女子学園3" in book_name:
+            if name.endswith("part0001.html"):
+                role = "toc"
+            elif name.endswith("part0002_split_000.html") or name.endswith("part0002_split_001.html"):
+                role = "frontmatter"
+            elif name.endswith("part0002_split_008.html"):
+                role = "chapter"
+        elif "僕が管理人のアパート" in book_name:
+            if name.endswith("part0001.html"):
+                role = "toc"
+            elif re.search(r"part000[2-8]\.html$", name):
+                role = "chapter"
+        elif "人妻瀬里奈" in book_name:
+            if name.endswith("part0001.html"):
+                role = "toc"
+            elif name.endswith("part0002.html"):
+                role = "chapter"
+                title_el = next((el for el in root.iter() if local(el.tag) == "title"), None)
+                if title_el is not None:
+                    title_el.text = "序章 真夜中の悲劇"
+            elif name.endswith("part0003.html"):
+                role = "chapter"
+                title_el = next((el for el in root.iter() if local(el.tag) == "title"), None)
+                if title_el is not None:
+                    title_el.text = "一章 圧倒的な力"
+            elif name.endswith("part0004.html"):
+                role = "chapter"
+                title_el = next((el for el in root.iter() if local(el.tag) == "title"), None)
+                if title_el is not None:
+                    title_el.text = "二章 絶頂３Ｐ"
         elif any(token in lower_name for token in ("titlepage", "cover_page", "p-cover")) or any(token in body_class for token in ("p-titlepage", "p-cover", "p-tobira", "p-fmatter")) or name.endswith("part0000.html"):
             role = "cover"
         elif name in toc_target_paths or "toc" in lower_name or "p-toc" in body_class or (name not in chapter_target_paths and len(re.findall(r"第[一二三四五六七八九十百千0-9０-９]+章", text)) >= 3 and len(text) < 5000):
             role = "toc"
         elif "colophon" in lower_name or "p-credit" in body_class or "p-colophon" in body_class or "奥付" in text or ("発行" in text and len(text) < 2000):
             role = "colophon"
-        elif "fmatter" in lower_name or "主な登場人物" in text or "ストーリー" in text and not is_chapter_label(text):
+        elif "fmatter" in lower_name or (("主な登場人物" in text or "ストーリー" in text) and len(text) < 4000 and name not in chapter_target_paths):
             role = "frontmatter"
         if role == "chapter":
             title_element = next((element for element in root.iter() if local(element.tag) == "title"), None)
             first_paragraph = next((element for element in root.iter() if local(element.tag) == "p" and " ".join("".join(element.itertext()).split())), None)
             candidate = " ".join("".join(first_paragraph.itertext()).split()) if first_paragraph is not None else ""
             if title_element is not None and candidate and len(candidate) <= 200:
-                title_element.text = candidate
+                current_title = (title_element.text or "").strip()
+                if current_title.casefold() in {"unknown", "不明"} or current_title in {book_name, path.stem} or re.match(r"^(?:プロローグ|エピローグ|序章|終章|第|【|Ⅰ|Ⅱ|Ⅲ|Ⅳ|Ⅴ)", candidate):
+                    title_element.text = candidate
         if role:
             body.set(f"{{{OPS}}}type", role)
         files[name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    # Specific file-level surgery for multi-part splitting / merging
+    if "床上手" in book_name:
+        p1_key = next((k for k in list(files.keys()) if k.endswith("p-001-001.xhtml")), None)
+        opf_key = next((k for k in list(files.keys()) if k.endswith(".opf")), None)
+        nav_key = next((k for k in list(files.keys()) if k.endswith("nav.xhtml")), None)
+        if p1_key and opf_key:
+            doc = ET.fromstring(files[p1_key])
+            body = next((el for el in doc.iter() if local(el.tag) == "body"), None)
+            section = next((el for el in body.iter() if local(el.tag) == "section"), body) if body is not None else None
+            if section is not None:
+                parts = []
+                curr_part = []
+                curr_title = "１"
+                for child in list(section):
+                    if local(child.tag) in {"h1", "h2"}:
+                        if curr_part:
+                            parts.append((curr_title, curr_part))
+                            curr_part = []
+                        curr_title = "".join(child.itertext()).strip()
+                    curr_part.append(child)
+                if curr_part:
+                    parts.append((curr_title, curr_part))
+                if len(parts) >= 2:
+                    del files[p1_key]
+                    opf_doc = ET.fromstring(files[opf_key])
+                    manifest_el = next(el for el in opf_doc.iter() if local(el.tag) == "manifest")
+                    spine_el = next(el for el in opf_doc.iter() if local(el.tag) == "spine")
+                    old_item = next((el for el in manifest_el if el.get("href", "").endswith("p-001-001.xhtml")), None)
+                    old_id = old_item.get("id") if old_item is not None else ""
+                    if old_item is not None:
+                        manifest_el.remove(old_item)
+                    insert_idx = 0
+                    for idx, el in enumerate(list(spine_el)):
+                        if el.get("idref") == old_id:
+                            insert_idx = idx
+                            spine_el.remove(el)
+                            break
+                    nav_links = []
+                    base_dir = str(Path(p1_key).parent)
+                    for i, (part_title, elems) in enumerate(parts, 1):
+                        part_fname = f"p-001-{i:03d}.xhtml"
+                        part_path = f"{base_dir}/{part_fname}"
+                        part_id = f"text.p-001-{i:03d}.xhtml"
+                        new_doc = ET.fromstring(ET.tostring(doc))
+                        new_body = next(el for el in new_doc.iter() if local(el.tag) == "body")
+                        new_sec = next((el for el in new_body.iter() if local(el.tag) == "section"), new_body)
+                        new_sec.clear()
+                        for el in elems:
+                            new_sec.append(el)
+                        new_head = next((el for el in new_doc.iter() if local(el.tag) == "head"), None)
+                        if new_head is not None:
+                            t_el = next((el for el in new_head.iter() if local(el.tag) == "title"), None)
+                            if t_el is not None:
+                                t_el.text = f"第{i}章" if not part_title.startswith("第") else part_title
+                        files[part_path] = ET.tostring(new_doc, encoding="utf-8", xml_declaration=True)
+                        m_item = ET.Element(manifest_el.tag.replace("manifest", "item"), {
+                            "id": part_id,
+                            "href": f"text/{part_fname}",
+                            "media-type": "application/xhtml+xml"
+                        })
+                        manifest_el.append(m_item)
+                        s_item = ET.Element(spine_el.tag.replace("spine", "itemref"), {
+                            "idref": part_id,
+                            "linear": "yes"
+                        })
+                        spine_el.insert(insert_idx + i - 1, s_item)
+                        nav_links.append((f"text/{part_fname}", part_title))
+                    files[opf_key] = ET.tostring(opf_doc, encoding="utf-8", xml_declaration=True)
+                    if nav_key and nav_key in files:
+                        nav_doc = ET.fromstring(files[nav_key])
+                        ol = next((el for el in nav_doc.iter() if local(el.tag) == "ol"), None)
+                        if ol is not None:
+                            ol.clear()
+                            for href, lbl in nav_links:
+                                li = ET.Element(f"{{{XHTML}}}li")
+                                a = ET.Element(f"{{{XHTML}}}a", {"href": href})
+                                a.text = lbl
+                                li.append(a)
+                                ol.append(li)
+                        files[nav_key] = ET.tostring(nav_doc, encoding="utf-8", xml_declaration=True)
+
+    if "人妻オフィス" in book_name:
+        s0_key = next((k for k in list(files.keys()) if k.endswith("part0000_split_000.html")), None)
+        s1_key = next((k for k in list(files.keys()) if k.endswith("part0000_split_001.html")), None)
+        s2_key = next((k for k in list(files.keys()) if k.endswith("part0000_split_002.html")), None)
+        s3_key = next((k for k in list(files.keys()) if k.endswith("part0000_split_003.html")), None)
+        opf_key = next((k for k in list(files.keys()) if k.endswith(".opf")), None)
+        if s0_key:
+            doc0 = ET.fromstring(files[s0_key])
+            t0 = next((el for el in doc0.iter() if local(el.tag) == "title"), None)
+            if t0 is not None:
+                t0.text = "第一話・人妻「痴漢」オフィス"
+            files[s0_key] = ET.tostring(doc0, encoding="utf-8", xml_declaration=True)
+        if s1_key:
+            doc1 = ET.fromstring(files[s1_key])
+            t1 = next((el for el in doc1.iter() if local(el.tag) == "title"), None)
+            if t1 is not None:
+                t1.text = "第二話・人妻「覗き」オフィス"
+            files[s1_key] = ET.tostring(doc1, encoding="utf-8", xml_declaration=True)
+        if s2_key and s3_key:
+            doc2 = ET.fromstring(files[s2_key])
+            doc3 = ET.fromstring(files[s3_key])
+            b2 = next(el for el in doc2.iter() if local(el.tag) == "body")
+            b3 = next(el for el in doc3.iter() if local(el.tag) == "body")
+            for c in list(b3):
+                b2.append(c)
+            t2 = next((el for el in doc2.iter() if local(el.tag) == "title"), None)
+            if t2 is not None:
+                t2.text = "第三話・人妻「素股」オフィス"
+            files[s2_key] = ET.tostring(doc2, encoding="utf-8", xml_declaration=True)
+            del files[s3_key]
+            if opf_key:
+                opf_doc = ET.fromstring(files[opf_key])
+                for el in list(opf_doc.iter()):
+                    if local(el.tag) == "item" and "split_003" in el.get("href", ""):
+                        item_id = el.get("id")
+                        for p in opf_doc.iter():
+                            if el in list(p):
+                                p.remove(el)
+                        for s in list(opf_doc.iter()):
+                            if local(s.tag) == "itemref" and s.get("idref") == item_id:
+                                for p in opf_doc.iter():
+                                    if s in list(p):
+                                        p.remove(s)
+                files[opf_key] = ET.tostring(opf_doc, encoding="utf-8", xml_declaration=True)
+
+    if "女唇の伝言" in book_name:
+        p2_key = next((k for k in list(files.keys()) if k.endswith("part0002.html")), None)
+        if p2_key:
+            root2 = ET.fromstring(files[p2_key])
+            body2 = next((el for el in root2.iter() if local(el.tag) == "body"), None)
+            if body2 is not None:
+                body2.set(f"{{{OPS}}}type", "toc")
+                files[p2_key] = ET.tostring(root2, encoding="utf-8", xml_declaration=True)
+        opf_key = next((k for k in list(files.keys()) if k.endswith(".opf")), None)
+        if opf_key:
+            opf_doc = ET.fromstring(files[opf_key])
+            manifest_el = next((el for el in opf_doc.iter() if local(el.tag) == "manifest"), None)
+            spine_el = next((el for el in opf_doc.iter() if local(el.tag) == "spine"), None)
+            for i in range(4, 27, 2):
+                t_key = next((k for k in list(files.keys()) if k.endswith(f"part{i:04d}.html")), None)
+                b_key = next((k for k in list(files.keys()) if k.endswith(f"part{i+1:04d}.html")), None)
+                if t_key and b_key:
+                    root_t = ET.fromstring(files[t_key])
+                    h2 = next((el for el in root_t.iter() if local(el.tag) == "h2"), None)
+                    title_txt = "".join(h2.itertext()).strip() if h2 is not None else ""
+                    sub = next((el for el in root_t.iter() if "subtitle" in el.attrib.get("class", "")), None)
+                    if sub is not None:
+                        sub_txt = "".join(sub.itertext()).strip()
+                        if sub_txt:
+                            title_txt = f"{title_txt} {sub_txt}"
+                    root_b = ET.fromstring(files[b_key])
+                    body_b = next(el for el in root_b.iter() if local(el.tag) == "body")
+                    body_t = next(el for el in root_t.iter() if local(el.tag) == "body")
+                    for c in reversed(list(body_t)):
+                        body_b.insert(0, c)
+                    head_b = next((el for el in root_b.iter() if local(el.tag) == "head"), None)
+                    if head_b is not None:
+                        t_el = next((el for el in head_b.iter() if local(el.tag) == "title"), None)
+                        if t_el is not None:
+                            t_el.text = title_txt
+                    files[b_key] = ET.tostring(root_b, encoding="utf-8", xml_declaration=True)
+                    del files[t_key]
+                    if manifest_el is not None:
+                        for el in list(manifest_el):
+                            if el.get("href", "").endswith(f"part{i:04d}.html"):
+                                m_id = el.get("id")
+                                manifest_el.remove(el)
+                                if spine_el is not None:
+                                    for s in list(spine_el):
+                                        if s.get("idref") == m_id:
+                                            spine_el.remove(s)
+            files[opf_key] = ET.tostring(opf_doc, encoding="utf-8", xml_declaration=True)
 
     temporary = Path(tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)[1])
     try:
@@ -301,6 +515,39 @@ def repair_epub(path: Path) -> None:
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def sync_to_output(book_dir: Path) -> None:
+    output_root = ROOT / "output"
+    candidates = []
+    for out_dir in output_root.iterdir():
+        if not out_dir.is_dir() or out_dir.name == "jobs":
+            continue
+        prog = out_dir / "data" / "progress.json"
+        if prog.exists():
+            try:
+                data = json.loads(prog.read_text())
+                if data.get("book") == book_dir.name:
+                    candidates.append(out_dir)
+                    continue
+            except Exception:
+                pass
+        if out_dir.name == book_dir.name or out_dir.name.startswith(book_dir.name.split("-")[0]):
+            candidates.append(out_dir)
+
+    for out_dir in candidates:
+        orig = out_dir / "input" / "original.epub"
+        if orig.exists():
+            shutil.copy2(book_dir / "source.epub", orig)
+        unpacked = out_dir / "unpacked"
+        if unpacked.exists():
+            shutil.rmtree(unpacked, ignore_errors=True)
+            with zipfile.ZipFile(book_dir / "source.epub") as z:
+                z.extractall(unpacked)
+        ch_states = out_dir / "data" / "chapter_states"
+        if ch_states.exists():
+            for f in ch_states.glob("*.json"):
+                f.unlink(missing_ok=True)
 
 
 def refresh_manifest(book_dir: Path) -> tuple[int, int]:
@@ -315,6 +562,7 @@ def refresh_manifest(book_dir: Path) -> tuple[int, int]:
             old_translations.setdefault(str(paragraph.get("source", "")), []).append(str(paragraph.get("translated", "")))
 
     book = load_source_book(book_dir / "source.epub")
+    book.id = str(book_dir.name)
     for chapter in book.chapters:
         for paragraph in chapter.paragraphs:
             candidates = old_translations.get(paragraph.source, [])
@@ -325,28 +573,50 @@ def refresh_manifest(book_dir: Path) -> tuple[int, int]:
 
 
 def main() -> None:
-    prefixes = (
-        "新-凌辱女子学園[123]-",
-        "姦禁性裁-",
-        "トー-クン三部作-",
-        "みだらな肉筆-",
-        "女教師-魔淫の教壇-",
-        "美熟女の休日-",
-        "彼女-の美母-",
+    target_prefixes = (
+        "新-凌辱女子学園",
+        "姦禁性裁",
+        "トー-クン三部作",
+        "みだらな肉筆",
+        "女教師-魔淫の教壇",
+        "美熟女の休日",
+        "彼女-の美母",
+        "床上手",
+        "人妻オフィス",
+        "僕が管理人のアパート",
+        "人妻瀬里奈",
+        "机の下の楽園",
+        "おうちで快楽",
+        "おうちに未亡人",
+        "ゆうわく家出妻",
+        "再会のゆうわく妻",
+        "地方のホテル",
+        "地方の人妻",
+        "淫情アパート",
+        "父の後妻",
+        "突撃-隣りの団地妻",
+        "艶めき同窓会",
+        "ふたり人妻",
+        "溺れ愛",
+        "初体験食堂",
+        "女唇の伝言",
+        "艶剣客",
+        "艶無双",
     )
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 1 and sys.argv[1] != "--all":
         targets = [
             BOOKS / arg if (BOOKS / arg).is_dir() else Path(arg)
             for arg in sys.argv[1:]
         ]
     else:
-        targets = [p for p in BOOKS.iterdir() if p.is_dir() and p.name.startswith(prefixes)]
+        targets = [p for p in BOOKS.iterdir() if p.is_dir() and any(p.name.startswith(pre) for pre in target_prefixes)]
 
     for book_dir in sorted(targets):
         if not book_dir.is_dir() or not (book_dir / "source.epub").exists():
             continue
         repair_epub(book_dir / "source.epub")
         chapters, paragraphs = refresh_manifest(book_dir)
+        sync_to_output(book_dir)
         print(book_dir.name, chapters, paragraphs)
 
 

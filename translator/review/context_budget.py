@@ -230,10 +230,10 @@ def _compact_entry(item: dict[str, Any], *, memory: bool = False) -> dict[str, A
 
 
 def _compact_known_hit(item: dict[str, Any]) -> dict[str, Any]:
-    """Keep the deterministic hit's traceability fields in the review request."""
+    """Keep hit metadata without repeating source paragraphs or duplicate IDs."""
     keys = (
-        "hit_id", "term_id", "source", "target", "category", "status", "matched",
-        "paragraph_id", "paragraph_ids", "source_fragment", "target_fragment",
+        "term_id", "source", "target", "category", "status", "matched",
+        "paragraph_id", "target_fragment",
         "evidence_ids", "occurrence_count",
     )
     projected = {key: deepcopy(item[key]) for key in keys if key in item}

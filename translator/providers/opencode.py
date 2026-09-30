@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import selectors
@@ -8,7 +9,7 @@ import shutil
 import signal
 import subprocess
 import time
-from typing import Any
+from typing import Any, Callable
 
 from translator.core.config import load_config, setting
 from translator.providers.base import (
@@ -119,6 +120,88 @@ def _event_text(stdout: str) -> str:
                     if isinstance(item, dict) and isinstance(item.get("text"), str)
                 )
     return "".join(chunks).strip()
+
+
+def _event_usage(stdout: str, *, model: str | None, duration_ms: float) -> dict[str, Any]:
+    """Summarize usage reported by OpenCode's step_finish JSON events."""
+    totals: dict[str, int | float] = {}
+    reported: set[str] = set()
+    finish_steps = 0
+    cost_total = 0.0
+    cost_reported = False
+    session_id: str | None = None
+
+    def add_number(name: str, value: Any) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return
+        if not math.isfinite(float(value)) or value < 0:
+            return
+        totals[name] = totals.get(name, 0) + value
+        reported.add(name)
+
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if session_id is None and isinstance(event.get("sessionID"), str):
+            session_id = event["sessionID"]
+        if event.get("type") != "step_finish":
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            continue
+        tokens = part.get("tokens")
+        if isinstance(tokens, dict):
+            finish_steps += 1
+            for source_key, target_key in (
+                ("input", "input_tokens"),
+                ("output", "output_tokens"),
+                ("reasoning", "reasoning_tokens"),
+                ("total", "total_tokens"),
+            ):
+                if source_key in tokens:
+                    add_number(target_key, tokens[source_key])
+            cache = tokens.get("cache")
+            if isinstance(cache, dict):
+                for source_key, target_key in (
+                    ("read", "cache_read_tokens"),
+                    ("write", "cache_write_tokens"),
+                ):
+                    if source_key in cache:
+                        add_number(target_key, cache[source_key])
+        cost = part.get("cost")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(float(cost)) and cost >= 0:
+            cost_total += float(cost)
+            cost_reported = True
+
+    usage: dict[str, Any] = {
+        "source": "opencode_json_step_finish",
+        "available": finish_steps > 0,
+        "model": model or None,
+        "steps": finish_steps,
+        "request_duration_ms": round(duration_ms, 3),
+    }
+    usage.update({key: totals[key] for key in sorted(reported)})
+    if cost_reported:
+        usage["cost_usd"] = round(cost_total, 10)
+    if "cache_read_tokens" in reported:
+        usage["cache_hit"] = totals["cache_read_tokens"] > 0
+    if session_id:
+        usage["session_id"] = session_id
+    return usage
+
+
+def _notify_usage(callback: Callable[[dict[str, Any]], None] | None, usage: dict[str, Any]) -> None:
+    if callback is None:
+        return
+    try:
+        callback(usage)
+    except Exception:
+        # Usage reporting must never change provider behavior.
+        pass
 
 
 def _event_error_text(stdout: str) -> str:
@@ -318,6 +401,7 @@ def run_prompt(
     agent: str | None = None,
     variant: str | None = None,
     max_retries: int = 1,
+    on_usage: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     if timeout <= 0:
         raise ValueError("OpenCode timeout 必须大于 0")
@@ -346,20 +430,32 @@ def run_prompt(
         command.extend(["--agent", chosen_agent])
     last_error: Exception | None = None
     for attempt in range(max_retries):
+        request_started = time.monotonic()
         try:
             result = _run_command(command, prompt, timeout)
         except subprocess.TimeoutExpired as exc:
+            elapsed_ms = (time.monotonic() - request_started) * 1000
+            partial_stdout = _as_text(exc.output)
+            _notify_usage(on_usage, _event_usage(partial_stdout, model=chosen_model or None, duration_ms=elapsed_ms))
             last_error = OpenCodeError(f"opencode timed out after {timeout}s", reason="timeout")
             if attempt < max_retries - 1:
                 time.sleep(2 * (attempt + 1))
                 continue
             raise last_error from exc
         except OSError as exc:
+            elapsed_ms = (time.monotonic() - request_started) * 1000
+            _notify_usage(on_usage, _event_usage("", model=chosen_model or None, duration_ms=elapsed_ms))
             last_error = OpenCodeError(str(exc), reason="network")
             if attempt < max_retries - 1:
                 time.sleep(2 * (attempt + 1))
                 continue
             raise last_error from exc
+        usage = _event_usage(
+            result.stdout,
+            model=chosen_model or None,
+            duration_ms=(time.monotonic() - request_started) * 1000,
+        )
+        _notify_usage(on_usage, usage)
         combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
         failure_reason = _failure_reason(result.stdout, result.stderr, include_plain_stdout=result.returncode != 0)
         if failure_reason == "content_filter":
@@ -388,36 +484,58 @@ def run_prompt(
 parse_json_object = extract_json_object
 
 
-def run_json(prompt: str, *, role: str = "reviewer", timeout: int = 600) -> dict[str, Any]:
-    return parse_json_object(run_prompt(prompt, role=role, timeout=timeout))
+def run_json(
+    prompt: str,
+    *,
+    role: str = "reviewer",
+    timeout: int = 600,
+    on_usage: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    return parse_json_object(run_prompt(prompt, role=role, timeout=timeout, on_usage=on_usage))
 
 
 def check(timeout: int = 60, *, role: str = "reviewer") -> dict[str, Any]:
+    usage: dict[str, Any] | None = None
+
+    def capture_usage(details: dict[str, Any]) -> None:
+        nonlocal usage
+        usage = details
+
     try:
         payload = run_json(
             'Return exactly {"ok":true}. Do not include Markdown, explanations, tools, or any other fields.',
             role=role,
             timeout=timeout,
+            on_usage=capture_usage,
         )
     except (OpenCodeError, ValueError) as exc:
-        return {
+        result = {
             "name": f"provider:opencode:{role}",
             "status": "error",
             "model": model_for(role) or "(configured default)",
             "error": str(exc)[:800],
         }
+        if usage is not None:
+            result["usage"] = usage
+        return result
     if payload.get("ok") is not True or set(payload) != {"ok"}:
-        return {
+        result = {
             "name": f"provider:opencode:{role}",
             "status": "error",
             "model": model_for(role) or "(configured default)",
             "error": f"unexpected health response: {payload!r}",
         }
-    return {
+        if usage is not None:
+            result["usage"] = usage
+        return result
+    result = {
         "name": f"provider:opencode:{role}",
         "status": "ok",
         "model": model_for(role) or "(configured default)",
     }
+    if usage is not None:
+        result["usage"] = usage
+    return result
 
 
 class OpenCodeProvider(BaseProvider):
@@ -430,9 +548,15 @@ class OpenCodeProvider(BaseProvider):
         self.agent = str(config.get("agent", ""))
         self.variant = str(config.get("variant", "low") or "low").strip() or "low"
         self.timeout = int(config.get("timeout", 600))
+        self.last_usage: dict[str, Any] | None = None
 
     def health_check(self, timeout: int = 10) -> dict[str, Any]:
         eff_model = self.model or model_for("reviewer") or "(configured default)"
+        self.last_usage = None
+
+        def capture_usage(usage: dict[str, Any]) -> None:
+            self.last_usage = usage
+
         try:
             raw = run_prompt(
                 'Return exactly {"ok":true}. Do not include Markdown, explanations, tools, or any other fields.',
@@ -443,27 +567,37 @@ class OpenCodeProvider(BaseProvider):
                 agent=self.agent,
                 variant=self.variant or None,
                 max_retries=1,
+                on_usage=capture_usage,
             )
             payload = parse_json_object(raw)
             if payload.get("ok") is not True or set(payload) != {"ok"}:
-                return {
+                result = {
                     "name": f"provider:{self.name}",
                     "status": "error",
                     "model": eff_model,
                     "error": f"unexpected health response: {payload!r}",
                 }
-            return {
+                if self.last_usage is not None:
+                    result["usage"] = self.last_usage
+                return result
+            result = {
                 "name": f"provider:{self.name}",
                 "status": "ok",
                 "model": eff_model,
             }
+            if self.last_usage is not None:
+                result["usage"] = self.last_usage
+            return result
         except Exception as exc:
-            return {
+            result = {
                 "name": f"provider:{self.name}",
                 "status": "error",
                 "model": eff_model,
                 "error": str(exc)[:800],
             }
+            if self.last_usage is not None:
+                result["usage"] = self.last_usage
+            return result
 
     def translate(
         self,
@@ -482,6 +616,11 @@ class OpenCodeProvider(BaseProvider):
             f"{json.dumps(payload, ensure_ascii=False)}\n\n"
             f"最多输出约 {max_tokens} 个 token；必须覆盖 payload.items 中的全部 ID，保持顺序。"
         )
+        self.last_usage = None
+
+        def capture_usage(usage: dict[str, Any]) -> None:
+            self.last_usage = usage
+
         try:
             content = run_prompt(
                 prompt,
@@ -492,15 +631,21 @@ class OpenCodeProvider(BaseProvider):
                 agent=self.agent,
                 variant=self.variant or None,
                 max_retries=1,
+                on_usage=capture_usage,
             )
         except OpenCodeError as exc:
-            return [], {
+            result = {
                 "status": "blocked" if exc.reason == "content_filter" else "error",
                 "provider": self.name,
                 "reason": exc.reason,
                 "error": str(exc),
             }
+            if self.last_usage is not None:
+                result["usage"] = self.last_usage
+            return [], result
         common = {"provider": self.name, "raw_response": content[:4000]}
+        if self.last_usage is not None:
+            common["usage"] = self.last_usage
         block = provider_block_reason(content)
         if block:
             return [], {**common, "status": "blocked", "reason": "content_filter"}
@@ -528,6 +673,11 @@ class OpenCodeProvider(BaseProvider):
         timeout: int | None = None,
     ) -> dict[str, Any]:
         prompt = build_review_prompt(kind, input_payload, schema_path, autonomous)
+        self.last_usage = None
+
+        def capture_usage(usage: dict[str, Any]) -> None:
+            self.last_usage = usage
+
         content = run_prompt(
             prompt,
             role="reviewer",
@@ -537,5 +687,6 @@ class OpenCodeProvider(BaseProvider):
             agent=self.agent,
             variant=self.variant or None,
             max_retries=1,
+            on_usage=capture_usage,
         )
         return parse_json_object(content)

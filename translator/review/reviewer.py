@@ -1051,7 +1051,11 @@ def _execute_review_with_fallbacks(
                     kind, input_payload, schema_path, autonomous=autonomous, timeout=effective_timeout
                 )
                 if on_reviewer_status:
-                    on_reviewer_status({**status_base, "status": "completed"})
+                    status_update = {**status_base, "status": "completed"}
+                    usage = getattr(provider, "last_usage", None)
+                    if isinstance(usage, dict):
+                        status_update["usage"] = usage
+                    on_reviewer_status(status_update)
                 return result
             except JobCancelled:
                 if on_reviewer_status:
@@ -1103,6 +1107,9 @@ def _execute_review_with_fallbacks(
                             wall_clock() + delay, tz=timezone.utc
                         ).isoformat(),
                     }
+                    usage = getattr(provider, "last_usage", None)
+                    if isinstance(usage, dict):
+                        wait_status["usage"] = usage
                     if isinstance(exc, ProviderHTTPError):
                         wait_status["http_status"] = exc.status_code
                     if on_reviewer_status:
@@ -1122,14 +1129,18 @@ def _execute_review_with_fallbacks(
                     exc.retries_exhausted = isinstance(exc, ProviderTimeoutError) or retry_total > 0
                 retries_exhausted = isinstance(exc, ProviderTimeoutError) or retry_total > 0
                 if on_reviewer_status:
-                    on_reviewer_status({
+                    status_update = {
                         **status_base,
                         "status": "failed",
                         "error": str(exc),
                         "retry_reason": reason or None,
                         "retry_total": retry_total,
                         "retries_exhausted": retries_exhausted,
-                    })
+                    }
+                    usage = getattr(provider, "last_usage", None)
+                    if isinstance(usage, dict):
+                        status_update["usage"] = usage
+                    on_reviewer_status(status_update)
                 break
     if last_exc is None:
         raise RuntimeError(f"没有可用审阅端 (kind={kind}, primary={backend})")

@@ -166,7 +166,7 @@ def _legacy_translation_events(
         for key in (
             "error", "http_status", "finish_reason", "format", "split",
             "failure_class", "residue_tokens", "repair_rule_ids", "repair_rule_version",
-            "repair_attempts",
+            "repair_attempts", "usage",
         ):
             value = result.get(key)
             if value in (None, ""):

@@ -72,6 +72,23 @@ export interface TaskStatusResponse {
   updated_at?: string | null;
 }
 
+export interface ProviderUsageSummary {
+  source?: string;
+  available?: boolean;
+  model?: string | null;
+  session_id?: string;
+  steps?: number;
+  request_duration_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  cache_hit?: boolean;
+  cost_usd?: number;
+}
+
 export interface ReviewerExecutionDetail {
   status?: 'standby' | 'pending' | 'reviewing' | 'retry_wait' | 'retrying' | 'completed' | 'failed' | 'cancelled';
   backend?: string;
@@ -90,6 +107,7 @@ export interface ReviewerExecutionDetail {
   retry_delay_seconds?: number;
   retry_resume_at?: string;
   http_status?: number;
+  usage?: ProviderUsageSummary;
 }
 
 export interface PipelineStartRequest {

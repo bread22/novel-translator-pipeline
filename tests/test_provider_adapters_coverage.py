@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import time
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -178,6 +179,43 @@ def test_opencode_helpers_and_health(monkeypatch) -> None:
     assert opencode._failure_reason(error_event, "") == "rate_limit"
     assert opencode._failure_reason("", "usage_limit exceeded") == "rate_limit"
     assert opencode._failure_reason("", "You exceeded your current quota") == "rate_limit"
+    usage_events = '\n'.join([
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": "ses_usage",
+            "part": {
+                "tokens": {"input": 100, "output": 20, "reasoning": 5, "total": 125,
+                           "cache": {"read": 80, "write": 10}},
+                "cost": 0.001,
+            },
+        }),
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": "ses_usage",
+            "part": {
+                "tokens": {"input": 30, "output": 7, "reasoning": 2, "total": 39,
+                           "cache": {"read": 0, "write": 0}},
+                "cost": 0.0005,
+            },
+        }),
+    ])
+    usage = opencode._event_usage(usage_events, model="openai/gpt-5#xhigh", duration_ms=123.4)
+    assert usage == {
+        "source": "opencode_json_step_finish",
+        "available": True,
+        "model": "openai/gpt-5#xhigh",
+        "steps": 2,
+        "request_duration_ms": 123.4,
+        "input_tokens": 130,
+        "output_tokens": 27,
+        "reasoning_tokens": 7,
+        "total_tokens": 164,
+        "cache_read_tokens": 80,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.0015,
+        "cache_hit": True,
+        "session_id": "ses_usage",
+    }
     assert opencode.parse_json_object('prefix {"ok":true} suffix') == {"ok": True}
     with pytest.raises(ValueError):
         opencode.parse_json_object("none")
@@ -191,9 +229,18 @@ def test_opencode_helpers_and_health(monkeypatch) -> None:
 
 
 def test_opencode_prompt_and_provider_paths(tmp_path: Path, monkeypatch) -> None:
-    success = SimpleNamespace(returncode=0, stdout='{"type":"text","text":"{\\"items\\":[{\\"id\\":\\"p1\\",\\"text\\":\\"ok\\"}]}"}\n', stderr="")
+    success = SimpleNamespace(returncode=0, stdout='\n'.join([
+        '{"type":"text","text":"{\\"items\\":[{\\"id\\":\\"p1\\",\\"text\\":\\"ok\\"}]}"}',
+        '{"type":"step_finish","sessionID":"ses_test","part":{"tokens":{"input":12,"output":3,"reasoning":1,"total":15,"cache":{"read":8,"write":2}},"cost":0.0001}}',
+    ]), stderr="")
     monkeypatch.setattr(opencode, "_run_command", lambda *_args, **_kwargs: success)
-    assert "items" in opencode.run_prompt("translate", binary="opencode", model="m", agent="a", max_retries=1)
+    reported_usage: list[dict[str, Any]] = []
+    assert "items" in opencode.run_prompt(
+        "translate", binary="opencode", model="m", agent="a", max_retries=1,
+        on_usage=reported_usage.append,
+    )
+    assert reported_usage[0]["cache_read_tokens"] == 8
+    assert reported_usage[0]["cache_hit"] is True
     with pytest.raises(ValueError):
         opencode.run_prompt("x", timeout=0, binary="opencode")
 

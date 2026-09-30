@@ -10,7 +10,7 @@ import {
   Terminal,
   CheckCircle2,
 } from 'lucide-react';
-import { BookSummary, PromptItem, ReviewerExecutionDetail, StreamEvent, SystemConfig, TaskStatusResponse } from '../types/api';
+import { BookSummary, PromptItem, ProviderUsageSummary, ReviewerExecutionDetail, StreamEvent, SystemConfig, TaskStatusResponse } from '../types/api';
 import { api } from '../lib/api';
 
 const PIPELINE_EVENT_TYPES = [
@@ -44,6 +44,34 @@ function providerReasonLabel(reason: unknown): string {
   };
   const value = String(reason || 'unknown');
   return labels[value] || value;
+}
+
+function formatProviderUsage(usage: ProviderUsageSummary | undefined): string {
+  if (!usage) return '';
+  const formatTokens = (value: number) => Math.round(value).toLocaleString('zh-CN');
+  if (usage.available === false) {
+    const parts = [usage.model ? `模型 ${usage.model}` : '', 'usage 未返回'];
+    if (usage.cost_usd !== undefined) parts.push(`$${usage.cost_usd.toFixed(6)}`);
+    if (usage.request_duration_ms !== undefined) parts.push(`${Math.round(usage.request_duration_ms)}ms`);
+    return parts.filter(Boolean).join(' / ');
+  }
+  const parts: string[] = [];
+  if (usage.model) parts.push(`模型 ${usage.model}`);
+  if (usage.input_tokens !== undefined) parts.push(`输入 ${formatTokens(usage.input_tokens)}`);
+  if (usage.output_tokens !== undefined) parts.push(`输出 ${formatTokens(usage.output_tokens)}`);
+  if (usage.reasoning_tokens !== undefined) parts.push(`推理 ${formatTokens(usage.reasoning_tokens)}`);
+  if (usage.cache_read_tokens !== undefined) {
+    const cacheLabel = usage.cache_hit ? '缓存命中' : '缓存读';
+    parts.push(`${cacheLabel} ${formatTokens(usage.cache_read_tokens)}`);
+  } else if (usage.cache_hit === true) parts.push('缓存命中');
+  else if (usage.cache_hit === false) parts.push('缓存读 0');
+  else parts.push('缓存读未报告');
+  if (usage.cache_write_tokens !== undefined) parts.push(`缓存写 ${formatTokens(usage.cache_write_tokens)}`);
+  if (usage.total_tokens !== undefined) parts.push(`合计 ${formatTokens(usage.total_tokens)}`);
+  if (usage.cost_usd !== undefined) parts.push(`$${usage.cost_usd.toFixed(6)}`);
+  if (usage.request_duration_ms !== undefined) parts.push(`${Math.round(usage.request_duration_ms)}ms`);
+  if (!parts.length) parts.push('usage 未返回');
+  return parts.join(' / ');
 }
 
 interface LiveStudioViewProps {
@@ -360,6 +388,8 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
           if (detail.status === 'retry_wait') {
             parts.push(`${detail.retry_reason || '瞬态故障'} 退让 ${(detail.retry_delay_seconds || 0).toFixed(1)} 秒（${detail.retry_index || 0}/${detail.retry_total || 0}）`);
           }
+          const usageText = formatProviderUsage(detail.usage);
+          if (usageText) parts.push(usageText);
           return parts.join(' · ');
         };
         const reviewerCard = (
@@ -758,6 +788,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                   evt.data?.chunk_index && evt.data?.total_chunks ? `分块 ${evt.data.chunk_index}/${evt.data.total_chunks}` : '',
                   evt.data?.split_path && evt.data.split_path !== 'root' ? `子段 ${evt.data.split_path}` : '',
                   evt.data?.timeout_seconds ? `超时 ${evt.data.timeout_seconds}s` : '',
+                  formatProviderUsage(evt.data?.usage),
                 ].filter(Boolean).join(' · ');
                 content = (
                   <span className="text-violet-800 font-sans">
@@ -776,6 +807,7 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
                   recovered ? `完成 ${recovered} 段` : '',
                   evt.data?.latency_ms !== undefined ? `${Math.round(evt.data.latency_ms)}ms` : '',
                   evt.data?.http_status ? `HTTP ${evt.data.http_status}` : '',
+                  formatProviderUsage(evt.data?.usage),
                 ].filter(Boolean).join(' · ');
                 const success = evt.data?.status === 'ok';
                 content = (

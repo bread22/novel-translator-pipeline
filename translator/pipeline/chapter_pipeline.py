@@ -659,6 +659,9 @@ class IterativePipeline:
             value = result_data.get(key)
             if value not in (None, ""):
                 payload[key] = str(value)[:800] if key == "error" else value
+        usage = result_data.get("usage")
+        if isinstance(usage, Mapping):
+            payload["usage"] = dict(usage)
         try:
             self.on_translation_attempt(payload)
         except Exception:

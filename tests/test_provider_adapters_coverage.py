@@ -274,6 +274,49 @@ def test_opencode_prompt_and_provider_paths(tmp_path: Path, monkeypatch) -> None
         provider.review("chapter", {}, schema)
 
 
+def test_opencode_recovers_usage_from_export_when_json_stream_omits_step_finish(monkeypatch) -> None:
+    stdout = json.dumps({
+        "type": "text",
+        "sessionID": "ses_export_usage",
+        "part": {"text": "answer"},
+    })
+    monkeypatch.setattr(
+        opencode,
+        "_run_command",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=stdout, stderr=""),
+    )
+    export_payload = {
+        "info": {
+            "tokens": {
+                "input": 2000,
+                "output": 50,
+                "reasoning": 0,
+                "cache": {"read": 1500, "write": 0},
+            },
+            "cost": 0,
+        },
+        "messages": [],
+    }
+    export_calls: list[list[str]] = []
+
+    def export_session(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+        export_calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(export_payload), stderr="")
+
+    monkeypatch.setattr(opencode.subprocess, "run", export_session)
+    reported_usage: list[dict[str, Any]] = []
+    result = opencode.run_prompt(
+        "prompt", binary="opencode", model="openai/gpt-6-luna#low", max_retries=1,
+        on_usage=reported_usage.append,
+    )
+
+    assert result == "answer"
+    assert export_calls == [["opencode", "session", "export", "ses_export_usage", "--sanitize"]]
+    assert reported_usage[0]["source"] == "opencode_session_export"
+    assert reported_usage[0]["cache_read_tokens"] == 1500
+    assert reported_usage[0]["cache_hit"] is True
+
+
 def test_opencode_retries_timeout(monkeypatch) -> None:
     monkeypatch.setattr(opencode.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(

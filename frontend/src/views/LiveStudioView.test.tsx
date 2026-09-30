@@ -166,7 +166,7 @@ describe('live model topology', () => {
             provider: 'deepseek', status: 'ok', reason: 'ok', fallback_from: 'nemotron',
             attempted_ids: ['p1'], recovered_ids: ['p1'], is_fallback: true,
             usage: {
-              available: true, model: 'openai/gpt-5#xhigh', input_tokens: 2300,
+              source: 'opencode_session_export', available: true, model: 'openai/gpt-5#xhigh', input_tokens: 2300,
               output_tokens: 240, cache_read_tokens: 1024, cache_write_tokens: 0,
               cache_hit: true, cost_usd: 0.000123, request_duration_ms: 890,
             },
@@ -182,6 +182,7 @@ describe('live model topology', () => {
     expect(screen.getByText(/降级救回/).parentElement?.textContent).toContain('deepseek');
     expect(screen.getByText(/降级救回/).parentElement?.textContent).toContain('缓存命中 1,024');
     expect(screen.getByText(/降级救回/).parentElement?.textContent).toContain('openai/gpt-5#xhigh');
+    expect(screen.getByText(/降级救回/).parentElement?.textContent).toContain('从 Session 导出补齐');
     expect(screen.getByText(/自动切换至/).parentElement?.textContent).toContain('deepseek');
   });
 });

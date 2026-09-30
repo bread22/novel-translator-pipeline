@@ -194,6 +194,91 @@ def _event_usage(stdout: str, *, model: str | None, duration_ms: float) -> dict[
     return usage
 
 
+def _session_export_usage(
+    session_id: str,
+    *,
+    model: str | None,
+    binary: str,
+    request_started: float,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """Recover final usage when `opencode run --format json` omitted step_finish."""
+    try:
+        result = subprocess.run(
+            [binary, "session", "export", session_id, "--sanitize"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {**fallback, "session_export_status": "error"}
+    if result.returncode != 0:
+        return {**fallback, "session_export_status": "error"}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {**fallback, "session_export_status": "invalid_json"}
+    info = payload.get("info") if isinstance(payload, dict) else None
+    tokens = info.get("tokens") if isinstance(info, dict) else None
+    if not isinstance(tokens, dict):
+        return {**fallback, "session_export_status": "no_usage"}
+
+    totals: dict[str, int | float] = {}
+    reported: set[str] = set()
+    for source_key, target_key in (
+        ("input", "input_tokens"),
+        ("output", "output_tokens"),
+        ("reasoning", "reasoning_tokens"),
+        ("total", "total_tokens"),
+    ):
+        value = tokens.get(source_key)
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and value >= 0
+        ):
+            totals[target_key] = value
+            reported.add(target_key)
+    cache = tokens.get("cache")
+    if isinstance(cache, dict):
+        for source_key, target_key in (("read", "cache_read_tokens"), ("write", "cache_write_tokens")):
+            value = cache.get(source_key)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and value >= 0
+            ):
+                totals[target_key] = value
+                reported.add(target_key)
+    cost = info.get("cost") if isinstance(info, dict) else None
+    cost_reported = (
+        isinstance(cost, (int, float))
+        and not isinstance(cost, bool)
+        and math.isfinite(float(cost))
+        and cost >= 0
+    )
+    if not reported and not cost_reported:
+        return {**fallback, "session_export_status": "no_usage"}
+
+    usage: dict[str, Any] = {
+        "source": "opencode_session_export",
+        "available": bool(reported),
+        "model": model or None,
+        "request_duration_ms": round((time.monotonic() - request_started) * 1000, 3),
+        "session_id": session_id,
+        "session_export_status": "ok",
+    }
+    usage.update({key: totals[key] for key in sorted(reported)})
+    if cost_reported:
+        usage["cost_usd"] = round(float(cost), 10)
+    if "cache_read_tokens" in reported:
+        usage["cache_hit"] = totals["cache_read_tokens"] > 0
+    return usage
+
+
 def _notify_usage(callback: Callable[[dict[str, Any]], None] | None, usage: dict[str, Any]) -> None:
     if callback is None:
         return
@@ -436,7 +521,17 @@ def run_prompt(
         except subprocess.TimeoutExpired as exc:
             elapsed_ms = (time.monotonic() - request_started) * 1000
             partial_stdout = _as_text(exc.output)
-            _notify_usage(on_usage, _event_usage(partial_stdout, model=chosen_model or None, duration_ms=elapsed_ms))
+            usage = _event_usage(partial_stdout, model=chosen_model or None, duration_ms=elapsed_ms)
+            session_id = usage.get("session_id")
+            if not usage["available"] and isinstance(session_id, str):
+                usage = _session_export_usage(
+                    session_id,
+                    model=chosen_model or None,
+                    binary=command_executable,
+                    request_started=request_started,
+                    fallback=usage,
+                )
+            _notify_usage(on_usage, usage)
             last_error = OpenCodeError(f"opencode timed out after {timeout}s", reason="timeout")
             if attempt < max_retries - 1:
                 time.sleep(2 * (attempt + 1))
@@ -455,6 +550,15 @@ def run_prompt(
             model=chosen_model or None,
             duration_ms=(time.monotonic() - request_started) * 1000,
         )
+        session_id = usage.get("session_id")
+        if not usage["available"] and isinstance(session_id, str):
+            usage = _session_export_usage(
+                session_id,
+                model=chosen_model or None,
+                binary=command_executable,
+                request_started=request_started,
+                fallback=usage,
+            )
         _notify_usage(on_usage, usage)
         combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
         failure_reason = _failure_reason(result.stdout, result.stderr, include_plain_stdout=result.returncode != 0)

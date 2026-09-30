@@ -57,6 +57,7 @@ function formatProviderUsage(usage: ProviderUsageSummary | undefined): string {
   }
   const parts: string[] = [];
   if (usage.model) parts.push(`模型 ${usage.model}`);
+  if (usage.source === 'opencode_session_export') parts.push('从 Session 导出补齐');
   if (usage.input_tokens !== undefined) parts.push(`输入 ${formatTokens(usage.input_tokens)}`);
   if (usage.output_tokens !== undefined) parts.push(`输出 ${formatTokens(usage.output_tokens)}`);
   if (usage.reasoning_tokens !== undefined) parts.push(`推理 ${formatTokens(usage.reasoning_tokens)}`);
